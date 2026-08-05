@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ldot_detector</name>
+  <version>1.0.0</version>
+  <description>The onboard detector package for dynamic object detection.</description>
+  <maintainer email="zhefanx@andrew.cmu.edu">Zhefan Xu</maintainer>
+
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>roscpp</build_depend>
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>message_filters</build_depend>
+  <build_depend>image_transport</build_depend>
+  <!-- 2026-07-27: LDOT 源码未使用 vision_msgs，移除冗余构建依赖。 -->
+  <build_depend>message_generation</build_depend>
+  <build_depend>livox_ros_driver2</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>visualization_msgs</build_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <!-- 2026-07-27: 用 roslib 将计时输出目录解析到当前 match_ws 中的包路径。 -->
+  <build_depend>roslib</build_depend>
+  <build_export_depend>roscpp</build_export_depend>
+  <build_export_depend>rospy</build_export_depend>
+  <build_export_depend>std_msgs</build_export_depend>
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>message_generation</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>roslib</exec_depend>
+  <export>
+
+  </export>
+</package>

@@ -1,0 +1,22 @@
+<launch>
+    <!-- 2026-07-27: 第二套LDOT在UAV1 ROS命名空间运行，参数、话题和服务不与UAV0实例冲突。 -->
+    <arg name="lidar_topic" default="/UAV1/fast_lio/cloud_registered_body"/>
+    <arg name="odom_topic" default="/UAV1/fast_lio/Odometry"/>
+    <arg name="global_frame" default="UAV1/camera_init"/>
+    <arg name="detection_enable_topic" default="/UAV1/corridor_search/dynamic_detection_enable"/>
+    <arg name="enable_timing_output" default="true"/>
+    <arg name="timing_output_dir" default="$(find ldot_detector)/timing/UAV1"/>
+
+    <group ns="UAV1">
+        <!-- 2026-07-27: 相对ldot_detector参数在组命名空间内解析为/UAV1/ldot_detector。 -->
+        <rosparam file="$(find ldot_detector)/cfg/detector_param_sim.yaml" ns="ldot_detector"/>
+        <rosparam file="$(find ldot_detector)/cfg/detector_param_fuel_uav1.yaml" ns="ldot_detector"/>
+        <param name="ldot_detector/lidar_pointcloud_topic" value="$(arg lidar_topic)"/>
+        <param name="ldot_detector/odom_topic" value="$(arg odom_topic)"/>
+        <param name="ldot_detector/global_frame" value="$(arg global_frame)"/>
+        <param name="ldot_detector/detection_enable_topic" value="$(arg detection_enable_topic)"/>
+        <param name="ldot_detector/enable_timing_output" value="$(arg enable_timing_output)"/>
+        <param name="ldot_detector/timing_output_dir" value="$(arg timing_output_dir)"/>
+        <node pkg="ldot_detector" type="detector_node" name="ldot_detector" output="screen"/>
+    </group>
+</launch>

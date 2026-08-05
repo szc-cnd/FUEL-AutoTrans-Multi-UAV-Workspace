@@ -1,0 +1,60 @@
+# 2026-07-27: UAV1专用LDOT覆盖层；检测参数与UAV0一致，但输入、坐标系和门控完全隔离。
+
+use_livox_custom_msg: false
+lidar_pointcloud_topic: /UAV1/fast_lio/cloud_registered_body
+odom_topic: /UAV1/fast_lio/Odometry
+high_freq_odom_topic: ""
+
+# 2026-07-27: 后机接力管理器在入门目标释放后开启，完成接力请求降落后关闭。
+require_detection_enable: true
+detection_enable_topic: /UAV1/corridor_search/dynamic_detection_enable
+static_map_warmup_duration: 0.0
+dynamic_protection_inflation: 0.15
+dynamic_protection_history_frames: 10
+
+global_frame: UAV1/camera_init
+
+# 2026-07-27: FAST-LIO机体系PointCloud2已经完成雷达到IMU变换，LDOT不重复施加外参。
+body_to_lidar: [1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0]
+
+lidar_detection_range: [8.0, 8.0, 2.8]
+static_map_buffer: 2.0
+voxel_base_leaf_size: 0.05
+static_filter_voxel_size: 0.12
+# 2026-07-27: 后机同样采用零全局预热的局部静态收敛，候选不再阻止静态地图学习。
+static_filter_hit_threshold: 4
+lidar_DBSCAN_min_points: 4
+lidar_DBSCAN_epsilon: 0.20
+lidar_DBSCAN_use_adaptive: false
+max_object_size: [1.5, 1.5, 2.0]
+
+classification_start_frame: 5
+classify_xy_distance_threshold: 0.0
+max_missed_frames: 8
+# 2026-07-27: 后机同步采用0.10/0.05m/s进入退出阈值及相同的稳健速度、静止匹配参数。
+dynamic_velocity_threshold: 0.10
+dynamic_exit_velocity_threshold: 0.05
+dynamic_voting_threshold: 0.6
+# 2026-07-27: 新视野按轨迹独立观察，不要求比赛场景在起飞前完整预热。
+unknown_observation_frames: 4
+robust_velocity_window_frames: 6
+stationary_match_distance: 0.10
+stationary_match_ratio_threshold: 0.65
+endpoint_hold_path_threshold: 0.18
+dynamic_min_displacement: 0.12
+dynamic_fast_displacement: 0.22
+dynamic_motion_coherence: 0.55
+# 2026-07-28: 后机同步启用主轴换向端点保留，避免摆球速度过零时结构化动态话题瞬间清空。
+self_exclusion_radius: 0.45
+frames_force_dynamic_check_range: 5
+frames_force_dynamic: 3
+dynamic_consistency_threshold: 2
+
+trajectory_prediction:
+  default_horizon: 1.0
+  default_dt: 0.1
+  collision_inflation: 0.1
+  max_trajectory_points: 11

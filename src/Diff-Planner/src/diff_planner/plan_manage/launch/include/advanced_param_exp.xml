@@ -1,0 +1,198 @@
+<launch>
+    <arg name="local_map_size_x"/>
+    <arg name="local_map_size_y"/>
+    <arg name="local_map_size_z"/>
+    <arg name="odom_topic"/>
+    <arg name="camera_pose_topic"/>
+    <arg name="depth_topic"/>
+    <arg name="cloud_topic"/>
+    <arg name="cx"/>
+    <arg name="cy"/>
+    <arg name="fx"/>
+    <arg name="fy"/>
+    <arg name="max_vel"/>
+    <arg name="max_acc"/>
+    <arg name="max_jer"/>
+    <arg name="planning_horizon"/>
+    <!-- 2026-07-07: 暴露预设航点切换距离阈值，便于窄门洞场景避免还没穿过去就切下一个 waypoint。 -->
+    <arg name="waypoint_switch_dist" default="-1.0"/>
+    <arg name="enable_virtual_wall"/>
+    <arg name="virtual_ceil"/>
+    <arg name="virtual_ground"/>
+    <arg name="map_resolution"/>
+    <arg name="inflation_size"/>
+    <!-- 2026-07-28: 暴露激光FREE射线概率；后机可加快清除门洞瞬时假占据。 -->
+    <arg name="lidar_p_miss" default="0.49"/>
+    <!-- 2026-07-28: 暴露占据衰减时间；默认保持原Diff激光地图不衰减，动态场景可按实例启用。 -->
+    <arg name="fading_time" default="-1.0"/>
+    <!-- 2026-07-07: 暴露轨迹优化的硬障碍间隙，便于按场景提升贴墙余量。 -->
+    <arg name="obstacle_clearance" default="0.1"/>
+    <arg name="point_num"/>
+    <arg name="point0_x"/>
+    <arg name="point0_y"/>
+    <arg name="point0_z"/>
+    <arg name="point1_x"/>
+    <arg name="point1_y"/>
+    <arg name="point1_z"/>
+    <arg name="point2_x"/>
+    <arg name="point2_y"/>
+    <arg name="point2_z"/>
+    <arg name="point3_x"/>
+    <arg name="point3_y"/>
+    <arg name="point3_z"/>
+    <arg name="point4_x"/>
+    <arg name="point4_y"/>
+    <arg name="point4_z"/>
+    <arg name="flight_type"/>
+    <!-- 2026-07-28: 双机接力允许每套Diff使用独立外部目标话题，默认仍兼容原/global /goal。 -->
+    <arg name="manual_goal_topic" default="/goal"/>
+    <!-- 2026-07-28: 原生Diff编队默认等待前序轨迹；FUEL->Diff异构接力可单独关闭。 -->
+    <arg name="require_pre_agent_trajectory" default="true"/>
+    <!-- 2026-07-28: 允许接力实例关闭可能长时间阻塞的随机全局轨迹初始化，默认兼容原Diff。 -->
+    <arg name="enable_random_global_init" default="true"/>
+    <arg name="drone_id"/>
+    <arg name="init_x"/>
+	<arg name="init_y"/>
+	<arg name="init_z"/>
+    <arg name="cloud_use_init_offset" default="true"/>
+    <!-- 2026-07-07: 暴露 stuck detect 开关，便于针对 indoor1 这类窄通道实验关闭误触发的卡死判定。 -->
+    <arg name="enable_stuck_detect" default="true"/>
+    <!-- 2026-07-07: 暴露 stuck detect 豁免时长，便于按场景调整首段轨迹和重启后的稳定窗口。 -->
+    <arg name="stuck_detect_grace_time" default="6.0"/>
+    <!-- 2026-07-07: 暴露固定世界窗口保留开关，供小场景把历史障碍长期保留给规划使用。 -->
+    <arg name="preserve_global_map" default="false"/>
+    <!-- main node -->
+    <!-- <node pkg="diff_planner" name="diff_planner_node" type="diff_planner_node" output="screen" launch-prefix="valgrind"> -->
+    <node pkg="diff_planner" name="drone_$(arg drone_id)_diff_planner_node" type="diff_planner_node" output="screen">
+        <remap from="~odom_world" to="$(arg odom_topic)"/>
+        <remap from="~mandatory_stop" to="/mandatory_stop_to_planner"/>
+        <remap from="~planning/trajectory" to = "/drone_$(arg drone_id)_planning/trajectory"/>
+        <remap from="~planning/data_display" to = "/drone_$(arg drone_id)_planning/data_display"/>
+        <remap from="~planning/broadcast_traj_send" to = "/broadcast_traj_from_planner"/>
+        <remap from="~planning/broadcast_traj_recv" to = "/broadcast_traj_to_planner"/>
+        <remap from="~planning/heartbeat" to = "/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <!-- 2026-07-28: 暴露每架Diff规划结果，供接力管理器在失败时切换到安全短子目标。 -->
+        <remap from="~planning/status" to = "/drone_$(arg drone_id)_planning/status"/>
+        <remap from="~grid_map/odom" to="$(arg odom_topic)"/>
+        <remap from="~grid_map/cloud" to="$(arg cloud_topic)"/>
+        <remap from="~grid_map/pose"   to = "$(arg camera_pose_topic)"/>
+        <remap from="~grid_map/depth" to = "$(arg depth_topic)"/>
+        <!-- planning fsm -->
+        <param name="fsm/flight_type" value="$(arg flight_type)" type="int"/>
+        <!-- 2026-07-28: 将UAV1接力目标直接交给自身Diff规划器，避免目标和UAV0串线。 -->
+        <param name="fsm/manual_goal_topic" value="$(arg manual_goal_topic)"/>
+        <!-- 2026-07-28: 将前序轨迹门槛传入FSM，避免把drone_id误等同于必须参加Diff顺序编队。 -->
+        <param name="fsm/require_pre_agent_trajectory" value="$(arg require_pre_agent_trajectory)" type="bool"/>
+        <!-- 2026-07-28: 将随机初始化策略按无人机实例传入FSM。 -->
+        <param name="fsm/enable_random_global_init" value="$(arg enable_random_global_init)" type="bool"/>
+        <param name="fsm/thresh_replan_time" value="1.0" type="double"/>
+        <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
+        <!-- 2026-07-07: 允许实验 launch 单独收紧 waypoint 切换距离，避免在 doorway 内提早拐向下一段。 -->
+        <param name="fsm/waypoint_switch_dist" value="$(arg waypoint_switch_dist)" type="double"/>
+        <!--always set to 1.5 times grater than sensing horizen-->
+        <param name="fsm/emergency_time" value="0.8" type="double"/>
+        <param name="fsm/realworld_experiment" value="true"/>
+        <param name="fsm/fail_safe" value="true"/>
+        <!-- Allow final goal modification -->
+        <param name="fsm/mondify_final_goal" value="true"/>
+        <!-- 2026-07-07: 允许实验 launch 覆盖 stuck detect 行为，避免窄通道环境误判卡死。 -->
+        <param name="fsm/enable_stuck_detect" value="$(arg enable_stuck_detect)"/>
+        <!-- 2026-07-07: stuck detect 豁免时长参数化，便于为不同场景调整首飞和恢复阶段缓冲时间。 -->
+        <param name="fsm/stuck_detect_grace_time" value="$(arg stuck_detect_grace_time)" type="double"/>
+        <param name="fsm/waypoint_num" value="$(arg point_num)" type="int"/>
+        <param name="fsm/waypoint0_x" value="$(arg point0_x)" type="double"/>
+        <param name="fsm/waypoint0_y" value="$(arg point0_y)" type="double"/>
+        <param name="fsm/waypoint0_z" value="$(arg point0_z)" type="double"/>
+        <param name="fsm/waypoint1_x" value="$(arg point1_x)" type="double"/>
+        <param name="fsm/waypoint1_y" value="$(arg point1_y)" type="double"/>
+        <param name="fsm/waypoint1_z" value="$(arg point1_z)" type="double"/>
+        <param name="fsm/waypoint2_x" value="$(arg point2_x)" type="double"/>
+        <param name="fsm/waypoint2_y" value="$(arg point2_y)" type="double"/>
+        <param name="fsm/waypoint2_z" value="$(arg point2_z)" type="double"/>
+        <param name="fsm/waypoint3_x" value="$(arg point3_x)" type="double"/>
+        <param name="fsm/waypoint3_y" value="$(arg point3_y)" type="double"/>
+        <param name="fsm/waypoint3_z" value="$(arg point3_z)" type="double"/>
+        <param name="fsm/waypoint4_x" value="$(arg point4_x)" type="double"/>
+        <param name="fsm/waypoint4_y" value="$(arg point4_y)" type="double"/>
+        <param name="fsm/waypoint4_z" value="$(arg point4_z)" type="double"/>
+        <param name="grid_map/resolution" value="$(arg map_resolution)" />
+        <param name="grid_map/local_update_range_x" value="$(arg local_map_size_x)" />
+        <param name="grid_map/local_update_range_y" value="$(arg local_map_size_y)" />
+        <param name="grid_map/local_update_range_z" value="$(arg local_map_size_z)" /> <!-- different meaning between grid_map.cpp and grid_map_bigmap.cpp -->
+        <param name="grid_map/obstacles_inflation" value="$(arg inflation_size)" />
+        <param name="grid_map/enable_virtual_wall" value="$(arg enable_virtual_wall)"/>
+        <param name="grid_map/virtual_ceil" value="$(arg virtual_ceil)"/>
+        <param name="grid_map/virtual_ground" value="$(arg virtual_ground)"/>
+        <param name="grid_map/ground_height" value="-0.01"/>
+        <!-- camera parameter -->
+        <param name="grid_map/cx" value="$(arg cx)"/>
+        <param name="grid_map/cy" value="$(arg cy)"/>
+        <param name="grid_map/fx" value="$(arg fx)"/>
+        <param name="grid_map/fy" value="$(arg fy)"/>
+        <!-- depth filter -->
+        <param name="grid_map/use_depth_filter" value="true"/>
+        <param name="grid_map/depth_filter_tolerance" value="0.15"/>
+        <param name="grid_map/depth_filter_maxdist" value="5.0"/>
+        <param name="grid_map/depth_filter_mindist" value="0.2"/>
+        <param name="grid_map/depth_filter_margin" value="2"/>
+        <param name="grid_map/k_depth_scaling_factor" value="1000.0"/>
+        <param name="grid_map/skip_pixel" value="2"/>
+        <!-- local fusion -->
+        <param name="grid_map/p_hit" value="0.65"/>
+        <param name="grid_map/p_miss" value="0.35"/>
+        <param name="grid_map/p_min" value="0.12"/>
+        <param name="grid_map/p_max" value="0.90"/>
+        <param name="grid_map/p_occ" value="0.80"/>
+        <param name="grid_map/lidar_p_hit" value="0.9"/>
+        <!-- 2026-07-28: 按实例配置激光miss概率，默认保持原行为。 -->
+        <param name="grid_map/lidar_p_miss" value="$(arg lidar_p_miss)"/>
+        <param name="grid_map/lidar_p_min" value="0.12"/>
+        <param name="grid_map/lidar_p_max" value="0.98"/>
+        <param name="grid_map/lidar_p_occ" value="0.85"/>
+        <param name="grid_map/cloud_enable_raycast" value="true"/>
+        <!-- 2026-07-28: 由实例选择是否衰减，避免移动障碍/其他无人机的旧点云永久堵住起点。 -->
+        <param name="grid_map/fading_time" value="$(arg fading_time)"/>
+        <param name="grid_map/min_ray_length" value="0.1"/>
+        <param name="grid_map/max_ray_length" value="4.5"/>
+        <param name="grid_map/visualization_truncate_height" value="1.9"/>
+        <param name="grid_map/show_occ_time" value="false"/>
+        <param name="grid_map/pose_type" value="2"/>
+        <param name="grid_map/frame_id" value="world"/>
+
+        <param name="grid_map/init_x" value="$(arg init_x)" />
+        <param name="grid_map/init_y" value="$(arg init_y)" />
+        <param name="grid_map/init_z" value="$(arg init_z)" />
+        <!-- 2026-07-06: 暴露点云是否叠加出生点偏移开关，便于 FAST-LIO world 系点云关闭二次平移。 -->
+        <param name="grid_map/cloud_use_init_offset" value="$(arg cloud_use_init_offset)" />
+        <!-- 2026-07-07: 允许实验 launch 显式切到固定世界窗口模式，避免滑窗移动时清空历史障碍。 -->
+        <param name="grid_map/preserve_global_map" value="$(arg preserve_global_map)" />
+        
+        <!-- planner manager -->
+        <param name="manager/max_vel" value="$(arg max_vel)" type="double"/>
+        <param name="manager/max_acc" value="$(arg max_acc)" type="double"/>
+        <param name="manager/max_jer" value="$(arg max_jer)" type="double"/>
+        <param name="manager/polyTraj_piece_length" value="1.5" type="double"/>
+        <param name="manager/feasibility_tolerance" value="0.05" type="double"/>
+        <param name="manager/planning_horizon" value="$(arg planning_horizon)" type="double"/>
+        <param name="manager/use_multitopology_trajs" value="false" type="bool"/>
+        <param name="manager/drone_id" value="$(arg drone_id)"/>
+        <!-- trajectory optimization -->
+        <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
+        <param name="optimization/weight_obstacle" value="10000.0" type="double"/>
+        <param name="optimization/weight_obstacle_soft" value="5000.0" type="double"/>
+        <param name="optimization/weight_swarm" value="10000.0" type="double"/>
+        <param name="optimization/weight_feasibility" value="10000.0" type="double"/>
+        <param name="optimization/weight_sqrvariance" value="10000.0" type="double"/>
+        <param name="optimization/weight_time" value="10.0" type="double"/>
+        <!-- 2026-07-07: 允许实验 launch 覆盖优化器的障碍硬约束间隙，避免窄通道里按过小安全距离贴墙飞。 -->
+        <param name="optimization/obstacle_clearance" value="$(arg obstacle_clearance)" type="double"/>
+        <param name="optimization/obstacle_clearance_soft" value="0.5" type="double"/>
+        <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->
+        <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
+        <param name="optimization/vel_tolerance" value="1.0" type="double"/>
+        <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>
+        <param name="optimization/acc_tolerance" value="1.0" type="double"/>
+        <param name="optimization/max_jer" value="$(arg max_jer)" type="double"/>
+        <param name="optimization/record_opt" value="true"/>
+    </node>
+</launch>

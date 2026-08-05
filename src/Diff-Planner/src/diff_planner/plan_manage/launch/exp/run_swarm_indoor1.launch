@@ -1,0 +1,152 @@
+<launch>
+    <!-- 2026-07-02: 为 indoor1 单机 Gazebo + FAST-LIO 场景新增独立 Diff-Planner 启动入口，去掉原 run_swarm.launch 对环境变量的强依赖。 -->
+    <!-- 2026-07-02: 参考 EGO 的 simple_run.launch / run_in_sim.launch，补齐 lidar 直连规划与 map-camera_init/body-base_link 的 TF 桥接。 -->
+
+    <arg name="drone_id" default="0"/>
+    <!-- 2026-07-02: 将 exp_rviz.launch 内的 RViz 入口嵌入 indoor1 单机启动文件，默认联动打开便于直接观察规划结果。 -->
+    <arg name="enable_rviz" default="true"/>
+
+    <!-- 2026-07-02: indoor1 当前常用里程计和点云入口做成顶层参数，便于后续切换 FAST-LIO / 其他前端。 -->
+    <!-- 2026-07-06: indoor1 Gazebo 默认切到 /ground_truth_odom，先绕开当前 FAST-LIO /Odometry 与点云不同步导致的起点入障问题。 -->
+    <arg name="odom_topic" default="/Odometry"/>
+    <arg name="cloud_topic" default="/cloud_registered"/>
+    <!-- 2026-07-06: 补一个显式目标转发入口，兼容 RViz 的 2D Nav Goal 默认话题。 -->
+    <arg name="rviz_goal_topic" default="/move_base_simple/goal"/>
+
+    <!-- 2026-07-02: 单机 indoor1 出生点默认与当前 PX4 indoor1.launch 保持一致。 -->
+    <arg name="init_x" default="-2.5"/>
+    <arg name="init_y" default="-3.0"/>
+    <arg name="init_z" default="0.15"/>
+
+    <!-- 2026-07-02: indoor1 U 字隧道默认使用固定航点模式，先从左门进入再沿 U 字通道前进。 -->
+    <arg name="flight_type" default="2"/>
+    <arg name="point_num" default="2"/>
+
+    <arg name="point0_x" default="4.6"/>
+    <arg name="point0_y" default="0"/>
+    <arg name="point0_z" default="0.7"/>
+
+    <arg name="point1_x" default="1.8"/>
+    <arg name="point1_y" default="-5"/>
+    <arg name="point1_z" default="0.7"/>
+
+    <arg name="point2_x" default="2.50"/>
+    <arg name="point2_y" default="-1.20"/>
+    <arg name="point2_z" default="1.00"/>
+    <arg name="point3_x" default="0.0"/>
+    <arg name="point3_y" default="0.0"/>
+    <arg name="point3_z" default="1.0"/>
+    <arg name="point4_x" default="0.0"/>
+    <arg name="point4_y" default="0.0"/>
+    <arg name="point4_z" default="1.0"/>
+
+    <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="drone_id" value="$(arg drone_id)"/>
+
+        <!-- 2026-07-02: 采用雷达点云直连占据栅格，不走深度图输入链路。 -->
+        <arg name="camera_pose_topic" value="no_use0"/>
+        <arg name="depth_topic" value="no_use1"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+
+        <!-- 2026-07-02: 保持与现有实验一致的相机内参占位，Diff-Planner 在 cloud-only 模式下不会使用这些参数。 -->
+        <arg name="cx" value="319.31427001953125"/>
+        <arg name="cy" value="239.09725952148438"/>
+        <arg name="fx" value="386.2706298828125"/>
+        <arg name="fy" value="386.2706298828125"/>
+
+        <!-- 2026-07-02: indoor1 狭窄通道场景收紧速度，优先保证转弯和贴墙安全。 -->
+        <arg name="max_vel" value="0.6" />
+        <arg name="max_acc" value="2.0" />
+        <arg name="max_jer" value="10.0"/>
+        <arg name="planning_horizon" value="6.0" />
+        <!-- 2026-07-07: indoor1 第一段门洞后的切段过早会在还没穿出 opening 时就拐向第二航点，这里把切换距离收紧到 5cm。 -->
+        <arg name="waypoint_switch_dist" value="0.05" />
+
+        <!-- 2026-07-07: indoor1 当前改成近似“全局保留”模式，把滑窗半径放大到基本覆盖整张场地，减轻仿真雷达漏扫导致的历史障碍丢失。 -->
+        <arg name="local_map_size_x" value="20.0"/>
+        <arg name="local_map_size_y" value="20.0"/>
+        <arg name="local_map_size_z" value="3.0"/>
+        <arg name="enable_virtual_wall" value="true"/>
+        <arg name="virtual_ceil" value="2.0"/>
+        <arg name="virtual_ground" value="0.1"/>
+        <arg name="map_resolution" value="0.15"/>
+        <!-- 2026-07-07: 结合 18:55:22 这版炸机后回退一点安全余量，当前先把栅格膨胀调到 0.15m，减轻 doorway 航点被直接判进膨胀层。 -->
+        <arg name="inflation_size" value="0.15"/>
+        <!-- 2026-07-07: 优化器硬障碍间隙同步调到 0.15m，保持和地图膨胀一致，避免两层安全距离配置打架。 -->
+        <arg name="obstacle_clearance" value="0.15"/>
+
+        <arg name="init_x" value="$(arg init_x)"/>
+        <arg name="init_y" value="$(arg init_y)"/>
+        <arg name="init_z" value="$(arg init_z)"/>
+        <!-- 2026-07-06: /cloud_registered 在当前 indoor1 链路里已经是注册到世界系的点云，这里关闭额外 init 平移。 -->
+        <arg name="cloud_use_init_offset" value="false"/>
+        <!-- 2026-07-07: indoor1 的 U 型窄通道里 stuck detect 目前误判较多，先关闭避免 2026-07-07 17:10:28 录像里的中途急停。 -->
+        <arg name="enable_stuck_detect" value="false"/>
+        <!-- 2026-07-07: 即便后续重新打开 stuck detect，也先把豁免窗口拉长，避免恢复后的首段轨迹再次立刻被判卡死。 -->
+        <arg name="stuck_detect_grace_time" value="20.0"/>
+        <!-- 2026-07-07: indoor1 小场景默认开启固定世界窗口保留模式，让规划持续参考已扫到的历史障碍。 -->
+        <arg name="preserve_global_map" value="true"/>
+
+        <arg name="flight_type" value="$(arg flight_type)" />
+        <arg name="point_num" value="$(arg point_num)" />
+        <arg name="point0_x" value="$(arg point0_x)" />
+        <arg name="point0_y" value="$(arg point0_y)" />
+        <arg name="point0_z" value="$(arg point0_z)" />
+        <arg name="point1_x" value="$(arg point1_x)" />
+        <arg name="point1_y" value="$(arg point1_y)" />
+        <arg name="point1_z" value="$(arg point1_z)" />
+        <arg name="point2_x" value="$(arg point2_x)" />
+        <arg name="point2_y" value="$(arg point2_y)" />
+        <arg name="point2_z" value="$(arg point2_z)" />
+        <arg name="point3_x" value="$(arg point3_x)" />
+        <arg name="point3_y" value="$(arg point3_y)" />
+        <arg name="point3_z" value="$(arg point3_z)" />
+        <arg name="point4_x" value="$(arg point4_x)" />
+        <arg name="point4_y" value="$(arg point4_y)" />
+        <arg name="point4_z" value="$(arg point4_z)" />
+    </include>
+
+    <!-- 2026-07-06: world->map 设为单位变换，避免同时给 camera_init 挂两个父坐标系导致 RViz/TF 解释混乱。 -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_map"
+        args="0 0 0 0 0 0 world map" />
+    <!-- 2026-07-02: 将 FAST-LIO 的 camera_init 视作当前规划世界系原点。 -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_camera_init"
+        args="0 0 0 0 0 0 world camera_init" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="body_to_base_link"
+        args="0 0 0 0 0 0 body base_link" />
+    <!-- 2026-07-06: 用当前 /Odometry 高度把 RViz 的 2D Nav Goal 补成 3D /goal，避免目标高度被压到 z=0。 -->
+    <node pkg="diff_planner" type="goal_height_bridge" name="rviz_goal_to_diff_goal" output="screen">
+        <param name="odom_topic" value="$(arg odom_topic)" />
+        <param name="input_goal_topic" value="$(arg rviz_goal_topic)" />
+        <param name="output_goal_topic" value="/goal" />
+        <param name="output_frame_id" value="world" />
+    </node>
+    <node pkg="diff_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
+        <!-- 2026-07-06: 对齐 cxr_egoctrl_v1 的订阅口，traj_server 直接输出到 /planning/pos_cmd，避免控制器收不到规划轨迹。 -->
+        <remap from="position_cmd" to="/planning/pos_cmd"/>
+        <remap from="~planning/trajectory" to="/drone_$(arg drone_id)_planning/trajectory"/>
+        <remap from="~planning/yaw" to="/drone_$(arg drone_id)_planning/yaw"/>
+        <remap from="~heartbeat" to="/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
+        <param name="traj_server/yaw_dot_max" value="3.14" type="double"/>
+        <param name="traj_server/yaw_dot_dot_max" value="15.71" type="double"/>
+    </node>
+    <node pkg="odom_visualization" name="drone_$(arg drone_id)_odom_visualization" type="odom_visualization" output="screen">
+        <!-- 2026-07-07: indoor1 单机入口补上 odom_visualization，并直接订阅当前雷达里程计 /Odometry，和 exp.rviz 里的 /drone_*_odom_visualization/* 话题对齐。 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.0"/>
+        <param name="color/b" value="0.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="$(arg drone_id)"/>
+    </node>
+
+    <!-- 2026-07-02: 内嵌原 exp_rviz.launch 的 RViz 节点，继续使用 diff_planner/launch/include/exp.rviz 配置。 -->
+    <node if="$(arg enable_rviz)" name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find diff_planner)/launch/include/exp.rviz" required="true" />
+
+</launch>
