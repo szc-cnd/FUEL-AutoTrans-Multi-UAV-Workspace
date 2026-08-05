@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>autotrans_reference_bridge</name>
+  <version>0.1.0</version>
+  <description>将 Diff-Planner PolyTraj 转换为 AutoTrans PolynomialTraj。</description>
+
+  <maintainer email="szc-cnd@example.com">AutoTrans integration</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>traj_utils</depend>
+  <depend>quadrotor_msgs</depend>
+
+  <export/>
+</package>

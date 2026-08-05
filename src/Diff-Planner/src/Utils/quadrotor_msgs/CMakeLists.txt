@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   nav_msgs
   geometry_msgs
+  std_msgs
   message_generation
 #  cmake_utils
 )
@@ -31,6 +32,8 @@ add_message_files(
   TRPYCommand.msg
   Odometry.msg
   PolynomialTrajectory.msg
+  PolynomialMatrix.msg
+  PolynomialTraj.msg
   OptimalTimeAllocator.msg
   TrajectoryMatrix.msg
   ReplanCheck.msg
@@ -49,6 +52,7 @@ generate_messages(
     DEPENDENCIES
     geometry_msgs
     nav_msgs
+    std_msgs
 )
 
 catkin_package(
@@ -75,4 +79,3 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 #     decode_msgs 
 #     encode_msgs
 # )
-
