@@ -1,0 +1,75 @@
+#!/bin/bash
+
+readonly VERSION_ROS1="ROS1"
+readonly VERSION_ROS2="ROS2"
+readonly VERSION_HUMBLE="humble"
+readonly VERSION_JAZZY="jazzy"
+
+pushd `pwd` > /dev/null
+cd `dirname $0`
+echo "Working Path: "`pwd`
+
+ROS_VERSION=""
+ROS_DISTRO=""
+
+# Set working ROS version
+if [ "$1" = "ROS2" ]; then
+    ROS_VERSION=${VERSION_ROS2}
+elif [ "$1" = "humble" ]; then
+    ROS_VERSION=${VERSION_ROS2}
+    ROS_DISTRO=${VERSION_HUMBLE}
+elif [ "$1" = "jazzy" ]; then
+    ROS_VERSION=${VERSION_ROS2}
+    ROS_DISTRO=${VERSION_JAZZY}
+elif [ "$1" = "ROS1" ]; then
+    ROS_VERSION=${VERSION_ROS1}
+else
+    echo "Invalid Argument"
+    exit
+fi
+echo "ROS version is: "$ROS_VERSION
+
+# ROS1 is part of the match_ws catkin workspace.  Do not erase the build
+# results of every other package when rebuilding only this driver.
+# ROS2 keeps the upstream clean-build behavior because it uses colcon and a
+# different generated package/launch layout.
+if [ "${ROS_VERSION}" = "${VERSION_ROS2}" ]; then
+    rm -rf ../../build/
+    rm -rf ../../devel/
+    rm -rf ../../install/
+    if [ -f ../CMakeLists.txt ]; then
+        rm -f ../CMakeLists.txt
+    fi
+fi
+
+# substitute the files/folders: CMakeList.txt, package.xml(s)
+if [ ${ROS_VERSION} = ${VERSION_ROS1} ]; then
+    if [ -f package.xml ]; then
+        rm package.xml
+    fi
+    cp -f package_ROS1.xml package.xml
+elif [ ${ROS_VERSION} = ${VERSION_ROS2} ]; then
+    if [ -f package.xml ]; then
+        rm package.xml
+    fi
+    cp -f package_ROS2.xml package.xml
+    cp -rf launch_ROS2/ launch/
+fi
+
+# build
+pushd `pwd` > /dev/null
+if [ $ROS_VERSION = ${VERSION_ROS1} ]; then
+    cd ../../
+    catkin_make -DROS_EDITION=${VERSION_ROS1} --pkg livox_ros_driver2
+elif [ $ROS_VERSION = ${VERSION_ROS2} ]; then
+    cd ../../
+    colcon build --cmake-args -DROS_EDITION=${VERSION_ROS2} -DDISTRO_ROS=${ROS_DISTRO}
+fi
+popd > /dev/null
+
+# remove the substituted folders/files
+if [ $ROS_VERSION = ${VERSION_ROS2} ]; then
+    rm -rf launch/
+fi
+
+popd > /dev/null

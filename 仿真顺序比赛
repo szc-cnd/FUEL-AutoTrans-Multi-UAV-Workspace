@@ -1,0 +1,160 @@
+
+二、当前可执行的 UAV0 实机启动顺序
+
+终端 1：启动 UAV0 飞控（MAVROS）
+
+cd ~/match_ws
+sh shfiles/run.sh
+
+检查：
+
+rostopic echo -n 1 /UAV0/mavros/state
+
+必须能看到 connected: True。
+
+
+终端 2：启动 UAV0 MID360 雷达
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch livox_ros_driver2 msg_MID360.launch vehicle_ns:=UAV0
+
+
+终端 3：启动 UAV0 FAST-LIO
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch fast_lio mapping_mid360.launch
+
+
+终端 4：将 FAST-LIO 位姿发送给 UAV0 飞控
+
+cd ~/match_ws/src/cxr_ego_ctrl/src
+source ~/match_ws/devel/setup.bash
+python3 laser_mid360.py iris 0 fastlio off
+
+
+
+
+三、规划与控制部分（双机硬件链路补齐后再执行）
+
+终端 5：启动规划器
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch
+
+说明：
+这个 launch 会启动动态障碍物检测，不要同时单独运行
+run_detector_fuel_uav0.launch。
+
+
+终端 7：启动 UAV0 控制器
+
+cd ~/match_ws/src/control/src
+source ~/match_ws/devel/setup.bash
+rosrun exploration_control cxr_egoctrl_v1 \
+  __name:=UAV0_controller \
+  _vehicle_ns:=/UAV0 \
+  _planner_enable_height:=0.5
+
+
+终端 8：启动 UAV1 控制器
+
+cd ~/match_ws/src/control/src
+source ~/match_ws/devel/setup.bash
+rosrun exploration_control cxr_egoctrl_v1 \
+  __name:=UAV1_controller \
+  _vehicle_ns:=/UAV1 \
+  _planner_enable_height:=0.5
+
+控制器已经改为：对应无人机的 FAST-LIO 里程计 z 轴高度大于 0.5 m 后，
+锁存开启规划路径接收。
+
+
+终端 9：双机起飞/就绪管理
+
+cd ~/match_ws
+source devel/setup.bash
+rosrun cxr_ego_ctrl dual_ego_start.py
+
+说明：
+规划器、控制器和 leader_safe_path_follower 已经不再依赖：
+
+/UAV0/start_after_hover
+/UAV1/start_after_hover
+
+双机各自 FAST-LIO 高度超过 0.5m 后只会锁存“允许规划”状态；实际运动仍以
+目标点发布、规划器成功生成轨迹并输出 PositionCommand 为准。
+
+dual_ego_start.py 仍可用于双机 OFFBOARD、解锁和同步起飞，但它发布的
+start_after_hover 不再是规划链路的必要条件。
+
+
+四、当前双机实机运行的缺项
+
+在启动第三部分前，必须先补齐以下内容：
+
+1. UAV1 MAVROS
+   - 独立命名空间：/UAV1/mavros
+   - 独立飞控串口（不能和 UAV0 同时占用 /dev/ttyACM0）
+   - 正确的 target system ID
+
+2. UAV1 MID360
+   - 独立雷达 IP 和主机网卡 IP
+   - 独立 SDK 端口配置
+   - 输出：
+     /UAV1/livox/lidar
+     /UAV1/livox/imu
+
+3. UAV1 FAST-LIO
+   - 输入：
+     /UAV1/livox/lidar
+     /UAV1/livox/imu
+   - 输出：
+     /UAV1/fast_lio/Odometry
+     /UAV1/fast_lio/cloud_registered
+
+4. UAV1 定位融合
+
+cd ~/match_ws/src/cxr_ego_ctrl/src
+source ~/match_ws/devel/setup.bash
+python3 laser_mid360.py iris 1 fastlio off
+
+5. 启动规划器前至少确认：
+
+rostopic hz /UAV0/fast_lio/Odometry
+rostopic hz /UAV1/fast_lio/Odometry
+rostopic hz /UAV0/mavros/vision_pose/pose
+rostopic hz /UAV1/mavros/vision_pose/pose
+
+
+五、当前统一后的主要话题
+
+UAV0：
+
+/UAV0/livox/lidar
+/UAV0/livox/imu
+/UAV0/fast_lio/Odometry
+/UAV0/fast_lio/cloud_registered
+/UAV0/ldot_detector/cloud_registered
+/UAV0/mavros/vision_pose/pose
+
+UAV1（补齐实机配置后应当存在）：
+
+/UAV1/livox/lidar
+/UAV1/livox/imu
+/UAV1/fast_lio/Odometry
+/UAV1/fast_lio/cloud_registered
+/UAV1/ldot_detector/cloud_registered
+/UAV1/mavros/vision_pose/pose
+
+
+六、禁止继续使用的旧仿真话题
+
+/iris_0/fast_lio/Odometry
+/iris_1/fast_lio/Odometry
+/iris_0/perception/dynamic_obstacles
+/iris_1/perception/dynamic_obstacles
+
+实际命名空间统一使用 /UAV0 和 /UAV1。

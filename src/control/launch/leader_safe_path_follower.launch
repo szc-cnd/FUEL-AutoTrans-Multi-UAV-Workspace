@@ -1,0 +1,144 @@
+<launch>
+    <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
+    <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch"/>
+    <!-- 2026-07-16: 后机不运行第二套FUEL；执行门点、持续滚动内部接力点和真实终点。 -->
+    <!-- 2026-07-27: 后机接力链路的全部双机话题前缀统一为 UAV0/UAV1。 -->
+    <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odometry"/>
+    <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odometry"/>
+    <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
+    <arg name="follower_offset_x" default="-1.0"/>
+    <arg name="follower_offset_y" default="0.0"/>
+    <arg name="follower_offset_z" default="0.0"/>
+
+    <node pkg="exploration_control" type="leader_safe_path_follower"
+          name="leader_safe_path_follower" output="screen">
+        <!-- 2026-07-14: 1.2m 路径滞后和 0.75m 硬间距用于当前 1m 初始纵队的保守跟随验证。 -->
+        <param name="leader_odom_topic" value="$(arg leader_odom_topic)"/>
+        <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
+        <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
+        <!-- 2026-07-29: 不再依赖 start_after_hover；双机分别达到高度后锁存就绪，
+             UAV1 仍要等接力目标发布并由 Diff 生成真实轨迹后才运动。 -->
+        <param name="leader_start_height" value="0.5"/>
+        <param name="follower_start_height" value="0.5"/>
+        <param name="command_topic" value="/UAV1/planning/pos_cmd"/>
+        <!-- 2026-07-28: 禁止接力管理器直控后机，改向UAV1 Diff发布离散目标。 -->
+        <param name="use_diff_planner" value="true"/>
+        <param name="diff_goal_topic" value="/UAV1/planning/goal"/>
+        <!-- 2026-07-28: 仅在3秒内连规划状态都未收到时重发，禁止飞行中1Hz覆盖Diff轨迹。 -->
+        <param name="diff_goal_retry_period" value="3.0"/>
+        <!-- 2026-07-28: Diff连续失败时沿前机实飞路线逐个短子目标推进，不再无限重发原远点。 -->
+        <param name="diff_status_topic" value="/drone_1_planning/status"/>
+        <param name="diff_recovery_arrive_radius" value="0.18"/>
+        <param name="traj_started_topic" value="/UAV1/planning/traj_started"/>
+        <!-- 2026-07-27: 前机确认终点后，跟随器发布后机邻近落点并在到达后触发 UAV1 AUTO.LAND。 -->
+        <param name="leader_landing_target_topic" value="/UAV0/mission/landing_target"/>
+        <param name="leader_landing_request_topic" value="/UAV0/mission/landing_request"/>
+        <param name="follower_landing_target_topic" value="/UAV1/mission/landing_target"/>
+        <param name="follower_landing_request_topic" value="/UAV1/mission/landing_request"/>
+        <!-- 2026-07-15: workspace_lock 只在门确认后锁存发布，比 entry_pose 的搜索期参考点可靠。 -->
+        <param name="door_pose_topic" value="/UAV0/corridor_search/workspace_lock"/>
+        <!-- 2026-07-28: 仅接收前机达到锁门里程后发布的最终出口；后机在前机出门后按入口式离散点执行。 -->
+        <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
+        <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
+        <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
+        <param name="world_frame" value="world"/>
+        <param name="follower_offset_x" value="$(arg follower_offset_x)"/>
+        <param name="follower_offset_y" value="$(arg follower_offset_y)"/>
+        <param name="follower_offset_z" value="$(arg follower_offset_z)"/>
+        <!-- 2026-07-24: 出口前沿前机实飞XY折线保持0.70m滞后；后机高度独立固定0.65m。 -->
+        <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
+        <param name="continuous_follow_before_exit" value="false"/>
+        <!-- 2026-07-27: 后机通道连续跟随速度上限与前机 FUEL 的 0.5m/s 对齐，避免长期速度差持续放大跟随滞后。 -->
+        <param name="continuous_follow_speed" value="0.50"/>
+        <!-- 2026-07-27: FUEL 已将任务状态隔离到前机 UAV0，跟随器同步订阅该前缀。 -->
+        <param name="leader_task_status_topic" value="/UAV0/mission/task_status"/>
+        <!-- 2026-07-27: 后机在入门目标释放后独立开启LDOT，不随已先行出门的前机提前关闭。 -->
+        <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
+        <param name="follow_distance" value="0.70"/>
+        <param name="release_path_length" value="0.70"/>
+        <param name="min_separation" value="0.50"/>
+        <!-- 2026-07-24: 不接收前机z；默认0.65m，只有自身点云线段受阻才在0.60至0.70m内调整。 -->
+        <param name="fixed_follow_height" value="0.65"/>
+        <param name="follow_height_min" value="0.60"/>
+        <param name="follow_height_max" value="0.70"/>
+        <param name="separation_recovery_distance" value="1.15"/>
+        <param name="separation_release_distance" value="1.35"/>
+        <param name="emergency_retreat_step" value="0.35"/>
+        <param name="emergency_retreat_speed" value="0.30"/>
+        <!-- 2026-07-16: 后机落点取前机安全轨迹末端后方约0.5m；终点模式关闭两机距离条件。 -->
+        <param name="terminal_landing_spacing" value="0.50"/>
+        <param name="terminal_approach_height" value="0.60"/>
+        <param name="terminal_arrive_radius" value="0.25"/>
+        <param name="terminal_arrive_z_tolerance" value="0.15"/>
+        <param name="terminal_arrive_dwell" value="1.0"/>
+        <param name="terminal_approach_speed" value="0.25"/>
+        <!-- 2026-07-27: 后机普通接力巡航上限同步设为 0.5m/s；接近接力点、终点和紧急退让仍使用各自的低速参数。 -->
+        <param name="cruise_speed" value="0.50"/>
+        <param name="max_target_step" value="0.55"/>
+        <!-- 2026-07-15: 每次只沿前机历史折线前视0.30m，避免在U形/直角通道直接连远端滞后点切墙。 -->
+        <param name="route_tracking_lookahead" value="0.30"/>
+        <!-- 2026-07-21: 用最近0.45m实飞路线切线判定前进，不使用当前不随转弯更新的雷达yaw；
+             投影<-0.20且累计倒退0.60m才暂停，正常直角/U形转弯可连续生成接力点。 -->
+        <param name="forward_projection_ratio" value="-0.20"/>
+        <param name="route_direction_window" value="0.45"/>
+        <param name="backtrack_pause_distance" value="0.60"/>
+        <param name="route_resume_radius" value="0.45"/>
+        <!-- 2026-07-21: U形转弯负投影轨迹离开旧路线0.5m后确认为新分支，恢复接力且保留完整弯曲路径。 -->
+        <param name="turn_branch_confirm_distance" value="0.50"/>
+        <!-- 2026-07-24: 门点及内部接力点都等前机清空0.70m再释放，防止门口追尾。 -->
+        <param name="door_release_inside_distance" value="0.70"/>
+        <!-- 2026-07-24: 连续跟随和出口前接力发布统一使用0.70m安全间距。 -->
+        <param name="relay_release_distance" value="0.70"/>
+        <param name="relay_waypoint_spacing" value="2.50"/>
+        <param name="relay_arrive_radius" value="0.25"/>
+        <param name="relay_arrive_z_tolerance" value="0.20"/>
+        <!-- 较大圆柱净空仅用于最终降落点；普通接力点只检查精确落点小体素。 -->
+        <param name="relay_endpoint_clearance_radius" value="0.38"/>
+        <param name="relay_endpoint_z_margin" value="0.28"/>
+        <param name="relay_endpoint_min_points" value="2"/>
+        <param name="relay_point_occupied_radius" value="0.12"/>
+        <param name="relay_point_occupied_z_margin" value="0.18"/>
+        <param name="relay_point_occupied_min_points" value="2"/>
+        <param name="relay_point_check_distance" value="0.45"/>
+        <param name="relay_occupied_attachment_radius" value="0.35"/>
+        <param name="relay_slowdown_radius" value="0.55"/>
+        <param name="relay_approach_speed" value="0.20"/>
+        <param name="relay_arrive_max_horizontal_speed" value="0.10"/>
+        <param name="relay_arrive_max_vertical_speed" value="0.08"/>
+        <param name="relay_arrive_dwell" value="0.50"/>
+        <!-- 2026-07-28: 普通接力点进入15cm后先锁点0.45s，避免轨迹结束与速度门槛之间形成到点死锁。 -->
+        <param name="diff_endpoint_capture_radius" value="0.15"/>
+        <param name="diff_endpoint_capture_dwell" value="0.45"/>
+        <!-- 2026-07-28: PositionCommand停止0.8s且尚未到点时重发当前Diff目标。 -->
+        <param name="diff_command_stale_timeout" value="0.80"/>
+        <!-- 2026-07-16: 0表示不限制内部接力点数量，避免长赛道在固定5点耗尽后永久等待。 -->
+        <param name="max_internal_relay_points" value="0"/>
+        <!-- 2026-07-16: 仿真Mid360点云稀疏，8点门限会漏掉真实墙面；恢复3点并扩大到0.28m包络。 -->
+        <param name="obstacle_check_enabled" value="true"/>
+        <param name="require_fresh_cloud" value="true"/>
+        <param name="obstacle_radius" value="0.28"/>
+        <param name="obstacle_z_margin" value="0.25"/>
+        <param name="obstacle_min_points" value="3"/>
+        <!-- 2026-07-28: 后机订阅LDOT结构化预测；合格摆球跨端点保留1.5s，预测相交时等待而不是随机横移。 -->
+        <param name="dynamic_obstacle_topic" value="/UAV1/ldot_detector/dynamic_obstacles"/>
+        <param name="dynamic_obstacle_retention" value="1.50"/>
+        <param name="dynamic_obstacle_safety_radius" value="0.35"/>
+        <param name="dynamic_obstacle_z_margin" value="0.18"/>
+        <!-- 2026-07-28: 赛题摆球不会触墙；仅保留距前机已验证通道中心路线0.70m内的框，墙边/穿墙预测直接丢弃。 -->
+        <param name="dynamic_retention_route_half_width" value="0.70"/>
+        <!-- 2026-07-28: 识别7月27日实验中的FAST-LIO发散，并切换控制器MAVROS锁点保护。 -->
+        <param name="follower_odom_jump_speed" value="2.0"/>
+        <param name="follower_odom_jump_vertical_speed" value="1.2"/>
+        <!-- 2026-07-27: 后机持续有速度指令但1.5s内位移不足6cm时，按自身点云选择侧向/退向短目标脱困。 -->
+        <param name="stuck_detection_timeout" value="1.50"/>
+        <param name="stuck_min_progress" value="0.06"/>
+        <param name="recovery_step" value="0.35"/>
+        <param name="recovery_speed" value="0.20"/>
+        <param name="recovery_attempt_timeout" value="1.50"/>
+        <param name="recovery_success_distance" value="0.12"/>
+        <param name="recovery_near_ignore" value="0.06"/>
+        <!-- 2026-07-27: 点云阻挡1秒触发局部脱困；非门点/非终点持续6秒不可达则跳过，避免队列永久锁死。 -->
+        <param name="blocked_recovery_timeout" value="1.00"/>
+        <param name="waypoint_unreachable_timeout" value="6.00"/>
+    </node>
+</launch>

@@ -1,0 +1,77 @@
+<launch>
+    <!-- 2026-07-28: 后机新增独立Diff接力规划器；接收前机释放的离散目标，使用UAV1自身里程计和点云避障。 -->
+    <arg name="odom_topic" default="/UAV1/fast_lio/Odometry"/>
+    <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
+    <arg name="goal_topic" default="/UAV1/planning/goal"/>
+    <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
+    <arg name="max_vel" default="0.50"/>
+    <arg name="max_acc" default="1.00"/>
+
+    <!-- 2026-07-28: flight_type=1启用运行时外部目标；占位航点不会在该模式执行。 -->
+    <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
+        <arg name="drone_id" value="1"/>
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="camera_pose_topic" value="no_use_uav1_pose"/>
+        <arg name="depth_topic" value="no_use_uav1_depth"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+        <arg name="cx" value="319.31427001953125"/>
+        <arg name="cy" value="239.09725952148438"/>
+        <arg name="fx" value="386.2706298828125"/>
+        <arg name="fy" value="386.2706298828125"/>
+        <!-- 2026-07-28: 按实验要求与前机对齐到0.5m/s、1.0m/s^2，轨迹仍由Diff连续优化。 -->
+        <arg name="max_vel" value="$(arg max_vel)"/>
+        <arg name="max_acc" value="$(arg max_acc)"/>
+        <arg name="max_jer" value="8.0"/>
+        <arg name="planning_horizon" value="6.0"/>
+        <arg name="waypoint_switch_dist" value="0.12"/>
+        <!-- 2026-07-28: 20m局部窗口覆盖当前U形通道，UAV1点云独立形成静态避障地图。 -->
+        <arg name="local_map_size_x" value="20.0"/>
+        <arg name="local_map_size_y" value="20.0"/>
+        <arg name="local_map_size_z" value="3.0"/>
+        <arg name="enable_virtual_wall" value="true"/>
+        <arg name="virtual_ceil" value="2.0"/>
+        <arg name="virtual_ground" value="0.10"/>
+        <arg name="map_resolution" value="0.15"/>
+        <!-- 2026-07-28: 0.15m分辨率下0.18m会向上取整成2格(实际0.30m)并反包后机起点；改为精确1格0.15m，优化器0.18m净空仍保留。 -->
+        <arg name="inflation_size" value="0.15"/>
+        <!-- 2026-07-28: UAV1门洞点云偶发假占据时用更强FREE射线及时清除，避免目标被改回当前位置。 -->
+        <arg name="lidar_p_miss" value="0.35"/>
+        <!-- 2026-07-28: 后机最新日志在第4个点出现start_occ=3并持续50s；3s衰减移动球/前机鬼影，
+             360度雷达持续命中的真实墙体仍会保持占据。 -->
+        <arg name="fading_time" value="3.0"/>
+        <arg name="obstacle_clearance" value="0.18"/>
+        <!-- 2026-07-28: FAST-LIO点云/里程计均为UAV1局部坐标，不叠加出生点偏移。 -->
+        <arg name="init_x" value="0.0"/>
+        <arg name="init_y" value="0.0"/>
+        <arg name="init_z" value="0.0"/>
+        <arg name="cloud_use_init_offset" value="false"/>
+        <arg name="enable_stuck_detect" value="true"/>
+        <arg name="stuck_detect_grace_time" value="8.0"/>
+        <!-- 2026-07-28: 不锁死全局窗口，允许雷达射线清除摆球移动后的旧占据；静态墙体仍会持续观测。 -->
+        <arg name="preserve_global_map" value="false"/>
+        <arg name="flight_type" value="1"/>
+        <arg name="manual_goal_topic" value="$(arg goal_topic)"/>
+        <!-- 2026-07-28: 前机是FUEL而非Diff，不会发送prev traj；后机收到接力点后直接用自身Diff规划。 -->
+        <arg name="require_pre_agent_trajectory" value="false"/>
+        <!-- 2026-07-28: 后机规划失败由safe_follower改发已验证短子目标，禁用会阻塞FSM并导致Lost heartbeat的随机初始化。 -->
+        <arg name="enable_random_global_init" value="false"/>
+        <arg name="point_num" value="1"/>
+        <arg name="point0_x" value="0.0"/><arg name="point0_y" value="0.0"/><arg name="point0_z" value="0.65"/>
+        <arg name="point1_x" value="0.0"/><arg name="point1_y" value="0.0"/><arg name="point1_z" value="0.65"/>
+        <arg name="point2_x" value="0.0"/><arg name="point2_y" value="0.0"/><arg name="point2_z" value="0.65"/>
+        <arg name="point3_x" value="0.0"/><arg name="point3_y" value="0.0"/><arg name="point3_z" value="0.65"/>
+        <arg name="point4_x" value="0.0"/><arg name="point4_y" value="0.0"/><arg name="point4_z" value="0.65"/>
+    </include>
+
+    <!-- 2026-07-28: UAV1 traj_server是后机PositionCommand唯一发布者，并独立发布真实轨迹接管信号。 -->
+    <node pkg="diff_planner" name="drone_1_traj_server" type="traj_server" output="screen">
+        <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
+        <remap from="~planning/trajectory" to="/drone_1_planning/trajectory"/>
+        <remap from="/planning/yaw" to="/UAV1/planning/yaw"/>
+        <remap from="~heartbeat" to="/drone_1_traj_server/heartbeat"/>
+        <remap from="/planning/traj_started" to="/UAV1/planning/traj_started"/>
+        <param name="traj_server/time_forward" value="0.35" type="double"/>
+        <param name="traj_server/yaw_dot_max" value="1.57" type="double"/>
+        <param name="traj_server/yaw_dot_dot_max" value="6.28" type="double"/>
+    </node>
+</launch>

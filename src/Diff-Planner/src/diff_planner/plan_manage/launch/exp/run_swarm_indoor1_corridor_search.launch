@@ -1,0 +1,156 @@
+<launch>
+    <!-- 2026-07-08: 为未知走廊搜索验证新增入口。与 frontier exploration 不同，这里把 Diff-Planner 作为唯一轨迹执行器， -->
+    <!-- 2026-07-08: 顶层由 corridor_search_manager 基于局部雷达结构连续下发短程子目标，避免无人机把未知边界当作主任务。 -->
+
+    <arg name="drone_id" default="0"/>
+    <arg name="enable_rviz" default="true"/>
+
+    <!-- 2026-07-08: 继续复用当前 indoor1 稳定的 FAST-LIO 里程计和注册点云链路。 -->
+    <arg name="odom_topic" default="/Odometry"/>
+    <arg name="cloud_topic" default="/cloud_registered"/>
+
+    <!-- 2026-07-08: 单机 indoor1 出生点与当前仿真保持一致，方便和固定巡航/探索版直接对比。 -->
+    <arg name="init_x" default="-3.8"/>
+    <arg name="init_y" default="-3.0"/>
+    <arg name="init_z" default="0.15"/>
+
+    <!-- 2026-07-08: Diff 保持大窗口历史地图，避免狭窄通道里的历史障碍随滑窗丢失。 -->
+    <arg name="local_map_size_x" default="20.0"/>
+    <arg name="local_map_size_y" default="20.0"/>
+    <arg name="local_map_size_z" default="3.0"/>
+
+    <!-- 2026-07-08: 当前验证版继续保守速度，优先保证通道内稳定前进。 -->
+    <arg name="max_vel" default="0.6"/>
+    <arg name="max_acc" default="2.0"/>
+    <arg name="max_jer" default="10.0"/>
+    <arg name="planning_horizon" default="6.0"/>
+
+    <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="drone_id" value="$(arg drone_id)"/>
+        <arg name="camera_pose_topic" value="no_use0"/>
+        <arg name="depth_topic" value="no_use1"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+
+        <!-- 2026-07-08: cloud-only 模式下这些内参只是占位，保持 Diff 参数接口完整。 -->
+        <arg name="cx" value="319.31427001953125"/>
+        <arg name="cy" value="239.09725952148438"/>
+        <arg name="fx" value="386.2706298828125"/>
+        <arg name="fy" value="386.2706298828125"/>
+
+        <!-- 2026-07-08: 改成搜索触发模式，RViz /goal 只负责“允许开始”，真实自动子目标走独立 /corridor_search/subgoal。 -->
+        <arg name="flight_type" value="4"/>
+        <arg name="point_num" value="1"/>
+        <arg name="point0_x" value="0.0"/>
+        <arg name="point0_y" value="0.0"/>
+        <arg name="point0_z" value="0.8"/>
+        <arg name="point1_x" value="0.0"/>
+        <arg name="point1_y" value="0.0"/>
+        <arg name="point1_z" value="0.8"/>
+        <arg name="point2_x" value="0.0"/>
+        <arg name="point2_y" value="0.0"/>
+        <arg name="point2_z" value="0.8"/>
+        <arg name="point3_x" value="0.0"/>
+        <arg name="point3_y" value="0.0"/>
+        <arg name="point3_z" value="0.8"/>
+        <arg name="point4_x" value="0.0"/>
+        <arg name="point4_y" value="0.0"/>
+        <arg name="point4_z" value="0.8"/>
+
+        <arg name="max_vel" value="$(arg max_vel)" />
+        <arg name="max_acc" value="$(arg max_acc)" />
+        <arg name="max_jer" value="$(arg max_jer)"/>
+        <arg name="planning_horizon" value="$(arg planning_horizon)" />
+        <arg name="waypoint_switch_dist" value="0.2" />
+
+        <arg name="local_map_size_x" value="$(arg local_map_size_x)"/>
+        <arg name="local_map_size_y" value="$(arg local_map_size_y)"/>
+        <arg name="local_map_size_z" value="$(arg local_map_size_z)"/>
+        <arg name="enable_virtual_wall" value="true"/>
+        <arg name="virtual_ceil" value="2.0"/>
+        <arg name="virtual_ground" value="0.1"/>
+        <arg name="map_resolution" value="0.15"/>
+        <arg name="inflation_size" value="0.15"/>
+        <arg name="obstacle_clearance" value="0.15"/>
+
+        <arg name="init_x" value="$(arg init_x)"/>
+        <arg name="init_y" value="$(arg init_y)"/>
+        <arg name="init_z" value="$(arg init_z)"/>
+        <arg name="cloud_use_init_offset" value="false"/>
+        <arg name="enable_stuck_detect" value="false"/>
+        <arg name="stuck_detect_grace_time" value="20.0"/>
+        <arg name="preserve_global_map" value="true"/>
+    </include>
+
+    <!-- 2026-07-08: 继续保留 RViz 2D Goal 只作“允许开始”的语义，把当前里程计高度补到 /goal，供搜索模式触发使用。 -->
+    <node pkg="diff_planner" type="goal_height_bridge" name="rviz_goal_to_search_trigger" output="screen">
+        <param name="odom_topic" value="$(arg odom_topic)" />
+        <param name="input_goal_topic" value="/move_base_simple/goal" />
+        <param name="output_goal_topic" value="/goal" />
+        <param name="output_frame_id" value="world" />
+    </node>
+
+    <!-- 2026-07-08: 顶层搜索管理器只在收到 /goal 触发后，才基于局部雷达结构连续发布 /corridor_search/subgoal。 -->
+    <node pkg="diff_planner" type="corridor_search_manager" name="corridor_search_manager" output="screen">
+        <param name="search_manager/odom_topic" value="$(arg odom_topic)"/>
+        <param name="search_manager/cloud_topic" value="$(arg cloud_topic)"/>
+        <param name="search_manager/trigger_topic" value="/goal"/>
+        <param name="search_manager/goal_topic" value="/corridor_search/subgoal"/>
+        <param name="search_manager/world_frame" value="world"/>
+        <!-- 2026-07-08: 起飞前 /Odometry 高度通常仍贴近地面，先等高度超过门槛再开始自动发子目标，避免 Diff 把起点判成 virtual_ground 越界。 -->
+        <param name="search_manager/min_start_height" value="0.35"/>
+        <param name="search_manager/goal_height_mode" value="keep_current"/>
+        <param name="search_manager/cruise_height" value="0.8"/>
+        <param name="search_manager/min_goal_z" value="0.6"/>
+        <param name="search_manager/max_goal_z" value="1.0"/>
+        <param name="search_manager/local_radius" value="4.0"/>
+        <param name="search_manager/height_window" value="0.9"/>
+        <param name="search_manager/corridor_half_width" value="1.4"/>
+        <param name="search_manager/lookahead_dist" value="1.8"/>
+        <param name="search_manager/probe_dist" value="0.9"/>
+        <param name="search_manager/arrive_dist" value="0.5"/>
+        <param name="search_manager/reissue_timeout" value="4.0"/>
+        <param name="search_manager/stale_cloud_timeout" value="1.0"/>
+        <param name="search_manager/min_support_points" value="25"/>
+        <param name="search_manager/repeat_penalty_radius" value="1.2"/>
+        <param name="search_manager/max_history_size" value="30"/>
+        <param name="search_manager/search_period" value="0.6"/>
+        <param name="search_manager/prefer_heading_weight" value="1.0"/>
+        <param name="search_manager/structure_weight" value="0.05"/>
+        <param name="search_manager/repeat_penalty_weight" value="1.5"/>
+        <param name="search_manager/open_space_penalty" value="1.0"/>
+        <param name="search_manager/fallback_sweep_step_deg" value="35.0"/>
+    </node>
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_map"
+        args="0 0 0 0 0 0 world map" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_camera_init"
+        args="0 0 0 0 0 0 world camera_init" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="body_to_base_link"
+        args="0 0 0 0 0 0 body base_link" />
+
+    <node pkg="diff_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
+        <remap from="position_cmd" to="/planning/pos_cmd"/>
+        <remap from="~planning/trajectory" to="/drone_$(arg drone_id)_planning/trajectory"/>
+        <remap from="~planning/yaw" to="/drone_$(arg drone_id)_planning/yaw"/>
+        <remap from="~heartbeat" to="/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
+        <param name="traj_server/yaw_dot_max" value="3.14" type="double"/>
+        <param name="traj_server/yaw_dot_dot_max" value="15.71" type="double"/>
+    </node>
+
+    <node pkg="odom_visualization" name="drone_$(arg drone_id)_odom_visualization" type="odom_visualization" output="screen">
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.0"/>
+        <param name="color/b" value="0.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="$(arg drone_id)"/>
+    </node>
+
+    <node if="$(arg enable_rviz)" name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find diff_planner)/launch/include/exp.rviz" required="true" />
+</launch>

@@ -1,0 +1,1 @@
+# 2026-07-07: 屏蔽 faster-lio 内嵌的重复 livox_ros_driver，统一使用 match_ws 顶层版本，避免消息生成 target 冲突并保留外部头文件导出。

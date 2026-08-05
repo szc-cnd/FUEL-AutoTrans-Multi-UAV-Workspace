@@ -1,0 +1,2105 @@
+// 2026-07-16: 后机改为任务接力模式：门前原位等待，发布门点、滚动内部点和终点；
+// 2026-07-16: 稀疏任务点只负责通信和阶段同步，点间运动沿前机实飞稠密折线执行，禁止直连跨墙。
+// 2026-07-16: 取消固定5点上限；内部点可持续释放，只有真实降落请求才结束内部点生成并追加终点。
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <deque>
+#include <limits>
+#include <sstream>  // 2026-07-28: 解析Diff返回的实际安全目标坐标。
+#include <stdexcept>
+#include <string>
+#include <vector>  // 2026-07-16: 保存按任务进度持续生成并顺序执行的离散接力点。
+
+#include <geometry_msgs/Point.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <ldot_detector/DynamicObstacleArray.h>  // 2026-07-28: 后机直接使用LDOT当前框和短期预测做摆球让行。
+#include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
+#include <quadrotor_msgs/PositionCommand.h>
+#include <ros/ros.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
+#include <std_msgs/Bool.h>
+#include <std_msgs/Empty.h>
+#include <std_msgs/String.h>
+#include <visualization_msgs/Marker.h>
+
+namespace {
+
+struct RoutePoint {
+  geometry_msgs::Point position;
+  double yaw{0.0};
+  // 2026-07-15: 记录前机从起飞后的累计路程，用于“离开候选点1m后再释放”的离散接力逻辑。
+  double progress{0.0};
+};
+
+double distance3d(const geometry_msgs::Point& a, const geometry_msgs::Point& b) {
+  const double dx = a.x - b.x;
+  const double dy = a.y - b.y;
+  const double dz = a.z - b.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+double yawFromQuaternion(const geometry_msgs::Quaternion& q) {
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+geometry_msgs::Point interpolate(const geometry_msgs::Point& a,
+                                 const geometry_msgs::Point& b, double ratio) {
+  geometry_msgs::Point result;
+  result.x = a.x + ratio * (b.x - a.x);
+  result.y = a.y + ratio * (b.y - a.y);
+  result.z = a.z + ratio * (b.z - a.z);
+  return result;
+}
+
+}  // namespace
+
+class LeaderSafePathFollower {
+ public:
+  LeaderSafePathFollower() : nh_(), pnh_("~") {
+    // 2026-07-27: 所有双机默认话题前缀统一为 UAV0/UAV1；公共坐标偏移和安全阈值仍可由 launch 标定。
+    pnh_.param<std::string>("leader_odom_topic", leader_odom_topic_,
+                            "/UAV0/fast_lio/Odometry");
+    pnh_.param<std::string>("follower_odom_topic", follower_odom_topic_,
+                            "/UAV1/fast_lio/Odometry");
+    pnh_.param<std::string>("follower_cloud_topic", follower_cloud_topic_,
+                            "/UAV1/fast_lio/cloud_registered");
+    // 2026-07-29: 起飞就绪由各自 FAST-LIO 高度锁存，不再依赖 start_after_hover Bool。
+    pnh_.param("leader_start_height", leader_start_height_, 0.5);
+    pnh_.param("follower_start_height", follower_start_height_, 0.5);
+    pnh_.param<std::string>("command_topic", command_topic_,
+                            "/UAV1/planning/pos_cmd");
+    // 2026-07-28: 新模式只向UAV1独立Diff发布离散目标；旧PositionCommand直控保留为可回退开关。
+    pnh_.param("use_diff_planner", use_diff_planner_, true);
+    pnh_.param<std::string>("diff_goal_topic", diff_goal_topic_,
+                            "/UAV1/planning/goal");
+    pnh_.param<std::string>("traj_started_topic", traj_started_topic_,
+                            "/UAV1/planning/traj_started");
+    // 2026-07-28: Diff若因瞬时占据把目标改到当前位置，周期重发原接力点，不能一次发送后永久锁死。
+    pnh_.param("diff_goal_retry_period", diff_goal_retry_period_, 1.0);
+    // 2026-07-28: 订阅UAV1 Diff明确规划状态；失败后沿前机实飞路线短步恢复。
+    pnh_.param<std::string>("diff_status_topic", diff_status_topic_,
+                            "/drone_1_planning/status");
+    pnh_.param("diff_recovery_arrive_radius", diff_recovery_arrive_radius_, 0.18);
+    pnh_.param<std::string>("leader_landing_target_topic", leader_landing_target_topic_,
+                            "/UAV0/mission/landing_target");
+    pnh_.param<std::string>("leader_landing_request_topic", leader_landing_request_topic_,
+                            "/UAV0/mission/landing_request");
+    pnh_.param<std::string>("follower_landing_target_topic", follower_landing_target_topic_,
+                            "/UAV1/mission/landing_target");
+    pnh_.param<std::string>("follower_landing_request_topic", follower_landing_request_topic_,
+                            "/UAV1/mission/landing_request");
+    // 2026-07-15: 只接收找门模块已经确认并锁存的门平面，禁止把临时候选门发给后机。
+    pnh_.param<std::string>("door_pose_topic", door_pose_topic_,
+                            "/UAV0/corridor_search/workspace_lock");
+    // 2026-07-28: 前机最终锁门后独立发布门心；中途exit_candidate绝不进入后机队列。
+    pnh_.param<std::string>("final_exit_pose_topic", final_exit_pose_topic_,
+                            "/UAV0/mission/final_exit");
+    // 2026-07-16: 接力点使用前机任务命名空间公开，后续实机可直接将该Path桥接给第二架无人机。
+    pnh_.param<std::string>("relay_path_topic", relay_path_topic_,
+                            "/UAV0/mission/relay_waypoints");
+    pnh_.param<std::string>("world_frame", world_frame_, "world");
+    pnh_.param("leader_offset_x", leader_offset_x_, 0.0);
+    pnh_.param("leader_offset_y", leader_offset_y_, 0.0);
+    pnh_.param("leader_offset_z", leader_offset_z_, 0.0);
+    pnh_.param("follower_offset_x", follower_offset_x_, -1.0);
+    pnh_.param("follower_offset_y", follower_offset_y_, 0.0);
+    pnh_.param("follower_offset_z", follower_offset_z_, 0.0);
+    // 2026-07-24: 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留0.70m路径间距。
+    pnh_.param("follow_distance", follow_distance_, 0.70);
+    pnh_.param("release_path_length", release_path_length_, 0.70);
+    pnh_.param("min_separation", min_separation_, 0.50);
+    pnh_.param("fixed_follow_height", fixed_follow_height_, 0.65);
+    pnh_.param("follow_height_min", follow_height_min_, 0.60);
+    pnh_.param("follow_height_max", follow_height_max_, 0.70);
+    pnh_.param("continuous_follow_before_exit", continuous_follow_before_exit_, true);
+    pnh_.param("continuous_follow_speed", continuous_follow_speed_, 0.42);
+    pnh_.param<std::string>("leader_task_status_topic", leader_task_status_topic_,
+                            "/mission/task_status");
+    // 2026-07-27: 后机独立发布锁存式LDOT门控，不能复用前机门控而在前机先出通道时提前关闭。
+    pnh_.param<std::string>("follower_detection_enable_topic",
+                            follower_detection_enable_topic_,
+                            "/UAV1/corridor_search/dynamic_detection_enable");
+    // 2026-07-14: 前机反向时不能让后机原地等待碰撞；提前进入退让并用滞回避免跟随/退让抖动。
+    pnh_.param("separation_recovery_distance", separation_recovery_distance_, 1.15);
+    pnh_.param("separation_release_distance", separation_release_distance_, 1.35);
+    pnh_.param("emergency_retreat_step", emergency_retreat_step_, 0.35);
+    pnh_.param("emergency_retreat_speed", emergency_retreat_speed_, 0.30);
+    // 2026-07-16: 前机锁定终点后，后机在其实飞路线末端后方约0.5m生成独立落点，避免同点降落。
+    pnh_.param("terminal_landing_spacing", terminal_landing_spacing_, 0.50);
+    pnh_.param("terminal_approach_height", terminal_approach_height_, 0.60);
+    pnh_.param("terminal_arrive_radius", terminal_arrive_radius_, 0.25);
+    pnh_.param("terminal_arrive_z_tolerance", terminal_arrive_z_tolerance_, 0.15);
+    pnh_.param("terminal_arrive_dwell", terminal_arrive_dwell_, 1.0);
+    pnh_.param("terminal_approach_speed", terminal_approach_speed_, 0.25);
+    pnh_.param("path_sample_spacing", path_sample_spacing_, 0.08);
+    pnh_.param("max_route_length", max_route_length_, 60.0);
+    // 2026-07-21: 雷达里程计yaw可能不跟随实际转弯，接力判向改用最近实飞路线的局部切线；
+    // 沿新走廊转弯可继续发点，沿路线倒退或重新进入旧路线仍暂停记录。
+    pnh_.param("forward_projection_ratio", forward_projection_ratio_, -0.20);
+    pnh_.param("route_direction_window", route_direction_window_, 0.45);
+    pnh_.param("backtrack_pause_distance", backtrack_pause_distance_, 0.60);
+    pnh_.param("route_revisit_radius", route_revisit_radius_, 0.45);
+    pnh_.param("route_revisit_progress_gap", route_revisit_progress_gap_, 1.00);
+    // 2026-07-20: 恢复半径覆盖0.1m里程计栅格和转弯横向误差；只有真实持续后退才会进入该状态。
+    pnh_.param("route_resume_radius", route_resume_radius_, 0.45);
+    // 2026-07-21: 反向投影先缓存；缓存轨迹离开全部旧路线后按新转弯分支接回，避免U形换路永久锁死接力发布。
+    pnh_.param("turn_branch_confirm_distance", turn_branch_confirm_distance_, 0.50);
+    pnh_.param("max_target_step", max_target_step_, 0.55);
+    // 2026-07-15: 后机按前机历史折线逐段前视，不能从当前位置直连远端滞后点切过弯道墙体。
+    pnh_.param("route_tracking_lookahead", route_tracking_lookahead_, 0.30);
+    pnh_.param("cruise_speed", cruise_speed_, 0.35);
+    pnh_.param("max_vertical_speed", max_vertical_speed_, 0.20);
+    pnh_.param("odom_timeout", odom_timeout_, 0.50);
+    pnh_.param("cloud_timeout", cloud_timeout_, 0.60);
+    pnh_.param("min_record_height", min_record_height_, 0.35);
+    pnh_.param("obstacle_check_enabled", obstacle_check_enabled_, true);
+    pnh_.param("require_fresh_cloud", require_fresh_cloud_, true);
+    pnh_.param("obstacle_radius", obstacle_radius_, 0.28);
+    pnh_.param("obstacle_z_margin", obstacle_z_margin_, 0.20);
+    pnh_.param("obstacle_ignore_near", obstacle_ignore_near_, 0.18);
+    pnh_.param("obstacle_min_points", obstacle_min_points_, 3);
+    // 2026-07-28: 点云稀疏时用结构化LDOT预测补充后机避障；摆球短暂漏检仍保留有限时间，但不会永久留框。
+    pnh_.param<std::string>("dynamic_obstacle_topic", dynamic_obstacle_topic_,
+                            "/UAV1/ldot_detector/dynamic_obstacles");
+    pnh_.param("dynamic_obstacle_retention", dynamic_obstacle_retention_, 0.80);
+    pnh_.param("dynamic_obstacle_safety_radius", dynamic_obstacle_safety_radius_, 0.35);
+    pnh_.param("dynamic_obstacle_z_margin", dynamic_obstacle_z_margin_, 0.18);
+    // 2026-07-28: 比赛动态物只在通道中部往复；墙边框不进入跨帧保留，预测越出中心安全带也不参与阻挡。
+    pnh_.param("dynamic_retention_route_half_width", dynamic_retention_route_half_width_, 0.70);
+    // 2026-07-28: 0.5m/s指令下FAST-LIO若出现数m/s跳变，立即请求控制器用MAVROS坐标锁点，禁止错误目标继续外推。
+    pnh_.param("follower_odom_jump_speed", follower_odom_jump_speed_, 2.0);
+    pnh_.param("follower_odom_jump_vertical_speed", follower_odom_jump_vertical_speed_, 1.2);
+    // 2026-07-27: 持续有运动指令但机体1.5s内位移不足6cm时进入点云选向脱困，防止贴墙后永久推杆。
+    pnh_.param("stuck_detection_timeout", stuck_detection_timeout_, 1.50);
+    pnh_.param("stuck_min_progress", stuck_min_progress_, 0.06);
+    pnh_.param("recovery_step", recovery_step_, 0.35);
+    pnh_.param("recovery_speed", recovery_speed_, 0.20);
+    pnh_.param("recovery_attempt_timeout", recovery_attempt_timeout_, 1.50);
+    pnh_.param("recovery_success_distance", recovery_success_distance_, 0.12);
+    pnh_.param("recovery_near_ignore", recovery_near_ignore_, 0.06);
+    // 2026-07-27: 点云阻挡HOLD也必须能脱困；普通内部检查点长期不可达时允许跳过，解除串行队列死锁。
+    pnh_.param("blocked_recovery_timeout", blocked_recovery_timeout_, 1.00);
+    pnh_.param("waypoint_unreachable_timeout", waypoint_unreachable_timeout_, 6.00);
+    // 2026-07-16: 后机采用门点+滚动内部点+真实终点的任务接力；0表示内部点数量不限。
+    pnh_.param("relay_release_distance", relay_release_distance_, 0.70);
+    // 2026-07-24: 门点和内部点都等前机清空0.70m再放行，避免两机在门口压缩间距。
+    pnh_.param("door_release_inside_distance", door_release_inside_distance_, 0.70);
+    pnh_.param("relay_waypoint_spacing", relay_waypoint_spacing_, 2.50);
+    pnh_.param("relay_arrive_radius", relay_arrive_radius_, 0.25);
+    pnh_.param("relay_arrive_z_tolerance", relay_arrive_z_tolerance_, 0.20);
+    // 最终降落点保留停驻净空；普通接力点另用小体素检查，不能让侧墙否决狭窄通道。
+    pnh_.param("relay_endpoint_clearance_radius", relay_endpoint_clearance_radius_, 0.38);
+    pnh_.param("relay_endpoint_z_margin", relay_endpoint_z_margin_, 0.28);
+    pnh_.param("relay_endpoint_min_points", relay_endpoint_min_points_, 2);
+    // 普通接力点只检查落点本身的小体素；侧墙进入大净空圆柱不能否决整段跟随。
+    pnh_.param("relay_point_occupied_radius", relay_point_occupied_radius_, 0.12);
+    pnh_.param("relay_point_occupied_z_margin", relay_point_occupied_z_margin_, 0.18);
+    pnh_.param("relay_point_occupied_min_points", relay_point_occupied_min_points_, 2);
+    pnh_.param("relay_point_check_distance", relay_point_check_distance_, 0.45);
+    pnh_.param("relay_occupied_attachment_radius", relay_occupied_attachment_radius_, 0.35);
+    pnh_.param("relay_slowdown_radius", relay_slowdown_radius_, 0.55);
+    pnh_.param("relay_approach_speed", relay_approach_speed_, 0.20);
+    pnh_.param("relay_arrive_max_horizontal_speed", relay_arrive_max_horizontal_speed_, 0.10);
+    pnh_.param("relay_arrive_max_vertical_speed", relay_arrive_max_vertical_speed_, 0.08);
+    pnh_.param("relay_arrive_dwell", relay_arrive_dwell_, 0.50);
+    // 2026-07-28: Diff末端速度差分可能尚未降到严格门槛；小半径内先锁点，再用停驻时间完成接力点。
+    pnh_.param("diff_endpoint_capture_radius", diff_endpoint_capture_radius_, 0.15);
+    pnh_.param("diff_endpoint_capture_dwell", diff_endpoint_capture_dwell_, 0.45);
+    // 2026-07-28: 直接监测UAV1 PositionCommand输出；轨迹结束但未到点时允许重新下发当前目标。
+    pnh_.param("diff_command_stale_timeout", diff_command_stale_timeout_, 0.80);
+    pnh_.param("max_internal_relay_points", max_internal_relay_points_, 0);
+
+    leader_odom_sub_ = nh_.subscribe(leader_odom_topic_, 20,
+                                     &LeaderSafePathFollower::leaderOdomCallback, this);
+    follower_odom_sub_ = nh_.subscribe(follower_odom_topic_, 20,
+                                       &LeaderSafePathFollower::followerOdomCallback, this);
+    follower_cloud_sub_ = nh_.subscribe(follower_cloud_topic_, 1,
+                                        &LeaderSafePathFollower::cloudCallback, this);
+    dynamic_obstacle_sub_ = nh_.subscribe(dynamic_obstacle_topic_, 5,
+                                          &LeaderSafePathFollower::dynamicObstacleCallback, this);
+    leader_landing_target_sub_ = nh_.subscribe(
+        leader_landing_target_topic_, 2,
+        &LeaderSafePathFollower::leaderLandingTargetCallback, this);
+    leader_landing_request_sub_ = nh_.subscribe(
+        leader_landing_request_topic_, 2,
+        &LeaderSafePathFollower::leaderLandingRequestCallback, this);
+    door_pose_sub_ = nh_.subscribe(door_pose_topic_, 1,
+                                   &LeaderSafePathFollower::doorPoseCallback, this);
+    final_exit_pose_sub_ = nh_.subscribe(
+        final_exit_pose_topic_, 1,
+        &LeaderSafePathFollower::finalExitPoseCallback, this);
+    leader_task_status_sub_ = nh_.subscribe(
+        leader_task_status_topic_, 2,
+        &LeaderSafePathFollower::leaderTaskStatusCallback, this);
+    // 2026-07-28: 目标publish不等于轨迹生成；使用Diff反馈触发已验证路线子目标。
+    diff_status_sub_ = nh_.subscribe(diff_status_topic_, 10,
+                                     &LeaderSafePathFollower::diffStatusCallback, this);
+    // 2026-07-28: 只订阅不发布Diff输出，用于区分“曾规划成功”和“当前轨迹仍然存活”。
+    if (use_diff_planner_)
+      diff_command_sub_ = nh_.subscribe(command_topic_, 20,
+                                        &LeaderSafePathFollower::diffCommandCallback, this);
+    // 2026-07-28: Diff模式禁止跟随器成为/UAV1/planning/pos_cmd的第二发布者；目标使用锁存发布避免启动时序丢包。
+    if (!use_diff_planner_) {
+      command_pub_ = nh_.advertise<quadrotor_msgs::PositionCommand>(command_topic_, 10);
+      traj_started_pub_ = nh_.advertise<std_msgs::Empty>(traj_started_topic_, 1, true);
+    }
+    diff_goal_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(diff_goal_topic_, 1, true);
+    follower_landing_target_pub_ =
+        nh_.advertise<geometry_msgs::PoseStamped>(follower_landing_target_topic_, 1, true);
+    follower_landing_request_pub_ =
+        nh_.advertise<std_msgs::Bool>(follower_landing_request_topic_, 1, true);
+    follower_detection_enable_pub_ =
+        nh_.advertise<std_msgs::Bool>(follower_detection_enable_topic_, 2, true);
+    follower_safety_hold_pub_ =
+        nh_.advertise<std_msgs::Bool>("/UAV1/planning/safety_hold", 1, true);
+    route_pub_ = pnh_.advertise<nav_msgs::Path>("leader_safe_route", 1, true);
+    relay_path_pub_ = nh_.advertise<nav_msgs::Path>(relay_path_topic_, 1, true);
+    target_pub_ = pnh_.advertise<visualization_msgs::Marker>("target_marker", 1);
+    state_pub_ = pnh_.advertise<visualization_msgs::Marker>("state_marker", 1);
+    timer_ = nh_.createTimer(ros::Duration(0.05), &LeaderSafePathFollower::timerCallback, this);
+    setFollowerDetectionEnable(false, "initialization", true);
+
+    ROS_INFO("[safe_follower] relay ready: executor=%s continuous_before_exit=%d follow=%.2fm, "
+             "door + rolling internal + terminal, "
+             "internal_limit=%d (0=unlimited), "
+             "release=%.2fm spacing=%.2fm offset=(%.2f,%.2f,%.2f)",
+             use_diff_planner_ ? "UAV1_DIFF" : "LEGACY_POSITION_COMMAND",
+             static_cast<int>(continuous_follow_before_exit_), follow_distance_,
+             max_internal_relay_points_, relay_release_distance_, relay_waypoint_spacing_,
+             follower_offset_x_, follower_offset_y_, follower_offset_z_);
+  }
+
+ private:
+  // 2026-07-27: UAV1检测会话由后机接力阶段控制并锁存，后启动的LDOT也能立即获得正确状态。
+  void setFollowerDetectionEnable(bool active, const char* reason, bool force = false) {
+    if (!force && follower_detection_enabled_ == active) return;
+    follower_detection_enabled_ = active;
+    std_msgs::Bool msg;
+    msg.data = active;
+    follower_detection_enable_pub_.publish(msg);
+    ROS_WARN("[safe_follower] UAV1 dynamic detection %s reason=%s.",
+             active ? "ENABLED" : "DISABLED", reason);
+  }
+
+  geometry_msgs::Point leaderToWorld(const geometry_msgs::Point& local) const {
+    geometry_msgs::Point world = local;
+    world.x += leader_offset_x_;
+    world.y += leader_offset_y_;
+    world.z += leader_offset_z_;
+    return world;
+  }
+
+  geometry_msgs::Point followerToWorld(const geometry_msgs::Point& local) const {
+    geometry_msgs::Point world = local;
+    world.x += follower_offset_x_;
+    world.y += follower_offset_y_;
+    world.z += follower_offset_z_;
+    return world;
+  }
+
+  geometry_msgs::Point worldToFollower(const geometry_msgs::Point& world) const {
+    geometry_msgs::Point local = world;
+    local.x -= follower_offset_x_;
+    local.y -= follower_offset_y_;
+    local.z -= follower_offset_z_;
+    return local;
+  }
+
+  // 2026-07-24: 前机里程计z不再通过接力路线传给后机；普通任务点只复用XY，
+  // 后机在自身局部坐标系使用固定巡航高度，终点下降仍由专用terminal高度控制。
+  geometry_msgs::Point useFollowerCruiseHeight(const geometry_msgs::Point& local) const {
+    geometry_msgs::Point adjusted = local;
+    adjusted.z = std::max(follow_height_min_,
+                          std::min(follow_height_max_, fixed_follow_height_));
+    return adjusted;
+  }
+
+  geometry_msgs::Point followerCruisePointToWorld(
+      const geometry_msgs::Point& world_xy) const {
+    geometry_msgs::Point local = worldToFollower(world_xy);
+    local = useFollowerCruiseHeight(local);
+    return followerToWorld(local);
+  }
+
+  void doorPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    if (have_confirmed_door_) return;
+    // 2026-07-15: workspace_lock 的朝向由起飞区指向作业区；保存一次后不允许后续重复消息拖动门点。
+    confirmed_door_.position = followerCruisePointToWorld(msg->pose.position);
+    confirmed_door_.yaw = yawFromQuaternion(msg->pose.orientation);
+    have_confirmed_door_ = true;
+    ROS_ERROR("[safe_follower] confirmed DOOR received at (%.2f, %.2f, %.2f), yaw=%.1fdeg; "
+              "follower remains parked until leader is %.2fm inside.",
+              confirmed_door_.position.x, confirmed_door_.position.y,
+              confirmed_door_.position.z, confirmed_door_.yaw * 180.0 / M_PI,
+              relay_release_distance_);
+  }
+
+  // 2026-07-28: 复用后文已有的nearestRouteProgress确定出口在前机实飞折线上的顺序；
+  // 像入口一样在前机清空门后再释放出口门心，此前内部点保持原顺序，之后停止新增内部点。
+  void tryReleaseFinalExitWaypoint(const char* reason) {
+    if (!have_final_exit_ || !leader_outside_exit_ || exit_waypoint_released_ ||
+        terminal_mode_active_)
+      return;
+    pending_relay_valid_ = false;
+    confirmed_exit_.progress = nearestRouteProgress(confirmed_exit_.position);
+    exit_waypoint_index_ = relay_waypoints_.size();
+    appendRelayWaypoint(confirmed_exit_, "EXIT");
+    exit_waypoint_released_ = true;
+    ROS_ERROR("[safe_follower] FINAL EXIT queued as relay %zu at progress %.2fm "
+              "after leader cleared portal; reason=%s.",
+              exit_waypoint_index_ + 1, confirmed_exit_.progress, reason);
+  }
+
+  void finalExitPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    if (have_final_exit_) return;
+    confirmed_exit_.position = followerCruisePointToWorld(msg->pose.position);
+    confirmed_exit_.yaw = yawFromQuaternion(msg->pose.orientation);
+    have_final_exit_ = true;
+    ROS_ERROR("[safe_follower] FINAL EXIT received center=(%.2f, %.2f, %.2f) "
+              "yaw=%.1fdeg; wait leader CROSS_EXIT completion before release.",
+              confirmed_exit_.position.x, confirmed_exit_.position.y,
+              confirmed_exit_.position.z, confirmed_exit_.yaw * 180.0 / M_PI);
+    tryReleaseFinalExitWaypoint("final exit received after leader outside");
+  }
+
+  void publishRelayPath() {
+    nav_msgs::Path path;
+    path.header.stamp = ros::Time::now();
+    path.header.frame_id = world_frame_;
+    for (const RoutePoint& point : relay_waypoints_) {
+      geometry_msgs::PoseStamped pose;
+      pose.header = path.header;
+      pose.pose.position = point.position;
+      pose.pose.orientation.w = std::cos(point.yaw * 0.5);
+      pose.pose.orientation.z = std::sin(point.yaw * 0.5);
+      path.poses.push_back(pose);
+    }
+    relay_path_pub_.publish(path);
+  }
+
+  void appendRelayWaypoint(const RoutePoint& point, const char* label) {
+    RoutePoint follower_point = point;
+    // 2026-07-24: 对外Path中的普通门点/接力点也明确写成后机0.65m高度，
+    // 不再把前机可能退化的z伪装成需要后机执行的三维坐标。
+    if (std::string(label) != "TERMINAL")
+      follower_point.position = followerCruisePointToWorld(point.position);
+    relay_waypoints_.push_back(follower_point);
+    publishRelayPath();
+    // 2026-07-28: RELEASE同时输出消费索引和Diff门控状态，现场可直接判断新点为何尚未SEND。
+    const double active_distance =
+        have_follower_odom_ && active_relay_index_ < relay_waypoints_.size()
+            ? distance3d(followerToWorld(follower_odom_.pose.pose.position),
+                         relay_waypoints_[active_relay_index_].position)
+            : -1.0;
+    ROS_ERROR("[safe_follower] RELEASE %s waypoint sequence=%zu at (%.2f, %.2f, %.2f); "
+              "active=%zu diff_goal=%zu published=%d response=%d command_live=%d "
+              "active_distance=%.2fm speed=%.2f/%.2f.",
+              label, relay_waypoints_.size(), follower_point.position.x,
+              follower_point.position.y, follower_point.position.z,
+              active_relay_index_ + 1,
+              diff_goal_index_ == std::numeric_limits<std::size_t>::max()
+                  ? 0 : diff_goal_index_ + 1,
+              static_cast<int>(diff_goal_published_),
+              static_cast<int>(diff_plan_response_received_),
+              static_cast<int>(diff_command_seen_for_goal_ &&
+                  (ros::Time::now() - diff_command_stamp_).toSec() <=
+                      diff_command_stale_timeout_),
+              active_distance, follower_horizontal_speed_, follower_vertical_speed_);
+  }
+
+  void leaderLandingTargetCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    // 2026-07-14: 保存前机终点作为诊断参考；后机实际落点仍从已飞安全轨迹后退取点。
+    leader_landing_target_ = *msg;
+    have_leader_landing_target_ = true;
+  }
+
+  bool getRouteTargetBehindEnd(double distance, RoutePoint* target) const {
+    if (route_.empty()) return false;
+    double remaining = std::max(0.0, distance);
+    for (std::size_t i = route_.size() - 1; i > 0; --i) {
+      const RoutePoint& newer = route_[i];
+      const RoutePoint& older = route_[i - 1];
+      const double segment = distance3d(newer.position, older.position);
+      if (segment >= remaining && segment > 1e-6) {
+        const double ratio = remaining / segment;
+        target->position = interpolate(newer.position, older.position, ratio);
+        target->yaw = newer.yaw;
+        // 2026-07-16: 终点接力也必须携带历史轨迹进度，否则点间跟踪会把终点误判为进度0。
+        target->progress = newer.progress + ratio * (older.progress - newer.progress);
+        return true;
+      }
+      remaining -= segment;
+    }
+    *target = route_.front();
+    return true;
+  }
+
+  void leaderLandingRequestCallback(const std_msgs::Bool::ConstPtr& msg) {
+    if (!msg->data || terminal_mode_active_) return;
+    RoutePoint nearby_target;
+    if (!getRouteTargetBehindEnd(terminal_landing_spacing_, &nearby_target)) {
+      ROS_ERROR("[safe_follower] leader landed but no accumulated route is available.");
+      return;
+    }
+
+    // 2026-07-14: 终点接管时锁定一次落点，后续前机下降产生的里程计变化不能拖动后机目标。
+    terminal_target_world_ = nearby_target;
+    terminal_target_world_.position.z = terminal_approach_height_;
+    terminal_mode_active_ = true;
+    separation_recovery_active_ = false;
+    terminal_arrival_stamp_ = ros::Time(0);
+
+    // 2026-07-16: 终点只由真实降落请求触发，并排在全部已发布接力点之后，不能越过队列直冲终点。
+    pending_relay_valid_ = false;
+    terminal_waypoint_index_ = relay_waypoints_.size();
+    appendRelayWaypoint(terminal_target_world_, "TERMINAL");
+
+    geometry_msgs::PoseStamped target_msg;
+    target_msg.header.stamp = ros::Time::now();
+    target_msg.header.frame_id = world_frame_;
+    target_msg.pose.position = terminal_target_world_.position;
+    target_msg.pose.orientation.w = 1.0;
+    follower_landing_target_pub_.publish(target_msg);
+    publishTarget(terminal_target_world_.position);
+    ROS_ERROR("[safe_follower] TERMINAL queued: follower landing target=(%.2f, %.2f, %.2f), "
+              "execute after earlier relay points; leader spacing check disabled.",
+              terminal_target_world_.position.x, terminal_target_world_.position.y,
+              terminal_target_world_.position.z);
+  }
+
+  // 2026-07-21: 从最近一段已认可实飞轨迹估计局部前进方向，避免使用与雷达机体框不一致的yaw。
+  bool getRouteForwardDirection(double* direction_x, double* direction_y) const {
+    if (route_.size() < 2) return false;
+    const geometry_msgs::Point& end = route_.back().position;
+    double accumulated = 0.0;
+    std::size_t start_index = route_.size() - 2;
+    for (std::size_t i = route_.size() - 1; i > 0; --i) {
+      accumulated += distance3d(route_[i].position, route_[i - 1].position);
+      start_index = i - 1;
+      if (accumulated >= route_direction_window_) break;
+    }
+    const double dx = end.x - route_[start_index].position.x;
+    const double dy = end.y - route_[start_index].position.y;
+    const double norm = std::hypot(dx, dy);
+    if (norm < 1e-3) return false;
+    *direction_x = dx / norm;
+    *direction_y = dy / norm;
+    return true;
+  }
+
+  // 2026-07-21: 用全部已认可路线判定候选是否仍在走回头路；新分支必须真正离开旧路线安全带。
+  double distanceToAcceptedRoute(const geometry_msgs::Point& position) const {
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const RoutePoint& old_point : route_) {
+      nearest = std::min(nearest,
+                         std::hypot(position.x - old_point.position.x,
+                                    position.y - old_point.position.y));
+    }
+    return nearest;
+  }
+
+  // 2026-07-21: 所有正常采样和确认后的转弯缓存统一从这里追加，保证progress、长度和裁剪同步。
+  bool appendAcceptedRoutePoint(RoutePoint* point) {
+    if (!route_.empty()) {
+      const double segment = distance3d(route_.back().position, point->position);
+      if (segment < path_sample_spacing_) return false;
+      route_length_ += segment;
+      leader_route_progress_ += segment;
+    }
+    point->progress = leader_route_progress_;
+    route_.push_back(*point);
+    while (route_.size() > 2 && route_length_ > max_route_length_) {
+      route_length_ -= distance3d(route_[0].position, route_[1].position);
+      route_.pop_front();
+      if (follower_route_index_ > 0) --follower_route_index_;
+    }
+    return true;
+  }
+
+  void leaderOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+    leader_odom_ = *msg;
+    leader_odom_stamp_ = ros::Time::now();
+    have_leader_odom_ = true;
+    if (!leader_started_ && msg->pose.pose.position.z > leader_start_height_) {
+      leader_started_ = true;
+      ROS_WARN("[safe_follower] UAV0 height %.2fm > %.2fm; leader route recording enabled.",
+               msg->pose.pose.position.z, leader_start_height_);
+    }
+    if (!leader_started_ || msg->pose.pose.position.z < min_record_height_) return;
+
+    RoutePoint point;
+    point.position = leaderToWorld(msg->pose.pose.position);
+    // 2026-07-24: 安全路线的几何进度只取前机XY，z统一为后机自己的巡航高度。
+    point.position = followerCruisePointToWorld(point.position);
+    point.yaw = yawFromQuaternion(msg->pose.pose.orientation);
+    bool current_point_already_appended = false;
+    // 2026-07-20: 独立保存最近一次判向采样点，不能拿route_.back()判向；route_.back()在回头期间
+    // 会故意保持不动，否则回到旧路后的一大段位移仍会被错误追加为新安全路线。
+    if (!have_last_leader_sample_) {
+      last_leader_sample_ = point;
+      have_last_leader_sample_ = true;
+    } else {
+      const double dx = point.position.x - last_leader_sample_.position.x;
+      const double dy = point.position.y - last_leader_sample_.position.y;
+      const double horizontal_step = std::hypot(dx, dy);
+      if (horizontal_step < path_sample_spacing_) return;
+      last_leader_sample_ = point;
+
+      // 2026-07-21: 首段尚无轨迹切线时先接受；之后以局部路线切线判断继续前进或真实倒退。
+      double route_direction_x = 0.0;
+      double route_direction_y = 0.0;
+      const bool have_route_direction =
+          getRouteForwardDirection(&route_direction_x, &route_direction_y);
+      const double forward_projection =
+          have_route_direction ? route_direction_x * dx + route_direction_y * dy
+                               : horizontal_step;
+      const double projection_ratio = forward_projection / std::max(1e-6, horizontal_step);
+      if (projection_ratio < forward_projection_ratio_) {
+        // 2026-07-21: 不能立即丢弃负投影点。U形通道转弯开始时相对旧切线必然短暂为负，
+        // 先保存实飞折线；只有它始终贴着旧路线才是回头，离开旧路线后则确认成新的安全分支。
+        turn_candidate_length_ += horizontal_step;
+        turn_candidate_route_.push_back(point);
+        const double distance_to_old_route = distanceToAcceptedRoute(point.position);
+        const bool confirms_new_turn_branch =
+            turn_candidate_length_ >= turn_branch_confirm_distance_ &&
+            distance_to_old_route > route_revisit_radius_;
+        if (confirms_new_turn_branch) {
+          for (RoutePoint& candidate : turn_candidate_route_) {
+            if (appendAcceptedRoutePoint(&candidate)) point.progress = candidate.progress;
+          }
+          current_point_already_appended = true;
+          turn_candidate_route_.clear();
+          turn_candidate_length_ = 0.0;
+          consecutive_backward_distance_ = 0.0;
+          relay_route_paused_ = false;
+          ROS_ERROR("[safe_follower] ACCEPT curved/new route branch after %.2fm clearance from "
+                    "old route; relay recording resumed without publishing a straight shortcut.",
+                    distance_to_old_route);
+        } else {
+          // 2026-07-21: 与局部路线切线明确反向的采样不累计progress；持续倒退达到阈值后
+          // 才清除pending并锁住路线，正常转弯的横向分量不会抹掉已形成的候选接力点。
+          if (forward_projection < 0.0)
+            consecutive_backward_distance_ += horizontal_step;
+          else
+            consecutive_backward_distance_ = 0.0;
+          if (consecutive_backward_distance_ >= backtrack_pause_distance_) {
+            relay_route_paused_ = true;
+            pending_relay_valid_ = false;
+          }
+          ROS_WARN_THROTTLE(
+              1.0,
+              "[safe_follower] IGNORE route-reverse leader motion step=%.2fm projection=%.2f "
+              "backward_sum=%.2fm paused=%d; no relay progress.",
+              horizontal_step, projection_ratio, consecutive_backward_distance_,
+              static_cast<int>(relay_route_paused_));
+          return;
+        }
+      }
+      if (!current_point_already_appended) {
+        consecutive_backward_distance_ = 0.0;
+        // 2026-07-21: 负投影后重新回到旧端点属于短暂抖动，缓存不能在之后误接成一段回头路线。
+        turn_candidate_route_.clear();
+        turn_candidate_length_ = 0.0;
+      }
+
+      if (relay_route_paused_ && !current_point_already_appended) {
+        // 2026-07-20: 只比较水平距离，避免高度跟踪误差导致前机已经回到旧路线端点却无法解锁。
+        const double distance_to_route_end =
+            route_.empty() ? 0.0
+                           : std::hypot(point.position.x - route_.back().position.x,
+                                        point.position.y - route_.back().position.y);
+        if (!route_.empty() && distance_to_route_end > route_resume_radius_) {
+          pending_relay_valid_ = false;
+          ROS_WARN_THROTTLE(
+              1.0,
+              "[safe_follower] IGNORE leader backtrack/rejoin distance_to_route_end=%.2fm; "
+              "wait return to previous forward endpoint.",
+              distance_to_route_end);
+          return;
+        }
+        // 2026-07-20: 只有回到最后一个已认可的前进端点附近且再次机头向前，才恢复路线累计。
+        relay_route_paused_ = false;
+        ROS_WARN("[safe_follower] leader returned to forward route endpoint; relay recording resumed.");
+      }
+
+      bool revisits_old_route = false;
+      if (!route_.empty() && !current_point_already_appended) {
+        const double newest_progress = route_.back().progress;
+        for (const RoutePoint& old_point : route_) {
+          if (newest_progress - old_point.progress < route_revisit_progress_gap_) continue;
+          if (std::hypot(point.position.x - old_point.position.x,
+                         point.position.y - old_point.position.y) <= route_revisit_radius_) {
+            revisits_old_route = true;
+            break;
+          }
+        }
+      }
+      if (revisits_old_route) {
+        // 2026-07-20: 即使机头已经转过来“正着飞”，只要正在重走历史路线仍属于回头路；
+        // 暂停接力记录，避免后机再次执行前机走过的旧分支。
+        relay_route_paused_ = true;
+        pending_relay_valid_ = false;
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "[safe_follower] IGNORE revisited leader route near old path; no relay waypoint released.");
+        return;
+      }
+    }
+    if (!current_point_already_appended && !appendAcceptedRoutePoint(&point)) return;
+    publishRoute(msg->header.stamp);
+
+    if (!have_confirmed_door_ || terminal_mode_active_) return;
+    const double inside_progress =
+        std::cos(confirmed_door_.yaw) * (point.position.x - confirmed_door_.position.x) +
+        std::sin(confirmed_door_.yaw) * (point.position.y - confirmed_door_.position.y);
+
+    if (!door_waypoint_released_) {
+      if (inside_progress < door_release_inside_distance_) return;
+      // 2026-07-16: 门不再套用内部点的1m释放条件，前机越过门平面后立即启动后机入场。
+      confirmed_door_.progress = std::max(0.0, point.progress - inside_progress);
+      appendRelayWaypoint(confirmed_door_, "DOOR");
+      door_waypoint_released_ = true;
+      // 2026-07-27: 与“发布入门目标后开始检测”一致；门外预扫描不会写入UAV1背景。
+      setFollowerDetectionEnable(true, "door waypoint released");
+      last_relay_selection_progress_ = confirmed_door_.progress;
+      return;
+    }
+
+    // 2026-07-28: 最终出口门心已排队后不再生成门外内部点；稠密实飞路线仍继续记录供终点接力使用。
+    if (exit_waypoint_released_) return;
+
+    // 2026-07-16: 0或负数表示任务全程滚动发点；正数仅保留为调试时的可选安全上限。
+    if (max_internal_relay_points_ > 0 &&
+        internal_relay_count_ >= max_internal_relay_points_) {
+      return;
+    }
+    if (!pending_relay_valid_ &&
+        point.progress - last_relay_selection_progress_ >= relay_waypoint_spacing_) {
+      // 2026-07-15: 先锁定候选A，但此时不发布；继续观察前机真实走过1m后才确认这段可通行。
+      pending_relay_ = point;
+      pending_relay_valid_ = true;
+      ROS_WARN("[safe_follower] pending internal waypoint at progress %.2fm; wait leader clear %.2fm.",
+               pending_relay_.progress, relay_release_distance_);
+    }
+    if (pending_relay_valid_ &&
+        point.progress - pending_relay_.progress >= relay_release_distance_) {
+      appendRelayWaypoint(pending_relay_, "INTERNAL");
+      last_relay_selection_progress_ = pending_relay_.progress;
+      pending_relay_valid_ = false;
+      ++internal_relay_count_;
+    }
+  }
+
+  void followerOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+    // 2026-07-22: 用实际里程计位移估计到达速度，不能用规划指令速度代替真实制动状态。
+    const ros::Time now = ros::Time::now();
+    if (have_follower_odom_) {
+      const double dt = (now - follower_odom_stamp_).toSec();
+      if (dt > 1e-3 && dt < 0.25) {
+        const double raw_horizontal_speed =
+            std::hypot(msg->pose.pose.position.x - follower_odom_.pose.pose.position.x,
+                       msg->pose.pose.position.y - follower_odom_.pose.pose.position.y) / dt;
+        const double raw_vertical_speed =
+            std::fabs(msg->pose.pose.position.z - follower_odom_.pose.pose.position.z) / dt;
+        // 2026-07-28: 7月27日末次实验在111s后FAST-LIO连续发散到数百米；首次不可能速度即锁存故障并丢弃坏里程计。
+        // 2026-07-28: 接管前允许FAST-LIO完成初始对齐；只有后机控制已交接后才把不可能速度判为飞行故障。
+        if (follower_started_ &&
+            (raw_horizontal_speed > follower_odom_jump_speed_ ||
+             raw_vertical_speed > follower_odom_jump_vertical_speed_)) {
+          if (!follower_odom_fault_latched_) {
+            follower_odom_fault_latched_ = true;
+            std_msgs::Bool hold_msg;
+            hold_msg.data = true;
+            follower_safety_hold_pub_.publish(hold_msg);
+            ROS_ERROR("[safe_follower] ODOM FAULT latched: horizontal=%.2fm/s vertical=%.2fm/s; "
+                      "reject bad FAST-LIO sample and request MAVROS-frame safety hold.",
+                      raw_horizontal_speed, raw_vertical_speed);
+          }
+          return;
+        }
+        const double alpha = 0.35;
+        follower_horizontal_speed_ =
+            alpha * raw_horizontal_speed + (1.0 - alpha) * follower_horizontal_speed_;
+        follower_vertical_speed_ =
+            alpha * raw_vertical_speed + (1.0 - alpha) * follower_vertical_speed_;
+      }
+    }
+    follower_odom_ = *msg;
+    follower_odom_stamp_ = now;
+    have_follower_odom_ = true;
+    if (!follower_started_ && msg->pose.pose.position.z > follower_start_height_) {
+      follower_started_ = true;
+      ROS_WARN("[safe_follower] UAV1 height %.2fm > %.2fm; follower is ready for a real Diff goal.",
+               msg->pose.pose.position.z, follower_start_height_);
+      if (!traj_started_sent_ && !use_diff_planner_) {
+        traj_started_pub_.publish(std_msgs::Empty());
+        traj_started_sent_ = true;
+      }
+    }
+  }
+
+  void cloudCallback(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    follower_cloud_ = msg;
+    cloud_stamp_ = ros::Time::now();
+  }
+
+  // 2026-07-28: traj_server实际输出比一次性的TRAJECTORY_PUBLISHED更能说明当前轨迹是否仍在驱动控制器。
+  void diffCommandCallback(const quadrotor_msgs::PositionCommand::ConstPtr&) {
+    diff_command_stamp_ = ros::Time::now();
+    diff_command_seen_for_goal_ = true;
+  }
+
+  // 2026-07-28: 只保留前机已验证通道路线中心带内的动态框；利用“摆球不碰墙”的赛题先验剔除墙边误框。
+  void dynamicObstacleCallback(
+      const ldot_detector::DynamicObstacleArray::ConstPtr& msg) {
+    dynamic_obstacle_receive_stamp_ = ros::Time::now();
+    ldot_detector::DynamicObstacleArray corridor_obstacles = *msg;
+    corridor_obstacles.obstacles.clear();
+    for (const auto& obstacle : msg->obstacles) {
+      const geometry_msgs::Point obstacle_world = followerToWorld(obstacle.position);
+      const double route_distance = distanceToAcceptedRoute(obstacle_world);
+      if (!route_.empty() && route_distance > dynamic_retention_route_half_width_) {
+        ROS_WARN_THROTTLE(1.0,
+                          "[safe_follower] DROP dynamic id=%u from retention: "
+                          "route_distance=%.2fm > %.2fm corridor band.",
+                          obstacle.id, route_distance, dynamic_retention_route_half_width_);
+        continue;
+      }
+      corridor_obstacles.obstacles.push_back(obstacle);
+    }
+    // 2026-07-28: 合格非空帧刷新缓存；摆球端点和短时遮挡期间沿用上一帧，但只保留有限时长。
+    if (!corridor_obstacles.obstacles.empty()) {
+      retained_dynamic_obstacles_ = corridor_obstacles;
+      retained_dynamic_obstacle_stamp_ = dynamic_obstacle_receive_stamp_;
+    }
+  }
+
+  // 2026-07-28: Diff无轨迹等待不能只发零速度；通过控制器安全话题锁存MAVROS本地位置，直到新轨迹真正发布。
+  void setDiffWaitPositionHold(bool active, const std::string& reason) {
+    if (diff_wait_hold_active_ == active) return;
+    diff_wait_hold_active_ = active;
+    if (!active && diff_dynamic_hold_active_) return;
+    std_msgs::Bool hold_msg;
+    hold_msg.data = active;
+    follower_safety_hold_pub_.publish(hold_msg);
+    ROS_ERROR("[safe_follower] UAV1 Diff wait-position HOLD %s reason=%s.",
+              active ? "ACTIVE" : "RELEASED", reason.c_str());
+  }
+
+  void leaderTaskStatusCallback(const std_msgs::String::ConstPtr& msg) {
+    // task_status首字段为阶段名。前机真正越过出口后停止0.5m动态跟距，恢复离散任务点/终点执行。
+    leader_outside_exit_ = msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
+                           msg->data.find("APPROACH_LANDING") == 0 ||
+                           msg->data.find("LANDING") == 0;
+    // 2026-07-28: 前机越过出口确认距离后才像入口清空0.70m一样放行后机，避免两机挤在门框。
+    if (leader_outside_exit_)
+      tryReleaseFinalExitWaypoint("leader task stage is outside final exit");
+  }
+
+  void diffStatusCallback(const std_msgs::String::ConstPtr& msg) {
+    // 2026-07-28: 任何状态都表示Diff已响应当前目标，不再按1Hz盲目覆盖飞行中的轨迹。
+    diff_plan_response_received_ = true;
+    std::istringstream stream(msg->data);
+    std::string status;
+    stream >> status;
+    // 2026-07-28: 连续规划失败或目标越界时请求短子目标；成功记住Diff修正后的落点。
+    if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
+      // 2026-07-28: 原轨迹规划失败后立刻丢弃残余速度并锁点，恢复子目标被接受前不允许漂移。
+      setDiffWaitPositionHold(true, status);
+      ++diff_planning_failure_events_;
+      diff_recovery_requested_ = true;
+      diff_goal_published_ = false;
+      diff_accepted_goal_valid_ = false;
+      ROS_ERROR_THROTTLE(0.5,
+                         "[safe_follower] UAV1 Diff status=%s; request verified-route subgoal.",
+                         status.c_str());
+    } else if (status == "TRAJECTORY_PUBLISHED") {
+      // 2026-07-28: 只有Diff确认新轨迹已发布才解除等待锁点，避免“先解锁、后规划”空窗。
+      setDiffWaitPositionHold(false, "new Diff trajectory published");
+      diff_planning_failure_events_ = 0;
+      geometry_msgs::Point accepted;
+      if (stream >> accepted.x >> accepted.y >> accepted.z) {
+        diff_accepted_goal_local_ = accepted;
+        diff_accepted_goal_valid_ = true;
+        ROS_WARN("[safe_follower] UAV1 Diff trajectory accepted actual_goal=(%.2f,%.2f,%.2f).",
+                 accepted.x, accepted.y, accepted.z);
+      }
+    }
+  }
+
+  bool getLaggedTarget(RoutePoint* target, std::size_t* route_index = nullptr) const {
+    if (route_.size() < 2 || route_length_ < release_path_length_) return false;
+    double remaining = follow_distance_;
+    for (std::size_t i = route_.size() - 1; i > 0; --i) {
+      const RoutePoint& newer = route_[i];
+      const RoutePoint& older = route_[i - 1];
+      const double segment = distance3d(newer.position, older.position);
+      if (segment >= remaining && segment > 1e-6) {
+        const double ratio_from_newer = remaining / segment;
+        target->position = interpolate(newer.position, older.position, ratio_from_newer);
+        target->yaw = std::atan2(newer.position.y - older.position.y,
+                                 newer.position.x - older.position.x);
+        target->progress = newer.progress +
+                           ratio_from_newer * (older.progress - newer.progress);
+        if (route_index) *route_index = i;
+        return true;
+      }
+      remaining -= segment;
+    }
+    *target = route_.front();
+    if (route_index) *route_index = 0;
+    return true;
+  }
+
+  double nearestRouteProgress(const geometry_msgs::Point& position) const {
+    double progress = 0.0;
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const RoutePoint& point : route_) {
+      const double distance = std::hypot(position.x - point.position.x,
+                                         position.y - point.position.y);
+      if (distance < nearest) {
+        nearest = distance;
+        progress = point.progress;
+      }
+    }
+    return progress;
+  }
+
+  bool getRouteTrackingTarget(const geometry_msgs::Point& follower_world,
+                              const RoutePoint& lagged_target, std::size_t lagged_index,
+                              RoutePoint* target) {
+    if (route_.empty()) return false;
+    lagged_index = std::min(lagged_index, route_.size() - 1);
+    follower_route_index_ = std::min(follower_route_index_, lagged_index);
+
+    // 2026-07-15: 只在尚未超过滞后终点的历史段内找最近点，并保持索引单调前进，
+    // 防止U形通道两段空间相近时跳到错误分支或重新走旧路。
+    std::size_t nearest_index = follower_route_index_;
+    double nearest_distance = std::numeric_limits<double>::infinity();
+    for (std::size_t i = follower_route_index_; i <= lagged_index; ++i) {
+      const double distance = std::hypot(route_[i].position.x - follower_world.x,
+                                         route_[i].position.y - follower_world.y);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        nearest_index = i;
+      }
+    }
+    follower_route_index_ = nearest_index;
+
+    double remaining = std::max(0.08, route_tracking_lookahead_);
+    geometry_msgs::Point cursor = follower_world;
+    for (std::size_t i = nearest_index; i < lagged_index; ++i) {
+      const geometry_msgs::Point& waypoint = route_[i].position;
+      const double segment = distance3d(cursor, waypoint);
+      if (segment >= remaining && segment > 1e-6) {
+        target->position = interpolate(cursor, waypoint, remaining / segment);
+        target->yaw = route_[i].yaw;
+        return true;
+      }
+      remaining -= segment;
+      cursor = waypoint;
+    }
+
+    const double final_segment = distance3d(cursor, lagged_target.position);
+    if (final_segment > remaining && final_segment > 1e-6) {
+      target->position = interpolate(cursor, lagged_target.position, remaining / final_segment);
+      target->yaw = lagged_target.yaw;
+    } else {
+      *target = lagged_target;
+    }
+    return true;
+  }
+
+  bool getRelayRouteTarget(const geometry_msgs::Point& follower_world,
+                           const RoutePoint& relay_target, RoutePoint* target) {
+    if (route_.empty()) return false;
+
+    // 2026-07-16: 接力点之间必须沿前机已经实飞的稠密折线前进。对外任务点可持续滚动增加，
+    // 内部控制仍不允许把相邻任务点直接连线，否则U形/直角通道会从墙体中间切过去。
+    std::size_t route_end_index = 0;
+    std::size_t route_start_index = 0;
+    const double segment_start_progress =
+        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].progress : 0.0;
+    for (std::size_t i = 0; i < route_.size(); ++i) {
+      if (route_[i].progress + path_sample_spacing_ < segment_start_progress) {
+        route_start_index = i;
+      }
+      if (route_[i].progress > relay_target.progress + path_sample_spacing_) break;
+      route_end_index = i;
+    }
+    // 2026-07-16: 每段只允许在“上一个接力点到当前接力点”的实飞轨迹中找最近点，
+    // 防止找门阶段的旧轨迹与通道空间接近时跳回旧分支。
+    follower_route_index_ = std::max(follower_route_index_, route_start_index);
+    return getRouteTrackingTarget(follower_world, relay_target, route_end_index, target);
+  }
+
+  geometry_msgs::Point limitTargetStep(const geometry_msgs::Point& current,
+                                        const geometry_msgs::Point& target) const {
+    const double distance = distance3d(current, target);
+    if (distance <= max_target_step_ || distance < 1e-6) return target;
+    return interpolate(current, target, max_target_step_ / distance);
+  }
+
+  bool getSeparationRecoveryTarget(const geometry_msgs::Point& leader_world,
+                                   const geometry_msgs::Point& follower_world,
+                                   RoutePoint* target) const {
+    const double current_separation =
+        std::hypot(leader_world.x - follower_world.x, leader_world.y - follower_world.y);
+    double best_score = -std::numeric_limits<double>::infinity();
+    bool found = false;
+
+    // 2026-07-14: 优先退到前机已经飞过的邻近历史点；这比直接沿几何反方向横穿窄道更安全。
+    for (const RoutePoint& candidate : route_) {
+      const double move = std::hypot(candidate.position.x - follower_world.x,
+                                     candidate.position.y - follower_world.y);
+      const double candidate_separation =
+          std::hypot(candidate.position.x - leader_world.x,
+                     candidate.position.y - leader_world.y);
+      if (move < 0.06 || move > emergency_retreat_step_ + 1e-3 ||
+          candidate_separation < current_separation + 0.10)
+        continue;
+      const double score = candidate_separation - 0.30 * move;
+      if (score > best_score) {
+        *target = candidate;
+        target->position.z = follower_world.z;
+        best_score = score;
+        found = true;
+      }
+    }
+    if (found) return true;
+
+    // 2026-07-14: 历史轨迹没有近邻退让点时只生成一个短的远离前机目标，后续仍需通过后机点云走廊检查。
+    if (current_separation < 1e-3) return false;
+    target->position = follower_world;
+    target->position.x += emergency_retreat_step_ *
+                          (follower_world.x - leader_world.x) / current_separation;
+    target->position.y += emergency_retreat_step_ *
+                          (follower_world.y - leader_world.y) / current_separation;
+    target->yaw = yawFromQuaternion(follower_odom_.pose.pose.orientation);
+    return true;
+  }
+
+  bool segmentBlocked(const geometry_msgs::Point& current_local,
+                      const geometry_msgs::Point& target_local, int* hit_count) const {
+    *hit_count = 0;
+    if (!obstacle_check_enabled_ || !follower_cloud_) return false;
+    const double dx = target_local.x - current_local.x;
+    const double dy = target_local.y - current_local.y;
+    const double length_sq = dx * dx + dy * dy;
+    if (length_sq < 1e-6) return false;
+
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*follower_cloud_, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_y(*follower_cloud_, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_z(*follower_cloud_, "z");
+      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) continue;
+        const double from_current = std::hypot(*iter_x - current_local.x, *iter_y - current_local.y);
+        if (from_current < obstacle_ignore_near_) continue;
+        double projection = ((*iter_x - current_local.x) * dx +
+                             (*iter_y - current_local.y) * dy) / length_sq;
+        if (projection < 0.0 || projection > 1.0) continue;
+        const double closest_x = current_local.x + projection * dx;
+        const double closest_y = current_local.y + projection * dy;
+        if (std::hypot(*iter_x - closest_x, *iter_y - closest_y) > obstacle_radius_) continue;
+        const double path_z = current_local.z + projection * (target_local.z - current_local.z);
+        if (std::fabs(*iter_z - path_z) > obstacle_z_margin_) continue;
+        if (++(*hit_count) >= obstacle_min_points_) return true;
+      }
+    } catch (const std::runtime_error& error) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] invalid PointCloud2 fields: %s", error.what());
+      return true;
+    }
+    return false;
+  }
+
+  // 2026-07-28: 检查后机短目标线段与LDOT当前/预测位置的扫掠冲突；窄通道内优先等待摆球让开，不盲目横移脱困。
+  bool dynamicSegmentBlocked(const geometry_msgs::Point& current_local,
+                             const geometry_msgs::Point& target_local,
+                             uint32_t* obstacle_id) const {
+    if (retained_dynamic_obstacles_.obstacles.empty() ||
+        retained_dynamic_obstacle_stamp_.isZero() ||
+        (ros::Time::now() - retained_dynamic_obstacle_stamp_).toSec() >
+            dynamic_obstacle_retention_) {
+      return false;
+    }
+    const double dx = target_local.x - current_local.x;
+    const double dy = target_local.y - current_local.y;
+    const double length_sq = dx * dx + dy * dy;
+    if (length_sq < 1e-6) return false;
+
+    for (const auto& obstacle : retained_dynamic_obstacles_.obstacles) {
+      const double object_radius =
+          0.5 * std::max(obstacle.size.x, obstacle.size.y) +
+          dynamic_obstacle_safety_radius_;
+      const double object_z_half =
+          0.5 * obstacle.size.z + dynamic_obstacle_z_margin_;
+      const auto conflicts = [&](const geometry_msgs::Point& point) {
+        const double projection = std::max(
+            0.0, std::min(1.0, ((point.x - current_local.x) * dx +
+                                (point.y - current_local.y) * dy) / length_sq));
+        const double closest_x = current_local.x + projection * dx;
+        const double closest_y = current_local.y + projection * dy;
+        const double path_z = current_local.z +
+                              projection * (target_local.z - current_local.z);
+        return std::hypot(point.x - closest_x, point.y - closest_y) <= object_radius &&
+               std::fabs(point.z - path_z) <= object_z_half;
+      };
+      if (conflicts(obstacle.position)) {
+        if (obstacle_id) *obstacle_id = obstacle.id;
+        return true;
+      }
+      for (const geometry_msgs::Point& predicted : obstacle.predicted_positions) {
+        // 2026-07-28: 摆球预测只能在通道内部有效；匀速/加速度外推越出中心带时截断，不让虚假穿墙预测长期停车。
+        if (!route_.empty() &&
+            distanceToAcceptedRoute(followerToWorld(predicted)) >
+                dynamic_retention_route_half_width_)
+          continue;
+        if (conflicts(predicted)) {
+          if (obstacle_id) *obstacle_id = obstacle.id;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // 2026-07-27: 脱困选向不能沿用“命中3点立即返回”，需要统计各候选短段的完整障碍点数进行比较。
+  int countSegmentHits(const geometry_msgs::Point& current_local,
+                       const geometry_msgs::Point& target_local,
+                       double near_ignore) const {
+    if (!follower_cloud_) return std::numeric_limits<int>::max() / 4;
+    const double dx = target_local.x - current_local.x;
+    const double dy = target_local.y - current_local.y;
+    const double length_sq = dx * dx + dy * dy;
+    if (length_sq < 1e-6) return std::numeric_limits<int>::max() / 4;
+    int hits = 0;
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*follower_cloud_, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_y(*follower_cloud_, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_z(*follower_cloud_, "z");
+      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) continue;
+        if (std::hypot(*iter_x - current_local.x, *iter_y - current_local.y) < near_ignore) continue;
+        const double projection = ((*iter_x - current_local.x) * dx +
+                                   (*iter_y - current_local.y) * dy) / length_sq;
+        if (projection < 0.0 || projection > 1.0) continue;
+        const double closest_x = current_local.x + projection * dx;
+        const double closest_y = current_local.y + projection * dy;
+        if (std::hypot(*iter_x - closest_x, *iter_y - closest_y) > obstacle_radius_) continue;
+        const double path_z = current_local.z + projection * (target_local.z - current_local.z);
+        if (std::fabs(*iter_z - path_z) <= obstacle_z_margin_) ++hits;
+      }
+    } catch (const std::runtime_error& error) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] recovery cloud fields invalid: %s", error.what());
+      return std::numeric_limits<int>::max() / 4;
+    }
+    return hits;
+  }
+
+  // 2026-07-27: 从原指令左右、前后及斜向八个短目标中选点云命中最少者；每次失败旋转优先级避免重复顶墙。
+  void selectRecoveryTarget(const ros::Time& now) {
+    const geometry_msgs::Point current = follower_odom_.pose.pose.position;
+    double base_angle = std::atan2(last_command_dy_, last_command_dx_);
+    if (std::hypot(last_command_dx_, last_command_dy_) < 1e-3)
+      base_angle = yawFromQuaternion(follower_odom_.pose.pose.orientation);
+    const double offsets[] = {M_PI_2, -M_PI_2, 0.0, M_PI, 3.0 * M_PI_4,
+                              -3.0 * M_PI_4, M_PI_4, -M_PI_4};
+    int best_hits = std::numeric_limits<int>::max();
+    geometry_msgs::Point best = current;
+    const double retry_rotation = recovery_attempt_count_ * M_PI_4;
+    for (double offset : offsets) {
+      const double angle = base_angle + offset + retry_rotation;
+      geometry_msgs::Point candidate = current;
+      candidate.x += recovery_step_ * std::cos(angle);
+      candidate.y += recovery_step_ * std::sin(angle);
+      candidate.z = std::max(follow_height_min_, std::min(follow_height_max_, current.z));
+      const int hits = countSegmentHits(current, candidate, recovery_near_ignore_);
+      if (hits < best_hits) {
+        best_hits = hits;
+        best = candidate;
+      }
+    }
+    recovery_target_local_ = best;
+    recovery_attempt_start_ = now;
+    ++recovery_attempt_count_;
+    ROS_ERROR("[safe_follower] STUCK recovery attempt=%d target=(%.2f,%.2f,%.2f) cloud_hits=%d.",
+              recovery_attempt_count_, best.x, best.y, best.z, best_hits);
+  }
+
+  // 2026-07-27: 运动卡死和点云阻挡共用同一恢复入口，避免HOLD状态因没有速度指令永远进不了脱困。
+  void startRecovery(const ros::Time& now, const char* reason) {
+    if (recovery_active_) return;
+    recovery_active_ = true;
+    recovery_origin_local_ = follower_odom_.pose.pose.position;
+    recovery_yaw_ = yawFromQuaternion(follower_odom_.pose.pose.orientation);
+    recovery_attempt_count_ = 0;
+    selectRecoveryTarget(now);
+    ROS_ERROR("[safe_follower] STUCK recovery entered reason=%s.", reason);
+  }
+
+  // 2026-07-27: 用“有运动指令但实际无位移”识别物理卡死；恢复期间独占控制，移动成功后重新接入前机路线。
+  bool handleStuckRecovery(const ros::Time& now) {
+    const geometry_msgs::Point current = follower_odom_.pose.pose.position;
+    if (recovery_active_) {
+      if (std::hypot(current.x - recovery_origin_local_.x,
+                     current.y - recovery_origin_local_.y) >= recovery_success_distance_) {
+        ROS_WARN("[safe_follower] STUCK recovery succeeded after %d attempt(s).",
+                 recovery_attempt_count_);
+        recovery_active_ = false;
+        motion_monitor_active_ = false;
+        last_command_moving_ = false;
+        return false;
+      }
+      if ((now - recovery_attempt_start_).toSec() >= recovery_attempt_timeout_)
+        selectRecoveryTarget(now);
+      publishCommand(recovery_target_local_, recovery_yaw_, true, recovery_speed_);
+      publishState("STUCK_RECOVERY", 1.0, 0.2, 0.0);
+      return true;
+    }
+
+    if (!last_command_moving_) {
+      motion_monitor_active_ = false;
+      return false;
+    }
+    if (!motion_monitor_active_) {
+      motion_monitor_origin_local_ = current;
+      motion_monitor_start_ = now;
+      motion_monitor_active_ = true;
+      return false;
+    }
+    const double progress = std::hypot(current.x - motion_monitor_origin_local_.x,
+                                       current.y - motion_monitor_origin_local_.y);
+    if (progress >= stuck_min_progress_) {
+      motion_monitor_origin_local_ = current;
+      motion_monitor_start_ = now;
+      return false;
+    }
+    if ((now - motion_monitor_start_).toSec() < stuck_detection_timeout_) return false;
+
+    startRecovery(now, "commanded motion without odometry progress");
+    publishCommand(recovery_target_local_, recovery_yaw_, true, recovery_speed_);
+    publishState("STUCK_DETECTED", 1.0, 0.0, 0.0);
+    ROS_ERROR("[safe_follower] STUCK detected: command active for %.2fs but progress=%.3fm.",
+              stuck_detection_timeout_, progress);
+    return true;
+  }
+
+  // 2026-07-24: 后机收到的普通路线只有XY语义。默认在0.65m飞；若该高度的短线段
+  // 被自身点云占据，才在允许的0.60--0.70m范围内试探上下层，避免照搬前机退化z。
+  bool chooseClearFollowerHeight(const geometry_msgs::Point& current_local,
+                                 geometry_msgs::Point* target_local,
+                                 int* hit_count) const {
+    if (!segmentBlocked(current_local, *target_local, hit_count)) return true;
+
+    const double candidates[] = {follow_height_max_, follow_height_min_};
+    for (const double candidate_height : candidates) {
+      if (std::fabs(candidate_height - target_local->z) < 1e-3) continue;
+      geometry_msgs::Point adjusted = *target_local;
+      adjusted.z = candidate_height;
+      int candidate_hits = 0;
+      if (!segmentBlocked(current_local, adjusted, &candidate_hits)) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "[safe_follower] XY route default z=%.2f blocked hits=%d; use local avoid z=%.2f.",
+            fixed_follow_height_, *hit_count, candidate_height);
+        *target_local = adjusted;
+        *hit_count = 0;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 2026-07-22: 线段可通行不代表末端可安全悬停；单独检查接力点周围圆柱净空，动态障碍离开后可自动恢复。
+  bool endpointOccupied(const geometry_msgs::Point& target_local, int* hit_count) const {
+    *hit_count = 0;
+    if (!obstacle_check_enabled_ || !follower_cloud_) return false;
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*follower_cloud_, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_y(*follower_cloud_, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_z(*follower_cloud_, "z");
+      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) continue;
+        if (std::hypot(*iter_x - target_local.x, *iter_y - target_local.y) >
+            relay_endpoint_clearance_radius_)
+          continue;
+        if (std::fabs(*iter_z - target_local.z) > relay_endpoint_z_margin_) continue;
+        if (++(*hit_count) >= relay_endpoint_min_points_) return true;
+      }
+    } catch (const std::runtime_error& error) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] invalid endpoint PointCloud2 fields: %s",
+                         error.what());
+      return true;
+    }
+    return false;
+  }
+
+  // 普通接力点不是悬停/降落平台。这里只回答“点本身是否落入点云占据体素”，
+  // 不要求狭窄通道在目标周围提供一整圈净空。真正运动安全仍由 segmentBlocked() 保证。
+  bool relayPointOccupied(const geometry_msgs::Point& target_local, int* hit_count) const {
+    *hit_count = 0;
+    if (!obstacle_check_enabled_ || !follower_cloud_) return false;
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*follower_cloud_, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_y(*follower_cloud_, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_z(*follower_cloud_, "z");
+      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) continue;
+        if (std::hypot(*iter_x - target_local.x, *iter_y - target_local.y) >
+            relay_point_occupied_radius_)
+          continue;
+        if (std::fabs(*iter_z - target_local.z) > relay_point_occupied_z_margin_) continue;
+        if (++(*hit_count) >= relay_point_occupied_min_points_) return true;
+      }
+    } catch (const std::runtime_error& error) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] invalid relay-point cloud fields: %s",
+                         error.what());
+      return true;
+    }
+    return false;
+  }
+
+  void publishCommand(const geometry_msgs::Point& target_local, double target_yaw,
+                      bool moving, double speed_limit = -1.0) {
+    // 2026-07-28: Diff模式的唯一控制指令发布者必须是UAV1 traj_server；防止遗留分支意外形成双发布者。
+    if (use_diff_planner_) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] blocked legacy PositionCommand publish in Diff mode.");
+      return;
+    }
+    // 2026-07-22: 一旦重新进入安全运动状态，允许下一次异常重新锁存新的最后安全悬停点。
+    if (moving) hold_target_latched_ = false;
+    quadrotor_msgs::PositionCommand cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.header.frame_id = follower_odom_.header.frame_id;
+    cmd.position = target_local;
+    if (moving) {
+      const geometry_msgs::Point& current = follower_odom_.pose.pose.position;
+      const double dx = target_local.x - current.x;
+      const double dy = target_local.y - current.y;
+      const double dz = target_local.z - current.z;
+      // 2026-07-14: 速度仅指向本周期限幅后的短目标，避免远端历史点造成速度突跳。
+      const double horizontal = std::hypot(dx, dy);
+      if (horizontal > 1e-4) {
+        // 2026-07-14: 接近滞后点时按误差降速，不能以固定巡航速度穿过目标造成窄道过冲。
+        const double configured_speed = speed_limit > 0.0 ? speed_limit : cruise_speed_;
+        const double desired_speed = std::min(configured_speed, 0.8 * horizontal);
+        cmd.velocity.x = desired_speed * dx / horizontal;
+        cmd.velocity.y = desired_speed * dy / horizontal;
+      }
+      cmd.velocity.z = std::max(-max_vertical_speed_,
+                                std::min(max_vertical_speed_, 0.8 * dz));
+    }
+    // 2026-07-27: 保存真实下发的水平运动方向和状态，供下一控制周期进行卡死判定与脱困选向。
+    last_command_moving_ = moving && std::hypot(cmd.velocity.x, cmd.velocity.y) > 0.05;
+    last_command_dx_ = cmd.velocity.x;
+    last_command_dy_ = cmd.velocity.y;
+    cmd.yaw = target_yaw;
+    cmd.trajectory_id = ++trajectory_id_;
+    cmd.trajectory_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
+    command_pub_.publish(cmd);
+  }
+
+  void hold(const std::string& reason) {
+    if (!have_follower_odom_) return;
+    // 2026-07-28: Diff模式等待目标时请求控制器锁存MAVROS本地位置；零速度心跳不足以抵抗惯性与估计偏移。
+    if (use_diff_planner_) {
+      setDiffWaitPositionHold(true, reason);
+      publishState(reason, 1.0, 0.65, 0.0);
+      ROS_WARN_THROTTLE(1.0, "[safe_follower] DIFF WAIT: %s", reason.c_str());
+      return;
+    }
+    // 2026-07-22: HOLD首次触发时锁住最后安全位置，后续里程计漂移或碰撞掉高不能拖着悬停目标一起跑。
+    if (!hold_target_latched_) {
+      hold_target_local_ = follower_odom_.pose.pose.position;
+      hold_target_yaw_ = yawFromQuaternion(follower_odom_.pose.pose.orientation);
+      hold_target_latched_ = true;
+      ROS_ERROR("[safe_follower] latched safe HOLD target=(%.2f, %.2f, %.2f).",
+                hold_target_local_.x, hold_target_local_.y, hold_target_local_.z);
+    }
+    publishCommand(hold_target_local_, hold_target_yaw_, false);
+    publishState(reason, 1.0, 0.65, 0.0);
+    ROS_WARN_THROTTLE(1.0, "[safe_follower] HOLD: %s", reason.c_str());
+  }
+
+  void handleTerminalApproach(const ros::Time& now) {
+    geometry_msgs::Point target_local = worldToFollower(terminal_target_world_.position);
+    const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+    const double horizontal_error =
+        std::hypot(target_local.x - current_local.x, target_local.y - current_local.y);
+    const double vertical_error = std::fabs(target_local.z - current_local.z);
+
+    // 2026-07-22: 终点同样先检查停驻区域；二维码/动态障碍占据落点时原位等待而不是继续下发目标。
+    if (obstacle_check_enabled_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        terminal_arrival_stamp_ = ros::Time(0);
+        hold("terminal endpoint cloud stale");
+        return;
+      }
+      int endpoint_hits = 0;
+      if (endpointOccupied(target_local, &endpoint_hits)) {
+        terminal_arrival_stamp_ = ros::Time(0);
+        hold("terminal endpoint occupied by follower cloud");
+        ROS_ERROR_THROTTLE(1.0,
+                           "[safe_follower] terminal endpoint occupied hits=%d; wait until clear.",
+                           endpoint_hits);
+        return;
+      }
+    }
+
+    if (horizontal_error <= terminal_arrive_radius_ &&
+        vertical_error <= terminal_arrive_z_tolerance_ &&
+        follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
+        follower_vertical_speed_ <= relay_arrive_max_vertical_speed_) {
+      if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
+      publishCommand(target_local, terminal_target_world_.yaw, false);
+      publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
+      if (!follower_landing_requested_ &&
+          (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
+        // 2026-07-14: 后机只在独立落点稳定到达后请求自身控制器切换 AUTO.LAND。
+        std_msgs::Bool request;
+        request.data = true;
+        follower_landing_request_pub_.publish(request);
+        follower_landing_requested_ = true;
+        ROS_ERROR("[safe_follower] follower terminal target reached; published AUTO.LAND request.");
+      }
+      return;
+    }
+    terminal_arrival_stamp_ = ros::Time(0);
+
+    geometry_msgs::Point short_target = limitTargetStep(current_local, target_local);
+    if (obstacle_check_enabled_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        hold("terminal approach cloud stale");
+        return;
+      }
+      int obstacle_hits = 0;
+      if (segmentBlocked(current_local, short_target, &obstacle_hits)) {
+        hold("terminal approach blocked by follower cloud");
+        return;
+      }
+    }
+    publishCommand(short_target, terminal_target_world_.yaw, true, terminal_approach_speed_);
+    publishTarget(terminal_target_world_.position);
+    publishState("TERMINAL_APPROACH_NO_SEPARATION", 0.2, 1.0, 0.2);
+    ROS_WARN_THROTTLE(1.0,
+                      "[safe_follower] TERMINAL approach error_xy=%.2fm error_z=%.2fm; "
+                      "leader spacing check disabled.",
+                      horizontal_error, vertical_error);
+  }
+
+  bool handleContinuousFollowBeforeExit(const ros::Time& now) {
+    if (!continuous_follow_before_exit_ || leader_outside_exit_ || terminal_mode_active_ ||
+        !door_waypoint_released_)
+      return false;
+
+    RoutePoint lagged_world;
+    std::size_t lagged_index = 0;
+    if (!getLaggedTarget(&lagged_world, &lagged_index)) return false;
+
+    const geometry_msgs::Point follower_world =
+        followerToWorld(follower_odom_.pose.pose.position);
+    // 连续跟踪已经实际经过的离散点只做通信/进度确认，不能在出口前重新逐点停车。
+    const double follower_progress = nearestRouteProgress(follower_world);
+    while (active_relay_index_ < relay_waypoints_.size() &&
+           active_relay_index_ != terminal_waypoint_index_ &&
+           relay_waypoints_[active_relay_index_].progress <=
+               follower_progress + relay_arrive_radius_) {
+      ROS_INFO("[safe_follower] CONTINUOUS passed relay waypoint %zu/%zu at route progress %.2fm.",
+               active_relay_index_ + 1, relay_waypoints_.size(), follower_progress);
+      ++active_relay_index_;
+    }
+
+    const geometry_msgs::Point leader_world =
+        leaderToWorld(leader_odom_.pose.pose.position);
+    const double separation = std::hypot(leader_world.x - follower_world.x,
+                                         leader_world.y - follower_world.y);
+    if (separation <= min_separation_) {
+      hold("continuous follow minimum separation");
+      return true;
+    }
+
+    RoutePoint tracking_world;
+    if (!getRouteTrackingTarget(follower_world, lagged_world, lagged_index,
+                                &tracking_world)) {
+      hold("continuous leader route unavailable");
+      return true;
+    }
+    geometry_msgs::Point target_local =
+        useFollowerCruiseHeight(worldToFollower(tracking_world.position));
+    target_local = limitTargetStep(follower_odom_.pose.pose.position, target_local);
+    if (obstacle_check_enabled_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        hold("continuous follow cloud stale");
+        return true;
+      }
+      // 2026-07-28: 动态摆球采用当前框+1秒预测让行，不能等稀疏注册点云恰好命中3点后才刹车。
+      uint32_t dynamic_id = 0;
+      if (dynamicSegmentBlocked(follower_odom_.pose.pose.position, target_local,
+                                &dynamic_id)) {
+        continuous_blocked_since_ = ros::Time(0);
+        hold("predicted dynamic obstacle crossing continuous path");
+        ROS_WARN_THROTTLE(0.5,
+                          "[safe_follower] DYNAMIC HOLD id=%u intersects current/predicted segment.",
+                          dynamic_id);
+        return true;
+      }
+      int obstacle_hits = 0;
+      if (!chooseClearFollowerHeight(follower_odom_.pose.pose.position, &target_local,
+                                     &obstacle_hits)) {
+        // 2026-07-27: 连续跟随没有可跳过的固定检查点；局部段持续阻挡后直接进入点云选向恢复，
+        // 恢复成功后下一周期会从前机稠密路线重新计算新的滚动目标。
+        if (continuous_blocked_since_.isZero()) continuous_blocked_since_ = now;
+        if ((now - continuous_blocked_since_).toSec() >= blocked_recovery_timeout_ &&
+            !recovery_active_)
+          startRecovery(now, "continuous follow path blocked while holding");
+        hold("continuous follow local path blocked");
+        return true;
+      }
+    }
+    continuous_blocked_since_ = ros::Time(0);
+    publishCommand(target_local, tracking_world.yaw, true, continuous_follow_speed_);
+    publishTarget(lagged_world.position);
+    publishState("CONTINUOUS_FOLLOW_0P7M_XY", 0.1, 0.85, 1.0);
+    ROS_INFO_THROTTLE(1.0,
+                      "[safe_follower] CONTINUOUS separation=%.2fm lag_error=%.2fm "
+                      "target_local=(%.2f,%.2f,%.2f).",
+                      separation,
+                      std::hypot(lagged_world.position.x - follower_world.x,
+                                 lagged_world.position.y - follower_world.y),
+                      target_local.x, target_local.y, target_local.z);
+    return true;
+  }
+
+  // 2026-07-28: 将前机释放的离散接力点交给UAV1自身Diff；这里只管理顺序、到达和动态紧停，不生成飞行轨迹。
+  bool handleDiffPlannerExecution(const ros::Time& now) {
+    if (!use_diff_planner_) return false;
+    if (active_relay_index_ >= relay_waypoints_.size()) {
+      // 2026-07-28: 上一点消费后到下一点释放前保持同一个物理锁点，不能让等待位置随里程计漂移重置。
+      setDiffWaitPositionHold(true, "waiting for next relay waypoint");
+      publishState(have_confirmed_door_ ? "DIFF_WAIT_NEXT_RELAY" : "DIFF_WAIT_CONFIRMED_DOOR",
+                   1.0, 0.65, 0.0);
+      return true;
+    }
+
+    const RoutePoint& desired_world = relay_waypoints_[active_relay_index_];
+    const bool terminal_relay = terminal_mode_active_ &&
+                                active_relay_index_ == terminal_waypoint_index_;
+    const geometry_msgs::Point desired_local =
+        terminal_relay ? worldToFollower(desired_world.position)
+                       : useFollowerCruiseHeight(worldToFollower(desired_world.position));
+    const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+
+    // 2026-07-28: 原接力点连续失败后，从前机已经实飞的稠密路线取短前视点；
+    // 到达一个短点后再向前取下一个，最终仍以原接力点作为完成判据。
+    // 2026-07-28: Diff可能把占据的子目标投影到附近安全点，恢复链以实际落点为到达判据。
+    const geometry_msgs::Point recovery_arrival_goal =
+        diff_accepted_goal_valid_ ? diff_accepted_goal_local_ : diff_recovery_goal_local_;
+    if (diff_recovery_goal_valid_ &&
+        distance3d(current_local, recovery_arrival_goal) <= diff_recovery_arrive_radius_) {
+      ROS_WARN("[safe_follower] UAV1 Diff reached recovery subgoal (%.2f,%.2f,%.2f).",
+               diff_recovery_goal_local_.x, diff_recovery_goal_local_.y,
+               diff_recovery_goal_local_.z);
+      diff_recovery_goal_valid_ = false;
+      diff_recovery_requested_ = true;
+      diff_goal_published_ = false;
+      diff_accepted_goal_valid_ = false;
+    }
+    if (diff_recovery_requested_ && !terminal_relay) {
+      RoutePoint recovery_world;
+      if (getRelayRouteTarget(followerToWorld(current_local), desired_world, &recovery_world)) {
+        const geometry_msgs::Point candidate =
+            useFollowerCruiseHeight(worldToFollower(recovery_world.position));
+        if (distance3d(current_local, candidate) > diff_recovery_arrive_radius_) {
+          diff_recovery_goal_local_ = candidate;
+          diff_recovery_goal_valid_ = true;
+          ROS_ERROR("[safe_follower] UAV1 Diff recovery subgoal local=(%.2f,%.2f,%.2f) "
+                    "toward relay %zu/%zu.", candidate.x, candidate.y, candidate.z,
+                    active_relay_index_ + 1, relay_waypoints_.size());
+        }
+      }
+      diff_recovery_requested_ = false;
+    }
+    const geometry_msgs::Point command_local =
+        diff_recovery_goal_valid_ ? diff_recovery_goal_local_ : desired_local;
+    // 2026-07-28: 普通接力点允许以Diff返回的附近安全点完成；真实降落终点仍必须到原点。
+    const geometry_msgs::Point arrival_goal =
+        (!terminal_relay && diff_accepted_goal_valid_) ? diff_accepted_goal_local_ : desired_local;
+    const double horizontal_error =
+        std::hypot(arrival_goal.x - current_local.x, arrival_goal.y - current_local.y);
+    const double vertical_error = std::fabs(arrival_goal.z - current_local.z);
+
+    // 2026-07-28: 动态摆球只检查机前短段并临时锁点；清空后重新下发同一目标，让Diff基于最新地图生成新轨迹。
+    geometry_msgs::Point short_probe = limitTargetStep(current_local, command_local);
+    uint32_t dynamic_id = 0;
+    const bool dynamic_blocked = dynamicSegmentBlocked(current_local, short_probe, &dynamic_id);
+    if (dynamic_blocked) {
+      if (!diff_dynamic_hold_active_) {
+        std_msgs::Bool hold_msg;
+        hold_msg.data = true;
+        follower_safety_hold_pub_.publish(hold_msg);
+        diff_dynamic_hold_active_ = true;
+        diff_goal_published_ = false;
+        ROS_ERROR("[safe_follower] UAV1 Diff dynamic HOLD id=%u; discard current trajectory.",
+                  dynamic_id);
+      }
+      publishState("DIFF_DYNAMIC_HOLD", 1.0, 0.2, 0.0);
+      return true;
+    }
+    if (diff_dynamic_hold_active_) {
+      // 2026-07-28: 若此时仍处于接力点等待锁定，动态框清空不能误解除位置锁点。
+      if (!diff_wait_hold_active_) {
+        std_msgs::Bool hold_msg;
+        hold_msg.data = false;
+        follower_safety_hold_pub_.publish(hold_msg);
+      }
+      diff_dynamic_hold_active_ = false;
+      diff_goal_published_ = false;
+      ROS_WARN("[safe_follower] UAV1 Diff dynamic path clear; request a fresh trajectory.");
+    }
+
+    const bool position_reached = horizontal_error <= relay_arrive_radius_ &&
+                                  vertical_error <= relay_arrive_z_tolerance_;
+    const bool strict_arrival =
+        position_reached &&
+        follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
+        follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
+    // 2026-07-28: 普通接力点进入更小的安全半径后立即捕获当前位置；避免轨迹先结束、
+    // FAST-LIO差分速度后收敛而形成“到点但永远不ARRIVED”的循环死锁。
+    const bool endpoint_capture =
+        !terminal_relay && diff_accepted_goal_valid_ &&
+        horizontal_error <= diff_endpoint_capture_radius_ &&
+        vertical_error <= relay_arrive_z_tolerance_;
+    if (endpoint_capture && diff_endpoint_capture_stamp_.isZero()) {
+      diff_endpoint_capture_stamp_ = now;
+      setDiffWaitPositionHold(true, "captured inside Diff endpoint radius");
+      ROS_ERROR("[safe_follower] UAV1 Diff ENDPOINT CAPTURE relay=%zu/%zu error=%.3fm "
+                "speed=%.2f/%.2f; hold %.2fs before ARRIVED.",
+                active_relay_index_ + 1, relay_waypoints_.size(), horizontal_error,
+                follower_horizontal_speed_, follower_vertical_speed_,
+                diff_endpoint_capture_dwell_);
+    }
+    if (!endpoint_capture) diff_endpoint_capture_stamp_ = ros::Time(0);
+    const bool captured_dwell_complete =
+        endpoint_capture && !diff_endpoint_capture_stamp_.isZero() &&
+        (now - diff_endpoint_capture_stamp_).toSec() >= diff_endpoint_capture_dwell_;
+    if (strict_arrival || captured_dwell_complete) {
+      if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
+      publishState(terminal_relay ? "DIFF_TERMINAL_DWELL" : "DIFF_RELAY_DWELL",
+                   0.2, 1.0, 0.2);
+      const double required_dwell = captured_dwell_complete ? 0.0 : relay_arrive_dwell_;
+      if ((now - relay_arrival_stamp_).toSec() < required_dwell) return true;
+
+      if (terminal_relay) {
+        if (!follower_landing_requested_) {
+          std_msgs::Bool request;
+          request.data = true;
+          follower_landing_request_pub_.publish(request);
+          follower_landing_requested_ = true;
+          setFollowerDetectionEnable(false, "follower landing requested");
+          ROS_ERROR("[safe_follower] UAV1 Diff terminal reached; published AUTO.LAND request.");
+        }
+        return true;
+      }
+
+      ROS_ERROR("[safe_follower] UAV1 Diff ARRIVED relay waypoint %zu/%zu.",
+                active_relay_index_ + 1, relay_waypoints_.size());
+      // 2026-07-28: 后机到达最终出口门心后关闭通道内动态检测；后续门外终点仍由自身Diff避静态障碍。
+      if (active_relay_index_ == exit_waypoint_index_)
+        setFollowerDetectionEnable(false, "follower reached final exit relay");
+      // 2026-07-28: 在清除当前目标之前先锁存到达位置，杜绝旧轨迹超时前的残余指令继续拉动后机。
+      setDiffWaitPositionHold(true, "relay waypoint arrived");
+      ++active_relay_index_;
+      relay_arrival_stamp_ = ros::Time(0);
+      diff_endpoint_capture_stamp_ = ros::Time(0);
+      diff_goal_published_ = false;
+      // 2026-07-28: 原接力点完成后清除上一段Diff短子目标恢复状态。
+      diff_recovery_requested_ = false;
+      diff_recovery_goal_valid_ = false;
+      diff_accepted_goal_valid_ = false;
+      return true;
+    }
+    relay_arrival_stamp_ = ros::Time(0);
+
+    // 2026-07-28: 已收到规划成功但PositionCommand已经失活，说明控制器正在零速度等待；
+    // 未进入近目标捕获区时必须重发当前点，不能让旧accepted状态永久占住活动索引。
+    const bool command_stale = diff_goal_published_ && diff_plan_response_received_ &&
+        diff_command_seen_for_goal_ && !diff_command_stamp_.isZero() &&
+        (now - diff_command_stamp_).toSec() >= diff_command_stale_timeout_;
+    if (command_stale) {
+      setDiffWaitPositionHold(true, "Diff PositionCommand stale before arrival");
+      ROS_ERROR("[safe_follower] UAV1 Diff COMMAND STALE %.2fs at relay=%zu/%zu "
+                "error=%.2fm; reissue current goal instead of waiting forever.",
+                (now - diff_command_stamp_).toSec(), active_relay_index_ + 1,
+                relay_waypoints_.size(), horizontal_error);
+      diff_goal_published_ = false;
+      diff_plan_response_received_ = false;
+      diff_accepted_goal_valid_ = false;
+      diff_command_seen_for_goal_ = false;
+    }
+
+    // 2026-07-28: 只有连Diff状态都没收到才超时重发；已生成轨迹后禁止1Hz重置规划器。
+    const bool retry_due = !diff_plan_response_received_ && !diff_goal_publish_stamp_.isZero() &&
+        (now - diff_goal_publish_stamp_).toSec() >= diff_goal_retry_period_;
+    if (!diff_goal_published_ || diff_goal_index_ != active_relay_index_ || retry_due) {
+      if (diff_goal_pub_.getNumSubscribers() == 0) {
+        publishState("WAIT_UAV1_DIFF_SUBSCRIBER", 1.0, 0.4, 0.0);
+        ROS_WARN_THROTTLE(1.0, "[safe_follower] waiting for UAV1 Diff goal subscriber on %s.",
+                          diff_goal_topic_.c_str());
+        return true;
+      }
+      geometry_msgs::PoseStamped goal;
+      goal.header.stamp = now;
+      goal.header.frame_id = follower_odom_.header.frame_id.empty()
+                                 ? world_frame_ : follower_odom_.header.frame_id;
+      // 2026-07-28: 恢复期间只给Diff一个位于前机已验证折线上的短目标，避免原远点反复碰撞。
+      goal.pose.position = command_local;
+      goal.pose.orientation.w = std::cos(desired_world.yaw * 0.5);
+      goal.pose.orientation.z = std::sin(desired_world.yaw * 0.5);
+      diff_goal_pub_.publish(goal);
+      diff_goal_index_ = active_relay_index_;
+      diff_goal_published_ = true;
+      diff_plan_response_received_ = false;
+      diff_accepted_goal_valid_ = false;
+      diff_command_seen_for_goal_ = false;
+      diff_goal_publish_stamp_ = now;
+      publishTarget(desired_world.position);
+      ROS_ERROR("[safe_follower] SEND UAV1 DIFF goal %zu/%zu local=(%.2f,%.2f,%.2f).",
+                active_relay_index_ + 1, relay_waypoints_.size(), command_local.x,
+                command_local.y, command_local.z);
+    }
+    publishState(terminal_relay ? "UAV1_DIFF_GO_TERMINAL" : "UAV1_DIFF_GO_RELAY",
+                 0.1, 0.8, 1.0);
+    return true;
+  }
+
+  void timerCallback(const ros::TimerEvent&) {
+    if (!follower_started_) return;
+    // 2026-07-28: FAST-LIO跳变故障锁存后不再生成任何跟随目标；控制器已通过独立话题切到MAVROS本地锁点。
+    if (follower_odom_fault_latched_) {
+      publishState("ODOM_FAULT_MAVROS_HOLD_RESTART_REQUIRED", 1.0, 0.0, 0.0);
+      return;
+    }
+    if (!have_follower_odom_ || !have_leader_odom_) {
+      hold("waiting for dual odometry");
+      return;
+    }
+    const ros::Time now = ros::Time::now();
+    if ((now - follower_odom_stamp_).toSec() > odom_timeout_) return;
+    if ((now - leader_odom_stamp_).toSec() > odom_timeout_) {
+      hold("leader odometry stale");
+      return;
+    }
+    // 2026-07-27: 卡死恢复优先于正常连续/离散跟随，避免正常目标每50ms覆盖脱困指令。
+    if (handleStuckRecovery(now)) return;
+    if (!leader_started_) {
+      hold("leader mission not started");
+      return;
+    }
+
+    // 2026-07-28: Diff执行分支在旧连续追踪/直控逻辑之前截断，确保后机只由自身规划器输出轨迹。
+    if (handleDiffPlannerExecution(now)) return;
+
+    if (handleContinuousFollowBeforeExit(now)) return;
+
+    // 2026-07-24: 出口前由0.70m连续滞后模式执行；出口外及终点阶段恢复离散任务点顺序控制。
+    if (active_relay_index_ >= relay_waypoints_.size()) {
+      hold(have_confirmed_door_ ? "waiting for leader to release next relay waypoint"
+                                : "waiting for confirmed door");
+      return;
+    }
+
+    const RoutePoint& desired_world = relay_waypoints_[active_relay_index_];
+    const bool terminal_relay = terminal_mode_active_ &&
+                                active_relay_index_ == terminal_waypoint_index_;
+    // 2026-07-24: 普通门点/接力点执行时再次强制XY-only高度；最终降落点保留0.60m专用值。
+    const geometry_msgs::Point desired_local =
+        terminal_relay
+            ? worldToFollower(desired_world.position)
+            : useFollowerCruiseHeight(worldToFollower(desired_world.position));
+    RoutePoint tracking_world = desired_world;
+    // 2026-07-16: 第一个门点保持直接进门；进入作业区后的接力点沿前机实飞轨迹逐段跟踪，
+    // 解决离散点跨越转角后，后机把墙后的目标当成直线目标持续怼墙的问题。
+    if (active_relay_index_ > 0 &&
+        !getRelayRouteTarget(followerToWorld(follower_odom_.pose.pose.position),
+                             desired_world, &tracking_world)) {
+      hold("leader route unavailable for relay segment");
+      return;
+    }
+    geometry_msgs::Point target_local =
+        terminal_relay
+            ? worldToFollower(tracking_world.position)
+            : useFollowerCruiseHeight(worldToFollower(tracking_world.position));
+    const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+    // 2026-07-16: 到达判定看最终接力点，控制发布看0.3m稠密前视点；两者不能混用而提前跳点。
+    const double horizontal_error =
+        std::hypot(desired_local.x - current_local.x, desired_local.y - current_local.y);
+    const double vertical_error = std::fabs(desired_local.z - current_local.z);
+
+    // 普通接力点在远处时不做“大圆柱净空”硬否决。靠近后只检查落点自身小体素；
+    // 若精确点确实占据，允许停在前机实飞折线上的安全附件并消费下一点。
+    bool relay_point_occupied = false;
+    int relay_point_hits = 0;
+    if (obstacle_check_enabled_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        relay_arrival_stamp_ = ros::Time(0);
+        hold("relay endpoint cloud stale");
+        return;
+      }
+      if (terminal_relay) {
+        int endpoint_hits = 0;
+        if (endpointOccupied(desired_local, &endpoint_hits)) {
+          relay_arrival_stamp_ = ros::Time(0);
+          hold("terminal relay endpoint occupied by follower cloud");
+          ROS_ERROR_THROTTLE(1.0,
+                             "[safe_follower] terminal relay endpoint occupied hits=%d; "
+                             "wait until landing area clears.",
+                             endpoint_hits);
+          return;
+        }
+      } else if (horizontal_error <= relay_point_check_distance_) {
+        relay_point_occupied = relayPointOccupied(desired_local, &relay_point_hits);
+      }
+    }
+
+    const bool occupied_attachment = relay_point_occupied &&
+                                     horizontal_error <= relay_occupied_attachment_radius_;
+    const bool position_reached =
+        (horizontal_error <= relay_arrive_radius_ &&
+         vertical_error <= relay_arrive_z_tolerance_) ||
+        (occupied_attachment &&
+         vertical_error <= std::max(relay_arrive_z_tolerance_,
+                                    relay_point_occupied_z_margin_));
+    if (position_reached &&
+        follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
+        follower_vertical_speed_ <= relay_arrive_max_vertical_speed_) {
+      // 2026-07-22: 距离和速度同时满足后持续稳定一段时间，消除带速穿过阈值导致的假到达。
+      if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
+      if ((now - relay_arrival_stamp_).toSec() < relay_arrive_dwell_) {
+        hold_target_latched_ = false;
+        publishCommand(occupied_attachment ? current_local : desired_local,
+                       desired_world.yaw, false);
+        publishState(occupied_attachment ? "RELAY_OCCUPIED_ATTACHMENT_DWELL"
+                                         : "RELAY_ARRIVAL_DWELL",
+                     0.2, 1.0, 0.2);
+        if (occupied_attachment)
+          ROS_WARN_THROTTLE(1.0,
+                            "[safe_follower] relay point %zu exact voxel occupied hits=%d; "
+                            "accept safe attachment %.2fm away.",
+                            active_relay_index_ + 1, relay_point_hits, horizontal_error);
+        return;
+      }
+      const bool terminal_reached = terminal_relay;
+      if (!terminal_reached) {
+        ROS_ERROR("[safe_follower] ARRIVED relay waypoint %zu/%zu; wait/execute next released point.",
+                  active_relay_index_ + 1, relay_waypoints_.size());
+        // 2026-07-22: 正常抵达后把已验证接力点锁为等待目标；即使受扰离开，也会主动拉回而不是接受漂移后的位置。
+        hold_target_local_ = occupied_attachment ? current_local : desired_local;
+        hold_target_yaw_ = desired_world.yaw;
+        hold_target_latched_ = true;
+        ++active_relay_index_;
+        relay_arrival_stamp_ = ros::Time(0);
+        terminal_arrival_stamp_ = ros::Time(0);
+        hold(active_relay_index_ < relay_waypoints_.size() ? "switching to next relay waypoint"
+                                                           : "waiting for next relay waypoint");
+        return;
+      }
+
+      if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
+      publishCommand(target_local, desired_world.yaw, false);
+      publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
+      if (!follower_landing_requested_ &&
+          (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
+        // 2026-07-15: 只有按顺序完成门点和内部接力点后，才允许后机在独立终点请求降落。
+        std_msgs::Bool request;
+        request.data = true;
+        follower_landing_request_pub_.publish(request);
+        follower_landing_requested_ = true;
+        // 2026-07-27: 后机完成全部接力并请求降落后关闭检测，清空下游动态目标残影。
+        setFollowerDetectionEnable(false, "follower landing requested");
+        ROS_ERROR("[safe_follower] follower completed all relay points; published AUTO.LAND request.");
+      }
+      return;
+    }
+    relay_arrival_stamp_ = ros::Time(0);
+    terminal_arrival_stamp_ = ros::Time(0);
+
+    target_local = limitTargetStep(follower_odom_.pose.pose.position, target_local);
+    if (obstacle_check_enabled_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        hold("follower cloud stale");
+        return;
+      }
+      // 2026-07-28: 离散接力同样先处理动态预测；动态阻挡只等待，不累计不可达时间、跳点或触发随机脱困。
+      uint32_t dynamic_id = 0;
+      if (dynamicSegmentBlocked(follower_odom_.pose.pose.position, target_local,
+                                &dynamic_id)) {
+        blocked_since_ = ros::Time(0);
+        blocked_waypoint_index_ = std::numeric_limits<std::size_t>::max();
+        hold("predicted dynamic obstacle crossing relay path");
+        ROS_WARN_THROTTLE(0.5,
+                          "[safe_follower] DYNAMIC HOLD id=%u blocks relay segment.",
+                          dynamic_id);
+        return;
+      }
+      int obstacle_hits = 0;
+      const bool clear_path =
+          terminal_relay
+              ? !segmentBlocked(follower_odom_.pose.pose.position, target_local,
+                                &obstacle_hits)
+              : chooseClearFollowerHeight(follower_odom_.pose.pose.position,
+                                          &target_local, &obstacle_hits);
+      if (!clear_path) {
+        // 2026-07-27: 原逻辑在此永久HOLD且active_relay_index不递增；现在先局部脱困，
+        // 普通内部检查点持续不可达再跳过，门点和最终降落点仍禁止盲跳。
+        if (blocked_waypoint_index_ != active_relay_index_) {
+          blocked_waypoint_index_ = active_relay_index_;
+          blocked_since_ = now;
+        }
+        const double blocked_duration = (now - blocked_since_).toSec();
+        const bool skippable_internal = active_relay_index_ > 0 && !terminal_relay;
+        if (skippable_internal && blocked_duration >= waypoint_unreachable_timeout_) {
+          ROS_ERROR("[safe_follower] SKIP unreachable internal waypoint %zu/%zu after %.2fs; continue queue.",
+                    active_relay_index_ + 1, relay_waypoints_.size(), blocked_duration);
+          ++active_relay_index_;
+          blocked_since_ = ros::Time(0);
+          blocked_waypoint_index_ = std::numeric_limits<std::size_t>::max();
+          relay_arrival_stamp_ = ros::Time(0);
+          hold_target_latched_ = false;
+          hold("skipped unreachable internal waypoint");
+          return;
+        }
+        if (blocked_duration >= blocked_recovery_timeout_ && !recovery_active_)
+          startRecovery(now, "local path blocked while holding");
+        hold("local path blocked by follower cloud");
+        return;
+      }
+      blocked_since_ = ros::Time(0);
+      blocked_waypoint_index_ = std::numeric_limits<std::size_t>::max();
+    }
+
+    // 2026-07-22: 接近任何接力点都提前降速，给速度闭环留出制动距离；终点仍使用更低的专用速度。
+    double command_speed = terminal_mode_active_ &&
+                                   active_relay_index_ == terminal_waypoint_index_
+                               ? terminal_approach_speed_
+                               : cruise_speed_;
+    if (horizontal_error <= relay_slowdown_radius_)
+      command_speed = std::min(command_speed, relay_approach_speed_);
+    publishCommand(target_local, tracking_world.yaw, true, command_speed);
+    publishTarget(desired_world.position);
+    publishState(terminal_mode_active_ && active_relay_index_ == terminal_waypoint_index_
+                     ? "GO_TERMINAL_RELAY"
+                     : "GO_DISCRETE_RELAY",
+                 0.1, 0.8, 1.0);
+    ROS_INFO_THROTTLE(
+        1.0,
+        "[safe_follower] RELAY target=%zu/%zu error_xy=%.2fm target_local=(%.2f,%.2f,%.2f)",
+        active_relay_index_ + 1, relay_waypoints_.size(), horizontal_error,
+        target_local.x, target_local.y, target_local.z);
+  }
+
+  void publishRoute(const ros::Time& stamp) {
+    nav_msgs::Path path;
+    path.header.stamp = stamp;
+    path.header.frame_id = world_frame_;
+    for (const RoutePoint& point : route_) {
+      geometry_msgs::PoseStamped pose;
+      pose.header = path.header;
+      pose.pose.position = point.position;
+      pose.pose.orientation.w = 1.0;
+      path.poses.push_back(pose);
+    }
+    route_pub_.publish(path);
+  }
+
+  void publishTarget(const geometry_msgs::Point& target_world) {
+    visualization_msgs::Marker marker;
+    marker.header.stamp = ros::Time::now();
+    marker.header.frame_id = world_frame_;
+    marker.ns = "safe_follower";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::SPHERE;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose.position = target_world;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = marker.scale.y = marker.scale.z = 0.20;
+    marker.color.a = 1.0;
+    marker.color.r = 0.1;
+    marker.color.g = 0.75;
+    marker.color.b = 1.0;
+    target_pub_.publish(marker);
+  }
+
+  void publishState(const std::string& text, double red, double green, double blue) {
+    if (!have_follower_odom_) return;
+    visualization_msgs::Marker marker;
+    marker.header.stamp = ros::Time::now();
+    marker.header.frame_id = follower_odom_.header.frame_id;
+    marker.ns = "safe_follower_state";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose.position = follower_odom_.pose.pose.position;
+    marker.pose.position.z += 0.45;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.z = 0.18;
+    marker.color.a = 1.0;
+    marker.color.r = red;
+    marker.color.g = green;
+    marker.color.b = blue;
+    marker.text = text;
+    state_pub_.publish(marker);
+  }
+
+  ros::NodeHandle nh_;
+  ros::NodeHandle pnh_;
+  ros::Subscriber leader_odom_sub_, follower_odom_sub_, follower_cloud_sub_;
+  ros::Subscriber diff_command_sub_;  // 2026-07-28: UAV1实际轨迹输出存活监测，不参与发布。
+  ros::Subscriber dynamic_obstacle_sub_;  // 2026-07-28: UAV1 LDOT结构化当前框与预测轨迹。
+  ros::Subscriber leader_landing_target_sub_, leader_landing_request_sub_, door_pose_sub_;
+  ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
+  ros::Subscriber leader_task_status_sub_;
+  ros::Subscriber diff_status_sub_;  // 2026-07-28: UAV1 Diff轨迹成功/失败反馈。
+  ros::Publisher command_pub_, traj_started_pub_, diff_goal_pub_, route_pub_, relay_path_pub_, target_pub_, state_pub_;
+  ros::Publisher follower_landing_target_pub_, follower_landing_request_pub_;
+  ros::Publisher follower_detection_enable_pub_;  // 2026-07-27: UAV1独立LDOT通道门控。
+  ros::Publisher follower_safety_hold_pub_;  // 2026-07-28: LIO跳变时请求控制器按MAVROS坐标锁点。
+  ros::Timer timer_;
+  nav_msgs::Odometry leader_odom_, follower_odom_;
+  geometry_msgs::PoseStamped leader_landing_target_;
+  RoutePoint terminal_target_world_, confirmed_door_, confirmed_exit_, pending_relay_;
+  sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
+  ldot_detector::DynamicObstacleArray retained_dynamic_obstacles_;  // 2026-07-28: 摆球端点/短暂漏检的有限保留缓存。
+  std::deque<RoutePoint> route_;
+  // 2026-07-21: 保存尚未判定为“真实回头”或“U形新分支”的负投影实飞折线，确认后原样接入而非直连。
+  std::deque<RoutePoint> turn_candidate_route_;
+  // 2026-07-16: relay_waypoints_ 是实际下发给后机的门点、滚动内部点和真实终点。
+  std::vector<RoutePoint> relay_waypoints_;
+  ros::Time leader_odom_stamp_, follower_odom_stamp_, cloud_stamp_;
+  ros::Time dynamic_obstacle_receive_stamp_, retained_dynamic_obstacle_stamp_;
+  std::string leader_odom_topic_, follower_odom_topic_, follower_cloud_topic_;
+  std::string command_topic_, diff_goal_topic_;
+  std::string diff_status_topic_;  // 2026-07-28: 默认/drone_1_planning/status。
+  std::string traj_started_topic_, world_frame_;
+  std::string leader_landing_target_topic_, leader_landing_request_topic_;
+  std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
+  std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
+  std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
+  std::string dynamic_obstacle_topic_;  // 2026-07-28: 默认/UAV1/ldot_detector/dynamic_obstacles。
+  bool have_leader_odom_{false}, have_follower_odom_{false};
+  bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
+  bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
+  bool have_leader_landing_target_{false}, terminal_mode_active_{false};
+  bool follower_landing_requested_{false};
+  bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
+  bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。
+  bool diff_wait_hold_active_{false};  // 2026-07-28: 接力点之间使用MAVROS位置闭环锁点，区别于动态临时HOLD。
+  bool diff_plan_response_received_{false}, diff_accepted_goal_valid_{false}; // 2026-07-28: Diff应答与实际落点。
+  bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 2026-07-28: 已验证路线短子目标恢复。
+  bool diff_command_seen_for_goal_{false};  // 2026-07-28: 当前Diff目标是否真正产生过PositionCommand。
+  bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
+  bool have_confirmed_door_{false}, door_waypoint_released_{false};
+  bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
+  bool pending_relay_valid_{false};
+  bool continuous_follow_before_exit_{true}, leader_outside_exit_{false};
+  // 2026-07-20: 接力路线判向、回头暂停和恢复状态独立于前机原始Odometry保存。
+  bool have_last_leader_sample_{false}, relay_route_paused_{false};
+  bool obstacle_check_enabled_{true}, require_fresh_cloud_{true};
+  bool separation_recovery_active_{false};
+  // 2026-07-27: 后机物理卡死监测与点云选向脱困状态，独立于两机间距恢复逻辑。
+  bool motion_monitor_active_{false}, last_command_moving_{false}, recovery_active_{false};
+  // 2026-07-22: HOLD目标只在进入等待/故障的首周期锁存，避免随后位置漂移不断改写恢复目标。
+  bool hold_target_latched_{false};
+  geometry_msgs::Point hold_target_local_;
+  double hold_target_yaw_{0.0};
+  double leader_offset_x_{0.0}, leader_offset_y_{0.0}, leader_offset_z_{0.0};
+  double follower_offset_x_{-1.0}, follower_offset_y_{0.0}, follower_offset_z_{0.0};
+  double leader_start_height_{0.5}, follower_start_height_{0.5};
+  // 2026-07-24: 默认0.70m路径间隔、0.50m硬间隔；普通路线高度由后机独立固定为0.65m。
+  double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.50};
+  double fixed_follow_height_{0.65}, follow_height_min_{0.60}, follow_height_max_{0.70};
+  double continuous_follow_speed_{0.42};
+  double separation_recovery_distance_{1.15}, separation_release_distance_{1.35};
+  double emergency_retreat_step_{0.35}, emergency_retreat_speed_{0.30};
+  // 2026-07-16: 无launch覆盖时也保持后机在前机终点路线后方约0.5m的独立落点。
+  double terminal_landing_spacing_{0.50}, terminal_approach_height_{0.60};
+  double terminal_arrive_radius_{0.25}, terminal_arrive_z_tolerance_{0.15};
+  double terminal_arrive_dwell_{1.0}, terminal_approach_speed_{0.25};
+  double path_sample_spacing_{0.08}, max_route_length_{60.0}, route_length_{0.0};
+  // 2026-07-21: 用最近0.45m实飞路线切线判向，不再依赖可能与实际转弯不一致的雷达里程计yaw。
+  double forward_projection_ratio_{-0.20}, route_direction_window_{0.45};
+  double backtrack_pause_distance_{0.20};
+  double route_revisit_radius_{0.45}, route_revisit_progress_gap_{1.00};
+  double route_resume_radius_{0.25}, consecutive_backward_distance_{0.0};
+  // 2026-07-21: 新分支需累计足够长度且离开全部旧路线后才可恢复接力，抑制里程计短时横跳误判。
+  double turn_branch_confirm_distance_{0.50}, turn_candidate_length_{0.0};
+  double max_target_step_{0.55}, route_tracking_lookahead_{0.30};
+  double cruise_speed_{0.35}, max_vertical_speed_{0.20};
+  double odom_timeout_{0.50}, cloud_timeout_{0.60}, min_record_height_{0.35};
+  double obstacle_radius_{0.28}, obstacle_z_margin_{0.20}, obstacle_ignore_near_{0.18};
+  double dynamic_obstacle_retention_{0.80}, dynamic_obstacle_safety_radius_{0.35};
+  double dynamic_obstacle_z_margin_{0.18};
+  double dynamic_retention_route_half_width_{0.70};  // 2026-07-28: 动态保留只覆盖通道中心带，墙边框立即淘汰。
+  double diff_goal_retry_period_{1.0};  // 2026-07-28: 仅Diff无任何状态应答时使用的超时重试周期。
+  double diff_recovery_arrive_radius_{0.18};  // 2026-07-28: 短子目标切换半径。
+  double diff_endpoint_capture_radius_{0.15}, diff_endpoint_capture_dwell_{0.45};
+  double diff_command_stale_timeout_{0.80};  // 2026-07-28: 与控制器0.60s轨迹超时错开0.20s。
+  double follower_odom_jump_speed_{2.0}, follower_odom_jump_vertical_speed_{1.2};
+  double stuck_detection_timeout_{1.50}, stuck_min_progress_{0.06};
+  double recovery_step_{0.35}, recovery_speed_{0.20}, recovery_attempt_timeout_{1.50};
+  double recovery_success_distance_{0.12}, recovery_near_ignore_{0.06};
+  double blocked_recovery_timeout_{1.00}, waypoint_unreachable_timeout_{6.00};
+  double last_command_dx_{0.0}, last_command_dy_{0.0}, recovery_yaw_{0.0};
+  int obstacle_min_points_{3};
+  double relay_release_distance_{0.70}, door_release_inside_distance_{0.70};
+  double relay_waypoint_spacing_{2.50};
+  double relay_arrive_radius_{0.25}, relay_arrive_z_tolerance_{0.20};
+  // 终点仍使用较大停驻净空；普通接力点只查落点小体素并允许安全附件到达。
+  double relay_endpoint_clearance_radius_{0.38}, relay_endpoint_z_margin_{0.28};
+  double relay_point_occupied_radius_{0.12}, relay_point_occupied_z_margin_{0.18};
+  double relay_point_check_distance_{0.45}, relay_occupied_attachment_radius_{0.35};
+  double relay_slowdown_radius_{0.55}, relay_approach_speed_{0.20};
+  double relay_arrive_max_horizontal_speed_{0.10}, relay_arrive_max_vertical_speed_{0.08};
+  double relay_arrive_dwell_{0.50};
+  double follower_horizontal_speed_{0.0}, follower_vertical_speed_{0.0};
+  int relay_endpoint_min_points_{2};
+  int relay_point_occupied_min_points_{2};
+  double leader_route_progress_{0.0}, last_relay_selection_progress_{0.0};
+  int max_internal_relay_points_{0}, internal_relay_count_{0};
+  std::size_t active_relay_index_{0}, terminal_waypoint_index_{std::numeric_limits<std::size_t>::max()};
+  std::size_t exit_waypoint_index_{std::numeric_limits<std::size_t>::max()};  // 2026-07-28: 到达后关闭通道动态检测。
+  std::size_t diff_goal_index_{std::numeric_limits<std::size_t>::max()}; // 2026-07-28: 每个离散点仅触发一次规划。
+  std::size_t follower_route_index_{0};
+  RoutePoint last_leader_sample_;  // 2026-07-20: 最近一次达到采样间距的前机点，仅用于运动方向判断。
+  ros::Time terminal_arrival_stamp_, relay_arrival_stamp_;
+  ros::Time diff_goal_publish_stamp_;  // 2026-07-28: 防止瞬时假占据导致一次性目标永久失效。
+  ros::Time diff_command_stamp_, diff_endpoint_capture_stamp_;  // 2026-07-28: 轨迹存活与近目标捕获计时。
+  ros::Time motion_monitor_start_, recovery_attempt_start_;
+  ros::Time blocked_since_;  // 2026-07-27: 当前串行检查点连续被自身点云阻挡的起始时间。
+  ros::Time continuous_blocked_since_;  // 2026-07-27: 出口前滚动目标的连续点云阻挡计时。
+  std::size_t blocked_waypoint_index_{std::numeric_limits<std::size_t>::max()};
+  geometry_msgs::Point motion_monitor_origin_local_, recovery_origin_local_, recovery_target_local_;
+  geometry_msgs::Point diff_recovery_goal_local_;  // 2026-07-28: 当前已验证路线短子目标。
+  geometry_msgs::Point diff_accepted_goal_local_;  // 2026-07-28: Diff对占据原目标修正后的真正落点。
+  int recovery_attempt_count_{0};
+  int diff_planning_failure_events_{0};  // 2026-07-28: Diff连续失败诊断计数。
+  uint32_t trajectory_id_{0};
+};
+
+int main(int argc, char** argv) {
+  // 2026-07-14: 后机跟随节点与两架控制器分离，便于单独停用并回退到 hold_only。
+  ros::init(argc, argv, "leader_safe_path_follower");
+  LeaderSafePathFollower follower;
+  ros::spin();
+  return 0;
+}

@@ -1,0 +1,289 @@
+<launch>
+  <arg name="map_size_x_"/>
+  <arg name="map_size_y_"/>
+  <arg name="map_size_z_"/>
+
+  <arg name="box_min_x"/>
+  <arg name="box_min_y"/>
+  <arg name="box_min_z"/>
+  <arg name="box_max_x"/>
+  <arg name="box_max_y"/>
+  <arg name="box_max_z"/>
+
+  <arg name="odometry_topic"/>
+  <arg name="sensor_pose_topic"/>
+  <arg name="depth_topic"/>
+  <arg name="cloud_topic"/>
+
+  <arg name="cx"/>
+  <arg name="cy"/>
+  <arg name="fx"/>
+  <arg name="fy"/>
+
+  <arg name="max_vel"/>
+  <arg name="max_acc"/>
+  <!-- 2026-07-27: FUEL 的车辆参数和全部 remap 默认前缀由 iris_0 统一改为 UAV0。 -->
+  <arg name="vehicle_ns" default="UAV0"/>
+  <arg name="topic_prefix" default="/UAV0"/>
+  <!-- 2026-07-08 19:26: 为雷达未知环境搜索补充可调的“建图射线长度 / 点云有效距离 / active perception 前视评分距离”参数，
+       方便在比赛场地里直接放大可见范围，而不用反复改死在 launch 里的常量。 -->
+  <arg name="raycast_max_dist" default="8.0"/>
+  <arg name="perception_max_dist" default="7.0"/>
+
+  <!-- main node -->
+  <!-- 2026-07-13: iris_0 回归阶段保留原节点名，先隔离全部数据话题；启用 iris_1 时再把 mission 参数与节点名一起实例化。 -->
+  <node pkg="exploration_manager" name="exploration_node" type="exploration_node" output="screen">
+    <remap from ="/odom_world" to="$(arg odometry_topic)"/>
+    <remap from ="/map_ros/pose"   to = "$(arg sensor_pose_topic)"/> 
+    <remap from ="/map_ros/depth" to = "$(arg depth_topic)"/>
+    <remap from ="/map_ros/cloud" to="$(arg cloud_topic)"/>
+    <!-- 2026-07-13: FUEL 源码中的绝对单机话题在节点边界统一映射，避免 iris_0 占用全局规划、地图和任务接口。 -->
+    <remap from="/waypoint_generator/waypoints" to="$(arg topic_prefix)/waypoint_generator/waypoints"/>
+    <remap from="/planning/replan" to="$(arg topic_prefix)/planning/replan"/>
+    <remap from="/planning/new" to="$(arg topic_prefix)/planning/new"/>
+    <remap from="/planning/bspline" to="$(arg topic_prefix)/planning/bspline"/>
+    <remap from="/planning/safety_hold" to="$(arg topic_prefix)/planning/safety_hold"/>
+    <remap from="/sdf_map/occupancy_all" to="$(arg topic_prefix)/sdf_map/occupancy_all"/>
+    <remap from="/sdf_map/occupancy_local" to="$(arg topic_prefix)/sdf_map/occupancy_local"/>
+    <remap from="/sdf_map/occupancy_local_inflate" to="$(arg topic_prefix)/sdf_map/occupancy_local_inflate"/>
+    <remap from="/sdf_map/unknown" to="$(arg topic_prefix)/sdf_map/unknown"/>
+    <remap from="/sdf_map/esdf" to="$(arg topic_prefix)/sdf_map/esdf"/>
+    <remap from="/sdf_map/update_range" to="$(arg topic_prefix)/sdf_map/update_range"/>
+    <remap from="/sdf_map/depth_cloud" to="$(arg topic_prefix)/sdf_map/depth_cloud"/>
+    <remap from="/mission/search_markers" to="$(arg topic_prefix)/mission/search_markers"/>
+    <remap from="/mission/task_status" to="$(arg topic_prefix)/mission/task_status"/>
+    <remap from="/mission/exit_candidate" to="$(arg topic_prefix)/mission/exit_candidate"/>
+    <!-- 2026-07-28: 最终锁存出口独立提供给后机，不能复用会包含中途墙端的exit_candidate。 -->
+    <remap from="/mission/final_exit" to="$(arg topic_prefix)/mission/final_exit"/>
+    <remap from="/mission/landing_target" to="$(arg topic_prefix)/mission/landing_target"/>
+    <remap from="/mission/landing_request" to="$(arg topic_prefix)/mission/landing_request"/>
+    <!-- 2026-07-13: 规划可视化同样隔离，双机 RViz 可分别开关，不让 marker ID 相互覆盖。 -->
+    <remap from="/planning_vis/trajectory" to="$(arg topic_prefix)/planning_vis/trajectory"/>
+    <remap from="/planning_vis/topo_path" to="$(arg topic_prefix)/planning_vis/topo_path"/>
+    <remap from="/planning_vis/prediction" to="$(arg topic_prefix)/planning_vis/prediction"/>
+    <remap from="/planning_vis/visib_constraint" to="$(arg topic_prefix)/planning_vis/visib_constraint"/>
+    <remap from="/planning_vis/frontier" to="$(arg topic_prefix)/planning_vis/frontier"/>
+    <remap from="/planning_vis/yaw" to="$(arg topic_prefix)/planning_vis/yaw"/>
+    <remap from="/planning_vis/viewpoints" to="$(arg topic_prefix)/planning_vis/viewpoints"/>
+
+    <!-- 改 -->
+    <param name="sdf_map/resolution"      value="0.1" /> 
+
+    <param name="sdf_map/map_size_x"   value="$(arg map_size_x_)" /> 
+    <param name="sdf_map/map_size_y"   value="$(arg map_size_y_)" /> 
+    <param name="sdf_map/map_size_z"   value="$(arg map_size_z_)" /> 
+    <!-- <param name="sdf_map/obstacles_inflation"     value="0.099" />  -->
+    <!-- 2026-07-08: 针对 indoor1/管道环境里 frontier 被过度吞掉的问题，将障碍物膨胀从 0.4 下调到 0.15，先单独验证是否恢复对空白区的探索意愿。 -->
+    <!-- 2026-07-27: A*膨胀层由0.25m折中为0.18m，避免窄通道已知自由域被切断；最终轨迹仍由0.28m真实足迹硬复核。 -->
+    <param name="sdf_map/obstacles_inflation"     value="0.18" /> 
+
+    <param name="sdf_map/local_bound_inflate"    value="0.5"/>
+    <param name="sdf_map/local_map_margin" value="50"/>
+    <param name="sdf_map/ground_height"        value="-1.0"/>
+    <param name="sdf_map/default_dist"        value="0.0"/>
+    
+    <param name="sdf_map/p_hit"  value="0.65"/>
+    <param name="sdf_map/p_miss" value="0.35"/>
+    <param name="sdf_map/p_min"  value="0.12"/>
+    <param name="sdf_map/p_max"  value="0.90"/>
+    <param name="sdf_map/p_occ"  value="0.80"/>
+
+    <!-- 2026-07-08: 为了让无人机能在大房间里看见通道另一侧的未知区，恢复到更接近 FUEL 原始探索距离的雷达建图射线长度。 -->
+    <param name="sdf_map/min_ray_length" value="0.5"/>
+    <param name="sdf_map/max_ray_length" value="$(arg raycast_max_dist)"/>
+
+    <param name="sdf_map/virtual_ceil_height"   value="-10"/>
+    <param name="sdf_map/optimistic" value="false" type="bool"/>
+    <param name="sdf_map/signed_dist" value="false" type="bool"/>
+    <param name="sdf_map/box_min_x" value="$(arg box_min_x)" type="double"/>
+    <param name="sdf_map/box_min_y" value="$(arg box_min_y)" type="double"/>
+    <param name="sdf_map/box_min_z" value="$(arg box_min_z)" type="double"/>
+    <param name="sdf_map/box_max_x" value="$(arg box_max_x)" type="double"/>
+    <param name="sdf_map/box_max_y" value="$(arg box_max_y)" type="double"/>
+    <param name="sdf_map/box_max_z" value="$(arg box_max_z)" type="double"/>
+
+    <param name="map_ros/cx" value="$(arg cx)"/>
+    <param name="map_ros/cy" value="$(arg cy)"/>
+    <param name="map_ros/fx" value="$(arg fx)"/>
+    <param name="map_ros/fy" value="$(arg fy)"/>
+
+    <!-- 2026-07-08: 同步放大点云/深度最大有效距离，避免远处通道口长期保持未知，探索器误以为上方区域不可进入。 -->
+    <param name="map_ros/depth_filter_maxdist"   value="$(arg raycast_max_dist)"/>
+
+    <param name="map_ros/depth_filter_mindist"   value="0.2"/>
+    <param name="map_ros/depth_filter_margin"    value="2"/>
+    <param name="map_ros/k_depth_scaling_factor" value="1000.0"/>
+    <param name="map_ros/skip_pixel" value="2"/>
+    <param name="map_ros/esdf_slice_height" value="0.3"/>
+    <param name="map_ros/visualization_truncate_height"   value="10.09"/>
+    <param name="map_ros/visualization_truncate_low"   value="-2.0"/>
+    <param name="map_ros/show_occ_time"  value="false"/>
+    <param name="map_ros/show_esdf_time" value="false"/>
+    <param name="map_ros/show_all_map" value="true"/>
+    <param name="map_ros/frame_id"      value="world"/>
+
+    <!-- Fsm -->
+    <param name="fsm/thresh_replan1" value="0.5" type="double"/>
+    <param name="fsm/thresh_replan2" value="0.5" type="double"/>
+    <!-- 2026-07-20: 周期重规划由1.2s放宽到3.0s，减少安全长轨迹尚未推进就被重复替换；20Hz碰撞检查保持不变。 -->
+    <param name="fsm/thresh_replan3" value="3.0" type="double"/>
+
+    <!-- <param name="fsm/thresh_replan1" value="0.00001" type="double"/> -->
+    <!-- <param name="fsm/thresh_replan2" value="100.0" type="double"/> -->
+    <!-- <param name="fsm/thresh_replan3" value="0.1" type="double"/> -->
+    
+    <!-- 改 -->
+    <param name="fsm/replan_time" value="0.2" type="double"/>
+    <!-- 2026-07-13: 跟踪误差持续 0.25s 后从真实里程计柔和重规划，只有 0.65m/0.50m 严重偏差才急停。 -->
+    <param name="fsm/max_tracking_error_xy" value="0.35" type="double"/>
+    <param name="fsm/max_tracking_error_z" value="0.28" type="double"/>
+    <param name="fsm/tracking_error_confirm_time" value="0.25" type="double"/>
+    <param name="fsm/tracking_error_grace_time" value="0.35" type="double"/>
+    <param name="fsm/hard_tracking_error_xy" value="0.65" type="double"/>
+    <param name="fsm/hard_tracking_error_z" value="0.50" type="double"/>
+    <!-- 2026-07-28: 发布前跨多次地图刷新连续确认，且轨迹起点必须贴合真实里程计。 -->
+    <param name="fsm/trajectory_release_confirm_time" value="0.12" type="double"/>
+    <param name="fsm/trajectory_release_check_interval" value="0.04" type="double"/>
+    <param name="fsm/trajectory_release_max_start_error" value="0.25" type="double"/>
+
+    <!-- Exploration manager -->
+
+    <param name="exploration/refine_local" value="true" type="bool"/>
+    <param name="exploration/refined_num" value="7" type="int"/>
+    
+    <!-- 2026-07-08: 放大局部精炼半径，减少只围着起飞区近端 frontier 打转、迟迟不切到更远连通区域的问题。 -->
+    <param name="exploration/refined_radius" value="8.0" type="double"/>
+    
+    <param name="exploration/max_decay" value="0.8" type="double"/>
+    <param name="exploration/top_view_num" value="15" type="int"/>
+    <param name="exploration/vm" value="$(eval 1 * arg('max_vel'))" type="double"/>
+    <param name="exploration/am" value="$(eval 1 * arg('max_acc'))" type="double"/>
+    <param name="exploration/yd" value="$(eval 15 * 3.1415926 / 180.0)" type="double"/>
+    <param name="exploration/ydd" value="$(eval 15 * 3.1415926 / 180.0)" type="double"/>
+    <param name="exploration/w_dir" value="1.5" type="double"/>
+    <param name="exploration/tsp_dir" value="$(find lkh_tsp_solver)/resource" type="string"/>
+    <param name="exploration/relax_time" value="1.0" type="double"/>
+    <!--by chen-->
+    <param name="cmu_exploration" value="false" type="bool"/>
+    <!---->
+    <param name="frontier/cluster_min" value="100" type="int"/>
+    <param name="frontier/cluster_size_xy" value="2.0" type="double"/>
+    <param name="frontier/cluster_size_z" value="10.0" type="double"/>
+    <param name="frontier/min_candidate_dist" value="0.75" type="double"/>
+    <!-- 2026-07-13: 候选点净空从 0.12m 提高到 0.28m，先消除贴柱视点；地图膨胀仍按比赛要求保持 0.15m。 -->
+    <param name="frontier/min_candidate_clearance" value="0.28" type="double"/>
+    <param name="frontier/candidate_dphi" value="$(eval 15 * 3.1415926 / 180.0)" type="double"/>
+    <param name="frontier/candidate_rnum" value="3" type="int"/>
+    <!-- 2026-07-08: 将视角采样半径缩到更适合狭窄通道的范围，避免围绕 frontier 采样的位置大多落进墙体或通道外。 -->
+    <param name="frontier/candidate_rmin" value="0.8" type="double"/>
+    <param name="frontier/candidate_rmax" value="1.8" type="double"/>
+    <param name="frontier/down_sample" value="3" type="int"/>;
+    <!-- 2026-07-08: 雷达在通道口看到的有效 frontier 体素更稀，降低最小可见体素数，减少被丢进 dormant_frontiers 的概率。 -->
+    <param name="frontier/min_visib_num" value="6" type="int"/>;
+    <param name="frontier/min_view_finish_fraction" value="0.2" type="double"/>;
+    <param name="frontier/min_frontier_height" value="0.1" type="double"/>;
+
+    <!-- Perception utils -->
+    <param name="perception_utils/top_angle" value="0.56125" type="double"/>;
+    <param name="perception_utils/left_angle" value="0.69222" type="double"/>;
+    <param name="perception_utils/right_angle" value="0.68901" type="double"/>;
+    <param name="perception_utils/max_dist" value="$(arg perception_max_dist)" type="double"/>;
+    <param name="perception_utils/vis_dist" value="1.0" type="double"/>;
+
+
+    <param name="heading_planner/yaw_diff" value="$(eval 20 * 3.1415926 / 180.0)" type="double"/>
+    <param name="heading_planner/half_vert_num" value="5" type="int"/>
+    <param name="heading_planner/lambda1" value="2.0" type="double"/>
+    <param name="heading_planner/lambda2" value="1.0" type="double"/>
+    <param name="heading_planner/max_yaw_rate" value="$(eval 10 * 3.1415926 / 180.0)" type="double"/>
+    <param name="heading_planner/w" value="20000.0" type="double"/>
+    <param name="heading_planner/weight_type" value="1" type="double"/>
+
+  <!-- planner manager -->
+    <!-- <param name="manager/max_vel" value="$(arg max_vel)" type="double"/> -->
+    <param name="manager/max_vel" value="$(arg max_vel)" type="double"/>
+    <param name="manager/max_acc" value="$(arg max_acc)" type="double"/>
+    <param name="manager/max_jerk" value="4" type="double"/>
+    <param name="manager/dynamic_environment" value="1" type="int"/>
+    <param name="manager/local_segment_length" value="5.0" type="double"/>
+    <param name="manager/clearance_threshold" value="0.2" type="double"/>
+    <!-- 2026-07-23: iris_mid360_250最外沿约0.196m；最终路径按0.20m真实圆盘检查，
+         0.15m膨胀图仅用于A*引导，避免膨胀层擦到当前位置后无法向前脱困。 -->
+    <!-- 2026-07-27: 最终路径/轨迹按0.28m水平包络复核，覆盖旋翼与跟踪误差。 -->
+    <param name="manager/footprint_check_radius" value="0.28" type="double"/>
+    <param name="manager/footprint_check_samples" value="12" type="int"/>
+    <!-- 2026-07-16: 控制点间距缩到0.25m，使轨迹在窄道拐角更贴近已验证A*折线。 -->
+    <param name="manager/control_points_distance" value="0.25" type="double"/>
+    <param name="manager/use_geometric_path" value="true" type="bool"/>
+    <param name="manager/use_kinodynamic_path" value="true" type="bool"/>
+    <param name="manager/use_topo_path" value="true" type="bool"/>
+    <param name="manager/use_optimization" value="true" type="bool"/>
+    <param name="manager/use_active_perception" value="true" type="bool"/>
+    <!-- 2026-07-16: 比赛优先安全可达，关闭会把拐角轨迹向障碍物内侧拉扯的最短时间项。 -->
+    <param name="manager/min_time" value="false" type="bool"/>
+
+  <!-- kinodynamic path searching -->
+    <param name="search/max_tau" value="0.8" type="double"/>
+    <param name="search/init_max_tau" value="1.0" type="double"/>
+    <param name="search/max_vel" value="$(arg max_vel)" type="double"/>
+    <param name="search/vel_margin" value="0.25" type="double"/>
+    <param name="search/max_acc" value="$(arg max_acc)" type="double"/>
+    <param name="search/w_time" value="10.0" type="double"/>
+    <param name="search/horizon" value="5.0" type="double"/>
+    <param name="search/lambda_heu" value="10.0" type="double"/>
+    <!-- 2026-07-13: 运动学搜索采用水平优先软约束，动态/低矮障碍需要时仍可有限升降。 -->
+    <param name="search/vertical_acc_weight" value="4.0" type="double"/>
+    <param name="search/vertical_position_weight" value="2.0" type="double"/>
+    <param name="search/resolution_astar" value="0.025" type="double"/>
+    <param name="search/time_resolution" value="0.8" type="double"/>
+    <param name="search/margin" value="0.2" type="double"/>
+    <param name="search/allocate_num" value="100000" type="int"/>
+    <param name="search/check_num" value="10" type="int"/>
+    <param name="search/optimistic" value="false" type="bool"/>
+
+    <param name="astar/lambda_heu" value="10000.0" type="double"/>
+    <!-- 2026-07-13: 几何 A* 对竖直偏移加权，避免在 1.5m 内窄通道习惯性从障碍物上方绕行。 -->
+    <param name="astar/vertical_weight" value="4.0" type="double"/>
+    <param name="astar/resolution_astar" value="0.2" type="double"/>
+    <param name="astar/allocate_num" value="1000000" type="int"/>
+    <!-- 2026-07-16: 旧值1ms会把复杂但可达的通道误判为No path；50ms仍满足规划周期且允许绕柱搜索。 -->
+    <param name="astar/max_search_time" value="0.05" type="double"/>
+
+  <!-- trajectory optimization -->
+    <param name="optimization/ld_smooth" value="20.0" type="double"/>
+    <!-- 2026-07-16: 增强障碍距离和A*引导权重，避免平滑器反复切入(5.5,-3.2)附近墙体。 -->
+    <param name="optimization/ld_dist" value="25.0" type="double"/>
+    <param name="optimization/ld_feasi" value="2.0" type="double"/>
+    <param name="optimization/ld_start" value="100.0" type="double"/>
+    <param name="optimization/ld_end" value="0.5" type="double"/>
+    <!-- 2026-07-20: 启用A*几何路径引导后提高引导权重，限制B样条脱离已验证的可通行走廊。 -->
+    <param name="optimization/ld_guide" value="12.0" type="double"/>
+    <param name="optimization/ld_waypt" value="0.3" type="double"/>
+    <param name="optimization/ld_view" value="0.0" type="double"/>
+    <param name="optimization/ld_time" value="1.0" type="double"/>
+    <!-- 2026-07-20: 优化器软净空由0.70m校准为0.32m（0.20m机体半径+0.12m栅格/跟踪余量），允许通过比赛窄道；发布前0.20m完整足迹硬检查仍保留。 -->
+    <param name="optimization/dist0" value="0.32" type="double"/>
+    <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
+    <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>
+    <param name="optimization/algorithm1" value="15" type="int"/>
+    <param name="optimization/algorithm2" value="11" type="int"/>
+    <param name="optimization/max_iteration_num1" value="2" type="int"/>
+    <param name="optimization/max_iteration_num2" value="2000" type="int"/>
+    <param name="optimization/max_iteration_num3" value="200" type="int"/>
+    <param name="optimization/max_iteration_num4" value="200" type="int"/>
+
+    <param name="optimization/max_iteration_time1" value="0.0001" type="double"/>
+    <!-- 2026-07-16: 正常阶段优化从5ms放宽到20ms，给新增安全权重足够收敛时间。 -->
+    <param name="optimization/max_iteration_time2" value="0.02" type="double"/>
+    <param name="optimization/max_iteration_time3" value="0.003" type="double"/>
+    <param name="optimization/max_iteration_time4" value="0.003" type="double"/>
+    <param name="bspline/limit_vel" value="$(arg max_vel)" type="double"/>
+    <param name="bspline/limit_acc" value="$(arg max_acc)" type="double"/>
+    <param name="bspline/limit_ratio" value="1.1" type="double"/>
+    <param name="bspline/limit_vel" value="$(arg max_vel)" type="double"/>
+    <param name="bspline/limit_acc" value="$(arg max_acc)" type="double"/>
+    <param name="bspline/limit_ratio" value="1.1" type="double"/>
+
+  </node>
+
+</launch>
