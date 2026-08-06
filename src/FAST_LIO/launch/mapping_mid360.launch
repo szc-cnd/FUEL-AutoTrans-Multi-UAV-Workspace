@@ -10,6 +10,7 @@
 
   <!-- 是否启动 RViz（当前未启用，对应下面被注释的 rviz 节点） -->
   <arg name="rviz" default="true" />
+  <arg name="rviz_goal_topic" default="/move_base_simple/goal" />
   <!-- 单机实机默认直接连接 livox_ros_driver2 的 CustomMsg 和 IMU 话题。 -->
   <arg name="vehicle_ns" default="UAV1" />
   <arg name="lidar_topic" default="/UAV1/livox/lidar" />
@@ -111,6 +112,7 @@
       <remap from="/Laser_map" to="$(arg laser_map_topic)" />
       <remap from="/Odometry" to="$(arg odom_topic)" />
       <remap from="/path" to="$(arg path_topic)" />
+      <remap from="/move_base_simple/goal" to="$(arg rviz_goal_topic)" />
     </node>
   </group>
  
