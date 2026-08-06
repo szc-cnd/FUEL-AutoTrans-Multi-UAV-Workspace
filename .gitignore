@@ -1,0 +1,24 @@
+# Catkin ????????????
+/build/
+/devel/
+/install/
+**/build/
+**/devel/
+**/install/
+
+# ROS????????
+/logs/
+**/logs/
+*.log
+*.bag
+*.bag.active
+*.ulg
+*_setpoint.csv
+*_autotrans.csv
+trajectory.csv
+planner_trajectory.csv
+
+# ????? Python ??
+*.tmp
+*.swp
+__pycache__/

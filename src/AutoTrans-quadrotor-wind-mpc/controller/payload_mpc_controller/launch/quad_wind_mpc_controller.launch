@@ -1,0 +1,69 @@
+<launch>
+  <!-- Minimal real-quadrotor controller launch: PX4 EKF odom + MAVROS IMU. -->
+  <!-- AutoTrans 状态直接使用 FAST-LIO 雷达 Odometry，位置/速度/姿态均来自该世界系。 -->
+  <arg name="odom_topic" default="/Odometry"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <!-- bridge 输出的完整 Diff-Planner 多项式轨迹，保持与 Odometry 同一世界坐标语义。 -->
+  <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
+  <!-- Diff-Planner 原始轨迹；logger 单独记录，不直接送入 MPC。 -->
+  <arg name="raw_trajectory_topic" default="/drone_1_planning/trajectory"/>
+
+  <!-- Logger only records data; it does not arm, switch OFFBOARD, or change setpoints. -->
+  <arg name="enable_logger" default="true"/>
+  <arg name="log_dir" default="$(env HOME)/.ros/autotrans_mpc_logs"/>
+  <!-- 实验标签只描述风向、控制模式等条件；补偿开关状态由 logger 自动追加。 -->
+  <arg name="experiment_tag" default="unlabeled"/>
+  <arg name="run_name" default=""/>
+  <arg name="flush_every" default="20"/>
+  <arg name="log_rate" default="100.0"/>
+  <arg name="setpoint_timeout" default="0.2"/>
+  <arg name="log_all_rosout" default="false"/>
+  <arg name="goal_topic" default="/move_base_simple/goal"/>
+  <arg name="reference_topic" default="/mpc_controller_node/mpc/reference_trajectory"/>
+  <arg name="force_topic" default="/mpc_controller_node/mpc/force"/>
+  <arg name="applied_force_topic" default="/mpc_controller_node/mpc/force_applied"/>
+  <!-- MAVROS 电池状态输入：记录总电压(V)和剩余电量比例，不参与控制。 -->
+  <arg name="battery_topic" default="/mavros/battery"/>
+
+  <node pkg="payload_mpc_controller" type="mpc_controller_node" name="mpc_controller_node" output="screen">
+    <rosparam command="load" file="$(find payload_mpc_controller)/config/mpc.yaml"/>
+    <rosparam command="load" file="$(find payload_mpc_controller)/config/model.yaml"/>
+
+    <!-- World-frame position, velocity, and attitude estimate from PX4 EKF. -->
+    <remap from="~odom" to="$(arg odom_topic)"/>
+    <!-- Body-frame acceleration and angular velocity from MAVROS IMU. -->
+    <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
+
+    <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
+    <remap from="~traj" to="$(arg trajectory_topic)"/>
+    <remap from="~start_trigger" to="/move_base_simple/goal"/>
+    <remap from="~cmd_trigger" to="/hummingbird/goal"/>
+  </node>
+
+  <node if="$(arg enable_logger)"
+        pkg="payload_mpc_controller"
+        type="autotrans_mpc_logger.py"
+        name="autotrans_mpc_logger"
+        output="screen">
+    <param name="log_dir" value="$(arg log_dir)"/>
+    <param name="experiment_tag" value="$(arg experiment_tag)"/>
+    <param name="run_name" value="$(arg run_name)"/>
+    <param name="flush_every" value="$(arg flush_every)"/>
+    <param name="log_rate" value="$(arg log_rate)"/>
+    <param name="setpoint_timeout" value="$(arg setpoint_timeout)"/>
+    <param name="log_all_rosout" value="$(arg log_all_rosout)"/>
+    <param name="setpoint_topic" value="/mavros/setpoint_raw/attitude"/>
+    <param name="odom_topic" value="$(arg odom_topic)"/>
+    <param name="goal_topic" value="$(arg goal_topic)"/>
+    <param name="reference_topic" value="$(arg reference_topic)"/>
+    <param name="state_topic" value="/mavros/state"/>
+    <param name="extended_state_topic" value="/mavros/extended_state"/>
+    <param name="rc_topic" value="/mavros/rc/in"/>
+    <param name="force_topic" value="$(arg force_topic)"/>
+    <param name="applied_force_topic" value="$(arg applied_force_topic)"/>
+    <param name="esc_status_topic" value="/mavros/esc_status"/>
+    <param name="battery_topic" value="$(arg battery_topic)"/>
+    <param name="trajectory_topic" value="$(arg trajectory_topic)"/>
+    <param name="raw_trajectory_topic" value="$(arg raw_trajectory_topic)"/>
+  </node>
+</launch>
