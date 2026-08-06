@@ -11,17 +11,17 @@
   <!-- 是否启动 RViz（当前未启用，对应下面被注释的 rviz 节点） -->
   <arg name="rviz" default="true" />
   <!-- 单机实机默认直接连接 livox_ros_driver2 的 CustomMsg 和 IMU 话题。 -->
-  <arg name="vehicle_ns" default="UAV0" />
-  <arg name="lidar_topic" default="/UAV0/livox/lidar" />
-  <arg name="imu_topic" default="/UAV0/livox/imu" />
-  <arg name="odom_topic" default="/UAV0/fast_lio/Odometry" />
-  <arg name="cloud_topic" default="/UAV0/fast_lio/cloud_registered" />
-  <arg name="cloud_body_topic" default="/UAV0/fast_lio/cloud_registered_body" />
-  <arg name="cloud_effected_topic" default="/UAV0/fast_lio/cloud_effected" />
-  <arg name="laser_map_topic" default="/UAV0/fast_lio/Laser_map" />
-  <arg name="path_topic" default="/UAV0/fast_lio/path" />
-  <arg name="world_frame" default="UAV0/camera_init" />
-  <arg name="body_frame" default="UAV0/body" />
+  <arg name="vehicle_ns" default="UAV1" />
+  <arg name="lidar_topic" default="/UAV1/livox/lidar" />
+  <arg name="imu_topic" default="/UAV1/livox/imu" />
+  <arg name="odom_topic" default="/UAV1/fast_lio/Odometry" />
+  <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered" />
+  <arg name="cloud_body_topic" default="/UAV1/fast_lio/cloud_registered_body" />
+  <arg name="cloud_effected_topic" default="/UAV1/fast_lio/cloud_effected" />
+  <arg name="laser_map_topic" default="/UAV1/fast_lio/Laser_map" />
+  <arg name="path_topic" default="/UAV1/fast_lio/path" />
+  <arg name="world_frame" default="UAV1/camera_init" />
+  <arg name="body_frame" default="UAV1/body" />
 
   <!-- ===============================
        加载 MID-360 雷达配置文件
@@ -96,15 +96,23 @@
   </group>
 
   <!-- ===============================
-       RViz 可视化（当前注释掉）
+       RViz 可视化（由 rviz 参数控制）
        =============================== -->
   
-  <!-- <group if="$(arg rviz)">
+  <group if="$(arg rviz)">
     <node pkg="rviz"
           type="rviz"
           name="rviz"
-          args="-d /home/togan/catkin_ws/src/FAST_LIO/rviz_cfg/loam_livox.rviz" />
-  </group> -->
+          output="screen"
+          args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz -f $(arg world_frame)">
+      <!-- 将 RViz 配置中的全局话题重映射到 UAV1 的 FAST-LIO 输出。 -->
+      <remap from="/cloud_registered" to="$(arg cloud_topic)" />
+      <remap from="/cloud_effected" to="$(arg cloud_effected_topic)" />
+      <remap from="/Laser_map" to="$(arg laser_map_topic)" />
+      <remap from="/Odometry" to="$(arg odom_topic)" />
+      <remap from="/path" to="$(arg path_topic)" />
+    </node>
+  </group>
  
 
 </launch>
