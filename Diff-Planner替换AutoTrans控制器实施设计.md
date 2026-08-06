@@ -186,16 +186,42 @@ fsm_state = MANUAL_CTRL
 
 再次进入 OFFBOARD 后，必须重新按照 CH8 逻辑进入 AUTO_TAKEOFF、AUTO_HOVER 或 CMD_CTRL，不能恢复旧轨迹。
 
-## 9. Launch 和节点替换
+## 9. Launch、节点替换和控制器选择
 
 UAV0 FUEL 规划器、FAST-LIO 和雷达启动方式保持不变，只调整控制链路：
 
 - 保留 FUEL Planner、exploration manager 和 FUEL traj_server；
-- 停止或删除 UAV0 原来的 px4ctrl/cxr_egoctrl 控制器启动节点；
+- 保留 UAV0 原来的 px4ctrl/cxr_egoctrl 源码和原 launch，不删除、不覆盖；
 - 启动 FUEL 专用桥接节点；
 - 启动 AutoTrans MPC，并将其 odom 输入 remap 到 /UAV0/fast_lio/Odometry；
 - AutoTrans 的 MAVROS 输入输出统一使用 /UAV0/mavros/...；
+- 通过统一启动入口互斥选择 simple 或 autotrans；
 - 确认没有第二个节点发布 /UAV0/mavros/setpoint_raw/attitude。
+
+### 9.1 控制器互斥选择
+
+新增的统一启动入口应提供一个控制器选择参数，例如 controller_mode：
+
+~~~text
+controller_mode=simple
+controller_mode=autotrans
+~~~
+
+两种模式的共同部分是雷达、FAST-LIO、FUEL Planner 和 exploration manager。控制器部分必须互斥：
+
+- simple：启动原来的 px4ctrl/cxr_egoctrl；不启动 fuel_autotrans_bridge 和 AutoTrans MPC。
+- autotrans：启动 fuel_autotrans_bridge 和 AutoTrans MPC；不启动 px4ctrl/cxr_egoctrl。
+
+这样可以在保留原控制器的前提下进行 A/B 测试和故障回退。不能同时启动两套控制器，也不能在飞行中直接切换控制器模式。
+
+切换流程必须是：
+
+1. 退出 OFFBOARD，确认飞机由 PX4/遥控器接管；
+2. 落地并完成上锁；
+3. 停止当前控制器和相关桥接节点；
+4. 重新选择 simple 或 autotrans 启动入口；
+5. 检查 /UAV0/mavros/setpoint_raw/attitude 只有一个发布者；
+6. 再根据 CH8/CH6 流程进入自动控制。
 
 目标连接关系：
 
@@ -225,7 +251,7 @@ rosmsg show quadrotor_msgs/PolynomialTraj
 rosmsg show quadrotor_msgs/PolynomialMatrix
 ~~~
 
-确认新增 yaw 字段已生成，且现有 Diff-Planner bridge 仍能编译。
+确认新增 yaw 字段已生成，FUEL bridge、原来的 simple 控制器和 AutoTrans MPC 都能编译。
 
 ### 10.2 B-spline 转换单元测试
 
@@ -275,7 +301,22 @@ CH6 退出 OFFBOARD -> 清空轨迹并回 MANUAL_CTRL
 
 重点查看日志中的状态转换、轨迹 id、yaw 来源和 OFFBOARD 退出清理信息。
 
-### 10.5 首次实飞策略
+### 10.5 控制器互斥验证
+
+分别以 simple 和 autotrans 两种模式启动，在每次启动前确认上一种控制器已经停止：
+
+~~~bash
+rostopic info /UAV0/mavros/setpoint_raw/attitude
+rosnode list | grep -E 'px4ctrl|cxr_egoctrl|mpc_controller|fuel_autotrans_bridge'
+~~~
+
+预期：
+
+- simple 模式只有原来的 px4ctrl/cxr_egoctrl 发布控制输出；
+- autotrans 模式只有 AutoTrans MPC 发布控制输出；
+- 不存在两个控制器同时向同一 setpoint 话题发布的情况。
+
+### 10.6 首次实飞策略
 
 1. 外力补偿先关闭，外力估计只记录。
 2. 先只运行雷达、FAST-LIO、FUEL、bridge 和 AutoTrans，不执行自主探索。
@@ -290,7 +331,9 @@ CH6 退出 OFFBOARD -> 清空轨迹并回 MANUAL_CTRL
 - 位置、速度、加速度和 yaw 使用统一的轨迹时间戳。
 - CH8 三档行为与当前定义一致。
 - CH6 退出 OFFBOARD 后不会继续执行旧轨迹。
-- /UAV0/mavros/setpoint_raw/attitude 只有 AutoTrans 一个发布者。
+- simple 模式下原控制器可以独立运行；
+- autotrans 模式下 /UAV0/mavros/setpoint_raw/attitude 只有 AutoTrans 一个发布者；
+- 两种模式不会同时运行。
 - 旧 Diff-Planner bridge、旧消息和无 yaw 轨迹仍能正常工作。
 - 没有编译错误、消息 MD5 不一致或轨迹 piece 数量不一致。
 
