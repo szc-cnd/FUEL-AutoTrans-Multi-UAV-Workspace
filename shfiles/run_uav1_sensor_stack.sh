@@ -72,7 +72,7 @@ set_interval()
 
     while [ "$attempt" -le 3 ]; do
         echo "[UAV1 MAVROS] 设置 $description: $interval_us us（第 $attempt 次）"
-        if rosrun mavros mavcmd -n /UAV1 long 511 "$message_id" "$interval_us" 0 0 0 0 0; then
+        if rosrun mavros mavcmd -n /UAV1/mavros long 511 "$message_id" "$interval_us" 0 0 0 0 0; then
             return 0
         fi
         attempt=$((attempt + 1))
