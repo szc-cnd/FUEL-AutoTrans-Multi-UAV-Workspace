@@ -3,6 +3,15 @@
   <!-- AutoTrans 状态直接使用 FAST-LIO 雷达 Odometry，位置/速度/姿态均来自该世界系。 -->
   <arg name="odom_topic" default="/Odometry"/>
   <arg name="imu_topic" default="/mavros/imu/data"/>
+  <!-- MAVROS topics and services are supplied by the vehicle integration launch. -->
+  <arg name="state_topic" default="/mavros/state"/>
+  <arg name="extended_state_topic" default="/mavros/extended_state"/>
+  <arg name="rc_topic" default="/mavros/rc/in"/>
+  <arg name="esc_status_topic" default="/mavros/esc_status"/>
+  <arg name="setpoint_topic" default="/mavros/setpoint_raw/attitude"/>
+  <arg name="reboot_service" default="/mavros/cmd/command"/>
+  <arg name="start_trigger_topic" default="/move_base_simple/goal"/>
+  <arg name="cmd_trigger_topic" default="/hummingbird/goal"/>
   <!-- bridge 输出的完整 Diff-Planner 多项式轨迹，保持与 Odometry 同一世界坐标语义。 -->
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <!-- Diff-Planner 原始轨迹；logger 单独记录，不直接送入 MPC。 -->
@@ -34,10 +43,19 @@
     <!-- Body-frame acceleration and angular velocity from MAVROS IMU. -->
     <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
 
+    <!-- Remap absolute MAVROS names in the controller to the selected vehicle. -->
+    <remap from="/mavros/state" to="$(arg state_topic)"/>
+    <remap from="/mavros/extended_state" to="$(arg extended_state_topic)"/>
+    <remap from="/mavros/rc/in" to="$(arg rc_topic)"/>
+    <remap from="/mavros/battery" to="$(arg battery_topic)"/>
+    <remap from="/mavros/esc_status" to="$(arg esc_status_topic)"/>
+    <remap from="/mavros/setpoint_raw/attitude" to="$(arg setpoint_topic)"/>
+    <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
+
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
-    <remap from="~start_trigger" to="/move_base_simple/goal"/>
-    <remap from="~cmd_trigger" to="/hummingbird/goal"/>
+    <remap from="~start_trigger" to="$(arg start_trigger_topic)"/>
+    <remap from="~cmd_trigger" to="$(arg cmd_trigger_topic)"/>
   </node>
 
   <node if="$(arg enable_logger)"
@@ -52,16 +70,16 @@
     <param name="log_rate" value="$(arg log_rate)"/>
     <param name="setpoint_timeout" value="$(arg setpoint_timeout)"/>
     <param name="log_all_rosout" value="$(arg log_all_rosout)"/>
-    <param name="setpoint_topic" value="/mavros/setpoint_raw/attitude"/>
+    <param name="setpoint_topic" value="$(arg setpoint_topic)"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
     <param name="goal_topic" value="$(arg goal_topic)"/>
     <param name="reference_topic" value="$(arg reference_topic)"/>
-    <param name="state_topic" value="/mavros/state"/>
-    <param name="extended_state_topic" value="/mavros/extended_state"/>
-    <param name="rc_topic" value="/mavros/rc/in"/>
+    <param name="state_topic" value="$(arg state_topic)"/>
+    <param name="extended_state_topic" value="$(arg extended_state_topic)"/>
+    <param name="rc_topic" value="$(arg rc_topic)"/>
     <param name="force_topic" value="$(arg force_topic)"/>
     <param name="applied_force_topic" value="$(arg applied_force_topic)"/>
-    <param name="esc_status_topic" value="/mavros/esc_status"/>
+    <param name="esc_status_topic" value="$(arg esc_status_topic)"/>
     <param name="battery_topic" value="$(arg battery_topic)"/>
     <param name="trajectory_topic" value="$(arg trajectory_topic)"/>
     <param name="raw_trajectory_topic" value="$(arg raw_trajectory_topic)"/>
