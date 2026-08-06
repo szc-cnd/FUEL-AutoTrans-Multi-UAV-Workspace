@@ -92,7 +92,7 @@ namespace PayloadMPC
 		{
 		case MANUAL_CTRL:
 		{
-			// CH8 中位请求 AUTO_TAKEOFF；CH6 只由 QGC/PX4 负责切换 OFFBOARD。
+			// CH8 低位请求 AUTO_TAKEOFF；CH6 只由 QGC/PX4 负责切换 OFFBOARD。
 			if (!rc_data.is_takeoff_mode)
 			{
 				takeoff_requested_ = false;
@@ -102,7 +102,7 @@ namespace PayloadMPC
 			{
 				takeoff_request_latched_ = true;
 				takeoff_requested_ = true;
-				ROS_INFO("[MPCctrl] CH8 middle: AUTO_TAKEOFF requested. Waiting for PX4 OFFBOARD and safety checks.");
+				ROS_INFO("[MPCctrl] CH8 low: AUTO_TAKEOFF requested. Waiting for PX4 OFFBOARD and safety checks.");
 			}
 
 			// AUTO_TAKEOFF 只在 PX4 已经进入 OFFBOARD 后启动；CH6 由 PX4/QGC 的 RC_MAP_OFFB_SW 处理。
@@ -125,7 +125,35 @@ namespace PayloadMPC
 				break;
 			}
 
-			if (rc_data.is_command_mode)
+			if (rc_data.is_hover_mode)
+			{
+				if (state_data.current_state.mode != "OFFBOARD")
+				{
+					ROS_INFO_THROTTLE(1.0, "[MPCctrl] AUTO_HOVER waits for PX4 OFFBOARD selected by QGC/CH6.");
+					break;
+				}
+				if (!odom_is_received(now_time))
+				{
+					ROS_ERROR("[MPCctrl] Reject entering hover mode. No odom!");
+					break;
+				}
+				if (odom_data.v.norm() > 3.0)
+				{
+					ROS_ERROR("[MPCctrl] Reject entering hover mode. Odom_Vel=%fm/s.", odom_data.v.norm());
+					break;
+				}
+
+				trajectory_data.exec_traj = 0;
+				update_mode_hover_pose();
+				controller_.resetThrustMapping();
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+
+				fsm_state = AUTO_HOVER;
+				exec_traj_state_ = HOVER;
+				ROS_INFO("\033[32m[MPCctrl] MANUAL_CTRL --> AUTO_HOVER by CH8 middle.\033[0m");
+			}
+			else if (rc_data.is_command_mode)
 			{
 				if (state_data.current_state.mode != "OFFBOARD")
 				{
@@ -175,7 +203,7 @@ namespace PayloadMPC
 				clearAppliedDisturbance();
 				fsm_state = MANUAL_CTRL;
 
-				ROS_WARN("[MPCctrl] AUTO_HOVER --> MANUAL_CTRL by CH8 low or odom timeout.");
+				ROS_WARN("[MPCctrl] AUTO_HOVER --> MANUAL_CTRL by invalid RC input or odom timeout.");
 			}
 			else if (rc_data.enter_land_mode)
 			{
@@ -234,7 +262,7 @@ namespace PayloadMPC
 				fsm_state = MANUAL_CTRL;
 				exec_traj_state_ = HOVER;
 
-				ROS_WARN("[MPCctrl] CMD_CTRL --> MANUAL_CTRL by CH8 low or odom timeout.");
+				ROS_WARN("[MPCctrl] CMD_CTRL --> MANUAL_CTRL by invalid RC input or odom timeout.");
 			}
 			else if (rc_data.enter_land_mode)
 			{
@@ -249,6 +277,17 @@ namespace PayloadMPC
 				fsm_state = AUTO_LAND;
 				ROS_WARN("[MPCctrl] CMD_CTRL --> AUTO_LAND by CH10 rising edge.");
 			}
+			else if (!rc_data.is_command_mode)
+			{
+				// 高位退出命令模式后，低位和中位都回到悬停；已在空中的低位不重复启动起飞。
+				trajectory_data.exec_traj = 0;
+				exec_traj_state_ = HOVER;
+				update_mode_hover_pose();
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				fsm_state = AUTO_HOVER;
+				ROS_INFO("[MPCctrl] CMD_CTRL --> AUTO_HOVER by CH8 low/middle.");
+			}
 			else
 			{
 				CMD_CTRL_process();
@@ -260,7 +299,22 @@ namespace PayloadMPC
 		{
 			if (rc_data.is_manual_mode)
 			{
-				abortAutoTakeoff("CH8_LOW");
+				abortAutoTakeoff("RC_INVALID");
+				break;
+			}
+			if (rc_data.is_hover_mode)
+			{
+				// 起飞过程中切到中位时立即改为当前位姿悬停，避免固定目标造成位置阶跃。
+				clearAppliedDisturbance();
+				takeoff_requested_ = false;
+				takeoff_settle_start_ = ros::Time(0);
+				trajectory_data.exec_traj = 0;
+				exec_traj_state_ = HOVER;
+				update_hover_pose();
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				fsm_state = AUTO_HOVER;
+				ROS_INFO("[MPCctrl] AUTO_TAKEOFF --> AUTO_HOVER by CH8 middle.");
 				break;
 			}
 			if (!rc_data.is_takeoff_mode && !rc_data.is_command_mode)
@@ -346,7 +400,7 @@ namespace PayloadMPC
 				clearAppliedDisturbance();
 				fsm_state = MANUAL_CTRL;
 				exec_traj_state_ = HOVER;
-				ROS_WARN("[MPCctrl] AUTO_LAND --> MANUAL_CTRL by CH8 low or odom timeout.");
+				ROS_WARN("[MPCctrl] AUTO_LAND --> MANUAL_CTRL by invalid RC input or odom timeout.");
 				break;
 			}
 
@@ -367,7 +421,7 @@ namespace PayloadMPC
 				// 方案1：CH10 只控制 AutoTrans 的 AUTO_LAND；不调用 PX4 AUTO.LAND 服务。
 				// 目标降到最低高度后保持该状态，操作者通过 CH8/PX4 安全流程退出 OFFBOARD。
 				ROS_WARN_THROTTLE(1.0,
-					"[MPCctrl] AUTO_LAND reached minimum/timeout; waiting for CH8 low or PX4/QGC landing.");
+					"[MPCctrl] AUTO_LAND reached minimum/timeout; waiting for PX4/QGC landing or safe mode exit.");
 			}
 
 			break;
@@ -1047,9 +1101,10 @@ namespace PayloadMPC
 	{
 		if (rc_data.is_manual_mode)
 		{
-			abortAutoTakeoff("CH8_LOW");
+			abortAutoTakeoff("RC_INVALID");
 			return;
 		}
+		const bool command_requested = rc_data.is_command_mode;
 
 		if (params_.fixed_hover_.enabled)
 		{
@@ -1068,9 +1123,17 @@ namespace PayloadMPC
 		controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 		takeoff_requested_ = false;
 		takeoff_settle_start_ = ros::Time(0);
-		fsm_state = AUTO_HOVER;
+		fsm_state = command_requested ? CMD_CTRL : AUTO_HOVER;
 		exec_traj_state_ = HOVER;
-		ROS_INFO("[MPCctrl] AUTO_TAKEOFF_COMPLETED --> AUTO_HOVER.");
+		if (command_requested)
+		{
+			publish_trigger(odom_data.msg);
+			ROS_INFO("[MPCctrl] AUTO_TAKEOFF_COMPLETED --> CMD_CTRL by CH8 high.");
+		}
+		else
+		{
+			ROS_INFO("[MPCctrl] AUTO_TAKEOFF_COMPLETED --> AUTO_HOVER by CH8 middle/low.");
+		}
 	}
 
 	void MPCFSM::update_hover_pose()

@@ -130,7 +130,7 @@ rc_mode:
     # mode_channel: 7 对应遥控器 CH8，land_channel: 9 对应遥控器 CH10。
     mode_channel: 7
     land_channel: 9
-    # CH8 低位->MANUAL_CTRL，中位->AUTO_TAKEOFF，高位->CMD_CTRL；阈值单位为 PWM/us。
+    # CH8 低位->AUTO_TAKEOFF，中位->AUTO_HOVER，高位->CMD_CTRL；阈值单位为 PWM/us。
     # CH6 不由 AutoTrans 读取，仅由 PX4/QGC 的 RC_MAP_OFFB_SW 负责切换 OFFBOARD。
     low_threshold: 1300
     mid_low_threshold: 1300

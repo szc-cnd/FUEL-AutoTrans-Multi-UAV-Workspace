@@ -75,8 +75,9 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
         return;
     }
 
-    // CH8(数组下标7)按 IPC 风格作为三段主模式通道：
-    // 低位->MANUAL_CTRL，中位->CMD_CTRL，高位->AUTO_HOVER。单位是遥控器 PWM/us。
+    // CH8(数组下标7)作为三段主模式通道：低位起飞、中位悬停、高位命令。
+    // PWM/us 由 mavros_msgs/RCIn.channels 提供；CH6 的 OFFBOARD 仍由 PX4/QGC 管理。
+    // 1700~1800 us 是未定义过渡区，不触发新的自动模式。
     mode = static_cast<double>(msg.channels[mode_channel]);
     check_validity();
     if (!have_init_last_mode)
@@ -85,15 +86,29 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
         last_mode = mode;
     }
 
-    const bool last_command_mode = last_mode > high_threshold;
+    const bool mode_valid = mode >= 800.0 && mode <= 2200.0;
+    if (!mode_valid)
+    {
+        // 异常 PWM 不能触发起飞或自动控制，交给状态机执行安全退出。
+        is_manual_mode = true;
+        is_takeoff_mode = false;
+        is_hover_mode = false;
+        is_command_mode = false;
+        last_mode = mode;
+        return;
+    }
 
-    is_manual_mode = mode < low_threshold;
-    is_takeoff_mode = mode >= mid_low_threshold && mode <= mid_high_threshold;
+    const bool last_command_mode = last_mode > high_threshold;
+    const bool last_hover_mode = last_mode >= mid_low_threshold && last_mode <= mid_high_threshold;
+
+    is_manual_mode = false;
+    is_takeoff_mode = mode < low_threshold;
+    is_hover_mode = mode >= mid_low_threshold && mode <= mid_high_threshold;
     is_command_mode = mode > high_threshold;
-    // AUTO_HOVER 保留为起飞完成后的状态，不由 RC 直接进入。
-    is_hover_mode = false;
+    // 低位触发一次起飞；已经处于自动控制时，低位不会重新启动起飞流程。
+    // 中位是悬停，高位是命令/轨迹控制。
+    enter_hover_mode = !last_hover_mode && is_hover_mode;
     enter_command_mode = !last_command_mode && is_command_mode;
-    enter_hover_mode = false;
 
     // CH6 不由 AutoTrans 读取；OFFBOARD 由 PX4/QGC 的 RC_MAP_OFFB_SW 负责切换。
 

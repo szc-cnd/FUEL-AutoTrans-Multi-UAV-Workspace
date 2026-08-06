@@ -97,7 +97,7 @@ namespace PayloadMPC
 		MultiOptForceEstimator force_estimator_;
 		ros::Time land_start_time_;
 		bool takeoff_requested_{false};
-		// CH8 中位触发一次起飞；失败后必须离开中位再重新进入，避免循环反复重启。
+		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
 		Eigen::Vector3d takeoff_start_pose_{Eigen::Vector3d::Zero()};
 		double takeoff_target_z_{0.0};

@@ -44,7 +44,7 @@ public:
   bool is_hover_mode;
   bool enter_hover_mode;
   bool enter_land_mode;
-  // CH8 中位请求自动起飞；CH6 只由 QGC/PX4 处理 OFFBOARD。
+  // CH8 低位请求 AUTO_TAKEOFF，中位保持 AUTO_HOVER，高位进入 CMD_CTRL；CH6 只由 QGC/PX4 处理 OFFBOARD。
   bool is_takeoff_mode;
   bool toggle_reboot;
 
