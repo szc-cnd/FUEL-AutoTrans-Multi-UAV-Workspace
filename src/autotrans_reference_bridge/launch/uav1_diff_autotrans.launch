@@ -17,14 +17,26 @@
   <arg name="goal_topic" default="/UAV1/planning/goal"/>
   <arg name="trajectory_timeout" default="0.5"/>
   <arg name="enable_logger" default="true"/>
+  <arg name="enable_planner" default="true"/>
+  <arg name="enable_controller" default="true"/>
+  <arg name="enable_rviz" default="true"/>
+  <arg name="rviz_goal_topic" default="/UAV1/planning/goal"/>
 
   <!-- Diff-Planner 继续输出完整 PolyTraj；不启动旧 px4ctrl。 -->
-  <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch">
+  <include if="$(arg enable_planner)" file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch">
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="cloud_topic" value="$(arg cloud_topic)"/>
   </include>
 
-  <node pkg="autotrans_reference_bridge" type="reference_bridge_node"
+  <!-- 使用与 UAV0 规划器相同的 FUEL traj.rviz 配置；RViz 在规划器入口启动。 -->
+  <group if="$(arg enable_planner)">
+    <node if="$(arg enable_rviz)" name="UAV1_rviz" pkg="rviz" type="rviz" output="screen"
+          args="-d $(find plan_manage)/config/traj.rviz" required="true">
+      <remap from="/move_base_simple/goal" to="$(arg rviz_goal_topic)"/>
+    </node>
+  </group>
+
+  <node if="$(arg enable_controller)" pkg="autotrans_reference_bridge" type="reference_bridge_node"
         name="autotrans_reference_bridge" output="screen">
     <param name="input_topic" value="/drone_1_planning/trajectory"/>
     <param name="output_topic" value="$(arg trajectory_topic)"/>
@@ -33,7 +45,7 @@
   </node>
 
   <!-- AutoTrans 直接订阅 FAST-LIO /Odometry，只发布唯一的 attitude setpoint。 -->
-  <include file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
+  <include if="$(arg enable_controller)" file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>
     <arg name="imu_topic" value="$(arg imu_topic)"/>

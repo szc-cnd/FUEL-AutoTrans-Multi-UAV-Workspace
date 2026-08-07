@@ -42,18 +42,11 @@ cd ~/match_ws
 source devel/setup.bash
 roslaunch fast_lio mapping_mid360.launch \
   vehicle_ns:=UAV0 \
-  lidar_topic:=/UAV0/livox/lidar \
-  imu_topic:=/UAV0/livox/imu \
-  odom_topic:=/UAV0/fast_lio/Odometry \
-  cloud_topic:=/UAV0/fast_lio/cloud_registered \
-  cloud_body_topic:=/UAV0/fast_lio/cloud_registered_body \
-  cloud_effected_topic:=/UAV0/fast_lio/cloud_effected \
-  laser_map_topic:=/UAV0/fast_lio/Laser_map \
-  path_topic:=/UAV0/fast_lio/path \
-  world_frame:=UAV0/camera_init \
-  body_frame:=UAV0/body \
-  rviz:=true
+  rviz:=false
 ```
+
+mapping_mid360.launch 会根据不带前导斜杠的 vehicle_ns:=UAV0 自动生成雷达输入、FAST-LIO 输出、坐标系和话题。
+RViz 不在 FAST-LIO 启动阶段运行，由规划器 launch 使用与 UAV0 一致的配置启动。
 
 ### 终端 4：将 FAST-LIO 位姿发送给 UAV0 飞控
 
@@ -166,46 +159,35 @@ rosrun exploration_control cxr_egoctrl_v1 \
   _planner_enable_height:=0.5
 ```
 
-### 终端 11：启动 UAV1 后机规划器、桥接和 AutoTrans MPC
+### 终端 11：启动 UAV1 后机规划器和 RViz
+
+规划器与控制器分开启动。该终端只启动 UAV1 Diff-Planner 和 RViz，RViz 使用与 UAV0 前机规划器相同的 FUEL traj.rviz 配置。
 
 ```bash
 cd ~/match_ws
 source devel/setup.bash
-roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch
+roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
+  enable_planner:=true \
+  enable_controller:=false \
+  enable_rviz:=true
 ```
 
-该 launch 同时启动：
+主要输出：`/drone_1_planning/trajectory`，RViz 目标点使用 `/UAV1/planning/goal`。
 
-```text
-Diff-Planner
-    -> autotrans_reference_bridge
-    -> AutoTrans MPC
+### 终端 12：启动 UAV1 桥接和 AutoTrans 控制器
+
+该终端不启动规划器，只启动轨迹桥接节点和 AutoTrans MPC。
+
+```bash
+cd ~/match_ws
+source devel/setup.bash
+roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
+  enable_planner:=false \
+  enable_controller:=true \
+  enable_rviz:=false
 ```
 
-UAV1 轨迹链路为：
-
-```text
-/UAV1/fast_lio/Odometry
-/UAV1/fast_lio/cloud_registered
-        |
-        v
-UAV1 Diff-Planner
-        |
-/drone_1_planning/trajectory
-        |
-        v
-autotrans_reference_bridge
-        |
-/drone_1_planning/autotrans_trajectory
-        |
-        v
-AutoTrans MPC
-        |
-/UAV1/mavros/setpoint_raw/attitude
-```
-
-后机 Diff-Planner 使用 UAV1 自身的 FAST-LIO 里程计和点云，AutoTrans 控制器使用
-UAV1 命名空间下的 IMU、状态、RC、电池、ESC 和 MAVROS 输出接口。
+数据链路：`/drone_1_planning/trajectory` -> `autotrans_reference_bridge` -> `/drone_1_planning/autotrans_trajectory` -> AutoTrans MPC -> `/UAV1/mavros/setpoint_raw/attitude`。
 
 ## 五、启动后的必要检查
 

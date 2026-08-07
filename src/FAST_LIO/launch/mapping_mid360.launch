@@ -8,21 +8,23 @@
   <!-- 实机默认使用系统时间；仿真/rosbag 需要时由上层 launch 覆盖。 -->
   <param name="use_sim_time" value="false" />
 
-  <!-- 是否启动 RViz（当前未启用，对应下面被注释的 rviz 节点） -->
-  <arg name="rviz" default="true" />
-  <arg name="rviz_goal_topic" default="/move_base_simple/goal" />
-  <!-- 单机实机默认直接连接 livox_ros_driver2 的 CustomMsg 和 IMU 话题。 -->
+  <!-- 是否启动 RViz；目标点默认跟随 vehicle_ns 命名空间。 -->
+  <arg name="rviz" default="false" />
   <arg name="vehicle_ns" default="UAV1" />
-  <arg name="lidar_topic" default="/UAV1/livox/lidar" />
-  <arg name="imu_topic" default="/UAV1/livox/imu" />
-  <arg name="odom_topic" default="/UAV1/fast_lio/Odometry" />
-  <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered" />
-  <arg name="cloud_body_topic" default="/UAV1/fast_lio/cloud_registered_body" />
-  <arg name="cloud_effected_topic" default="/UAV1/fast_lio/cloud_effected" />
-  <arg name="laser_map_topic" default="/UAV1/fast_lio/Laser_map" />
-  <arg name="path_topic" default="/UAV1/fast_lio/path" />
-  <arg name="world_frame" default="UAV1/camera_init" />
-  <arg name="body_frame" default="UAV1/body" />
+  <!-- vehicle_ns 使用不带前导斜杠的名称，例如 UAV0 或 UAV1。 -->
+  <arg name="rviz_goal_topic" default="/$(arg vehicle_ns)/planning/goal" />
+  <!-- 传感器输入、FAST-LIO 输出和坐标系均由 vehicle_ns 自动生成。 -->
+  <!-- 这些参数仍可由双机仿真等上层 launch 显式覆盖。 -->
+  <arg name="lidar_topic" default="/$(arg vehicle_ns)/livox/lidar" />
+  <arg name="imu_topic" default="/$(arg vehicle_ns)/livox/imu" />
+  <arg name="odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odometry" />
+  <arg name="cloud_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered" />
+  <arg name="cloud_body_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered_body" />
+  <arg name="cloud_effected_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_effected" />
+  <arg name="laser_map_topic" default="/$(arg vehicle_ns)/fast_lio/Laser_map" />
+  <arg name="path_topic" default="/$(arg vehicle_ns)/fast_lio/path" />
+  <arg name="world_frame" default="$(arg vehicle_ns)/camera_init" />
+  <arg name="body_frame" default="$(arg vehicle_ns)/body" />
 
   <!-- ===============================
        加载 MID-360 雷达配置文件
@@ -106,7 +108,7 @@
           name="rviz"
           output="screen"
           args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz -f $(arg world_frame)">
-      <!-- 将 RViz 配置中的全局话题重映射到 UAV1 的 FAST-LIO 输出。 -->
+      <!-- 将 RViz 配置中的全局话题重映射到 当前 vehicle_ns 的 FAST-LIO 输出。 -->
       <remap from="/cloud_registered" to="$(arg cloud_topic)" />
       <remap from="/cloud_effected" to="$(arg cloud_effected_topic)" />
       <remap from="/Laser_map" to="$(arg laser_map_topic)" />
