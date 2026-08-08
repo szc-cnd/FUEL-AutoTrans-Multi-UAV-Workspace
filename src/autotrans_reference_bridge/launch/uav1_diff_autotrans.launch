@@ -5,12 +5,16 @@
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <arg name="frame_id" default="UAV1/camera_init"/>
   <arg name="imu_topic" default="/UAV1/mavros/imu/data"/>
+  <!-- ?????? UAV1 ? MAVROS ????????????? MAVROS ??? -->
+  <arg name="force_attitude_odom_topic" default="/UAV1/mavros/local_position/odom"/>
   <arg name="state_topic" default="/UAV1/mavros/state"/>
   <arg name="extended_state_topic" default="/UAV1/mavros/extended_state"/>
   <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
   <arg name="battery_topic" default="/UAV1/mavros/battery"/>
   <arg name="esc_status_topic" default="/UAV1/mavros/esc_status"/>
   <arg name="setpoint_topic" default="/UAV1/mavros/setpoint_raw/attitude"/>
+  <!-- AUTO.LAND ??????? UAV1 ? MAVROS ??? -->
+  <arg name="set_mode_service" default="/UAV1/mavros/set_mode"/>
   <arg name="reboot_service" default="/UAV1/mavros/cmd/command"/>
   <arg name="start_trigger_topic" default="/UAV1/planning/goal"/>
   <arg name="cmd_trigger_topic" default="/UAV1/hummingbird/goal"/>
@@ -49,12 +53,14 @@
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>
     <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="force_attitude_odom_topic" value="$(arg force_attitude_odom_topic)"/>
     <arg name="state_topic" value="$(arg state_topic)"/>
     <arg name="extended_state_topic" value="$(arg extended_state_topic)"/>
     <arg name="rc_topic" value="$(arg rc_topic)"/>
     <arg name="battery_topic" value="$(arg battery_topic)"/>
     <arg name="esc_status_topic" value="$(arg esc_status_topic)"/>
     <arg name="setpoint_topic" value="$(arg setpoint_topic)"/>
+    <arg name="set_mode_service" value="$(arg set_mode_service)"/>
     <arg name="reboot_service" value="$(arg reboot_service)"/>
     <arg name="start_trigger_topic" value="$(arg start_trigger_topic)"/>
     <arg name="cmd_trigger_topic" value="$(arg cmd_trigger_topic)"/>
