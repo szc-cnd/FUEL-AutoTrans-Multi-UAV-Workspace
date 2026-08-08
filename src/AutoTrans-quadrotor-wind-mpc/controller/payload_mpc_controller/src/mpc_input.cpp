@@ -181,7 +181,7 @@ void RC_Data_t::check_validity()
     }
     else
     {
-        ROS_ERROR("[RC] CH8 信号无效，保持安全状态：模式 PWM=%.1f。", mode);
+        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：模式 PWM=%.1f。", mode);
     }
 }
 
@@ -291,17 +291,17 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
     if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
     {
         // exec_traj = false;
-        ROS_INFO("[TRAJ] 正在加载规划轨迹。");
+        ROS_INFO("[TRAJ] 正在加载规划轨迹：id=%u。", traj.trajectory_id);
         if ((int)traj.trajectory_id < 1)
         {
-            ROS_ERROR("[TRAJ] 轨迹数据无效：trajectory_id 必须从 1 开始。");
+            ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，trajectory_id 必须从 1 开始。", traj.trajectory_id);
             return;
         }
         // if ((int)traj.trajectory_id > 1 && (int)traj.trajectory_id < _traj_id) return ;
 
         if (traj.header.stamp.isZero() || traj.trajectory.empty())
         {
-            ROS_ERROR("[TRAJ] 轨迹数据无效：缺少起始时间或位置分段。");
+            ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，缺少起始时间或位置分段。", traj.trajectory_id);
             return;
         }
 
@@ -315,14 +315,14 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
             if (piece.num_dim != 3 || piece.duration <= 0.0 ||
                 piece.data.size() != expected_size || !std::isfinite(piece.duration))
             {
-            ROS_ERROR("[TRAJ] 轨迹数据无效：位置分段维度或持续时间错误。");
+            ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，位置分段维度或持续时间错误。", traj.trajectory_id);
                 return;
             }
             Eigen::Map<const Eigen::MatrixXd> coefficient_matrix(
                 piece.data.data(), piece.num_dim, piece.num_order + 1);
             if (!coefficient_matrix.allFinite())
             {
-                ROS_ERROR("[TRAJ] 轨迹数据无效：位置多项式系数包含非有限值。");
+                ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，位置多项式系数包含非有限值。", traj.trajectory_id);
                 return;
             }
             traj_data.traj.emplace_back(piece.duration, coefficient_matrix);
@@ -333,7 +333,7 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
         {
             if (traj.yaw_trajectory.size() != traj.trajectory.size())
             {
-                ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 分段数量与位置分段数量不一致。");
+                ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，yaw 分段数量与位置分段数量不一致。", traj.trajectory_id);
                 return;
             }
             traj_data.has_yaw = true;
@@ -347,14 +347,14 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
                     std::fabs(yaw_piece.duration - traj.trajectory[i].duration) > 1.0e-6 ||
                     yaw_piece.data.size() != expected_size)
                 {
-                    ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 分段无效或持续时间不匹配。");
+                    ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，yaw 分段无效或持续时间不匹配。", traj.trajectory_id);
                     return;
                 }
                 Eigen::Map<const Eigen::MatrixXd> yaw_coefficients(
                     yaw_piece.data.data(), yaw_piece.num_dim, yaw_piece.num_order + 1);
                 if (!yaw_coefficients.allFinite())
                 {
-                    ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 多项式系数包含非有限值。");
+                    ROS_ERROR_THROTTLE(1.0, "[TRAJ] 轨迹数据无效：id=%u，yaw 多项式系数包含非有限值。", traj.trajectory_id);
                     return;
                 }
                 traj_data.yaw_traj.emplace_back(yaw_piece.duration, yaw_coefficients);
@@ -454,7 +454,14 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         vlotage += pMsg->cell_voltage[i];
     }
-    volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
+    // 首个有效样本直接初始化，避免从 0 V 低通收敛产生伪启动电压；后续再进行平滑。
+    if (std::isfinite(vlotage) && vlotage > 0.0)
+    {
+        if (!std::isfinite(volt) || volt <= 0.0)
+            volt = vlotage;
+        else
+            volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
+    }
 
     // volt = 0.8 * volt + 0.2 * pMsg->voltage; // Naive LPF
     percentage = pMsg->percentage;

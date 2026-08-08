@@ -200,16 +200,16 @@ namespace PayloadMPC
 				{
 					const char *reason_zh = "安全条件";
 					if (std::strcmp(reason, "OFFBOARD") == 0) reason_zh = "PX4 进入 OFFBOARD";
-					else if (std::strcmp(reason, "SENSOR_STALE") == 0) reason_zh = "定位、IMU、电池或 RPM 数据有效";
-					else if (std::strcmp(reason, "SENSOR_INVALID") == 0) reason_zh = "传感器数据有效";
-					else if (std::strcmp(reason, "DISARMED") == 0) reason_zh = "飞控已解锁";
-					else if (std::strcmp(reason, "NOT_ON_GROUND") == 0) reason_zh = "PX4 确认在地面";
-					else if (std::strcmp(reason, "SPEED_UNSAFE") == 0) reason_zh = "定位速度回到安全范围";
-					else if (std::strcmp(reason, "RC_STALE") == 0) reason_zh = "遥控器数据有效";
-					else if (std::strcmp(reason, "STATE_STALE") == 0) reason_zh = "PX4 状态数据有效";
+					else if (std::strcmp(reason, "SENSOR_STALE") == 0) reason_zh = "定位、IMU、电池或 RPM 数据超时";
+					else if (std::strcmp(reason, "SENSOR_INVALID") == 0) reason_zh = "传感器数据无效";
+					else if (std::strcmp(reason, "DISARMED") == 0) reason_zh = "飞控尚未解锁";
+					else if (std::strcmp(reason, "NOT_ON_GROUND") == 0) reason_zh = "PX4 尚未确认在地面";
+					else if (std::strcmp(reason, "SPEED_UNSAFE") == 0) reason_zh = "定位速度超过安全阈值";
+					else if (std::strcmp(reason, "RC_STALE") == 0) reason_zh = "遥控器数据超时";
+					else if (std::strcmp(reason, "STATE_STALE") == 0) reason_zh = "PX4 状态数据超时";
 					else if (std::strcmp(reason, "TARGET_NOT_ABOVE_UAV") == 0) reason_zh = "起飞目标高度高于当前高度";
-					else if (std::strcmp(reason, "INITIAL_XY_TOO_FAR") == 0) reason_zh = "当前位置接近固定悬停点";
-					else if (std::strcmp(reason, "DISABLED") == 0) reason_zh = "起飞功能已启用";
+					else if (std::strcmp(reason, "INITIAL_XY_TOO_FAR") == 0) reason_zh = "当前位置距离固定悬停点过远";
+					else if (std::strcmp(reason, "DISABLED") == 0) reason_zh = "起飞功能已关闭";
 					ROS_INFO_THROTTLE(1.0, "[AUTO_TAKEOFF] 等待%s。", reason_zh);
 					break;
 				}
@@ -226,12 +226,12 @@ namespace PayloadMPC
 				}
 				if (!odom_is_received(now_time))
 				{
-					ROS_ERROR("[AUTO_HOVER] 拒绝进入悬停：里程计无效。");
+					ROS_WARN_THROTTLE(1.0, "[AUTO_HOVER] 暂不进入悬停：里程计无效。");
 					break;
 				}
 				if (odom_data.v.norm() > 3.0)
 				{
-					ROS_ERROR("[AUTO_HOVER] 拒绝进入悬停：定位速度异常 %.3f m/s。", odom_data.v.norm());
+					ROS_WARN_THROTTLE(1.0, "[AUTO_HOVER] 暂不进入悬停：定位速度超过阈值，当前 %.3f m/s。", odom_data.v.norm());
 					break;
 				}
 
@@ -254,12 +254,12 @@ namespace PayloadMPC
 				}
 				if (!odom_is_received(now_time))
 				{
-					ROS_ERROR("[CMD_CTRL] 拒绝进入命令模式：里程计无效。");
+					ROS_WARN_THROTTLE(1.0, "[CMD_CTRL] 暂不进入命令模式：里程计无效。");
 					break;
 				}
 				if (odom_data.v.norm() > 3.0)
 				{
-					ROS_ERROR("[CMD_CTRL] 拒绝进入命令模式：定位速度异常 %.3f m/s。", odom_data.v.norm());
+					ROS_WARN_THROTTLE(1.0, "[CMD_CTRL] 暂不进入命令模式：定位速度超过阈值，当前 %.3f m/s。", odom_data.v.norm());
 					break;
 				}
 
@@ -647,17 +647,14 @@ namespace PayloadMPC
 						entry_command_last_update_time_ = now_time;
 						entry_command_active_ = true;
 						entry_command_reached_ = false;
-						ROS_INFO("[CMD] 收到新目标：位置=(%.2f, %.2f, %.2f) m。",
+						ROS_INFO("[CMD] 收到 PositionCommand，开始跟踪：位置=(%.2f, %.2f, %.2f) m，忽略规划器 yaw，锁定当前航向=%.2f rad，最大速度=%.2f m/s。",
 							latched_entry_command_.p.x(), latched_entry_command_.p.y(),
-							latched_entry_command_.p.z());
-						ROS_INFO("[CMD] 收到 PositionCommand，开始跟踪目标。");
-						ROS_INFO("[CMD] 忽略规划器 yaw，保持当前航向 %.2f rad。", entry_command_yaw_);
-						ROS_INFO("[CMD] 入口目标限速：最大速度=%.2f m/s。",
+							latched_entry_command_.p.z(), entry_command_yaw_,
 							params_.entry_command_.max_velocity);
 					}
 					else
 					{
-						ROS_ERROR("[CMD] 收到无效目标，继续使用上一目标。");
+						ROS_WARN_THROTTLE(1.0, "[CMD] 收到无效目标，继续使用上一目标。");
 					}
 				}
 
@@ -683,7 +680,7 @@ namespace PayloadMPC
 						entry_reference.velocity.norm() <= 0.05)
 					{
 						entry_command_reached_ = true;
-						ROS_INFO("[CMD] 已到达入口目标，保持当前位置等待新目标。");
+						ROS_INFO("[CMD] 已到达入口目标，保持当前位置，等待新的 PositionCommand 或 PolynomialTraj。");
 					}
 					if (!controller_.setPositionCommandReference(
 						entry_reference.position, entry_reference.velocity,
@@ -705,6 +702,8 @@ namespace PayloadMPC
 				{
 					controller_.setHoverReference(hover_pose_, hover_yaw_);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+					ROS_INFO_THROTTLE(1.0,
+						"[CMD_CTRL] 当前保持悬停，等待 PositionCommand 或 PolynomialTraj。");
 				}
 			}
 		}
