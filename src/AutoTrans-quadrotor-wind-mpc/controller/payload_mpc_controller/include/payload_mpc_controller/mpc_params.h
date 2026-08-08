@@ -83,6 +83,8 @@ namespace PayloadMPC
 		struct MsgTimeout
 		{
 			double odom;
+			// /mavros/local_position/odom 姿态消息超时阈值，单位 s；超时后外力估计清零。
+			double force_attitude_odom;
 			double rc;
 			double cmd;
 			double imu;
@@ -426,6 +428,7 @@ namespace PayloadMPC
 			read_essential_param(nh, "low_voltage", low_voltage_);
 
 			read_essential_param(nh, "msg_timeout/odom", msg_timeout_.odom);
+			read_essential_param(nh, "msg_timeout/force_attitude_odom", msg_timeout_.force_attitude_odom);
 			read_essential_param(nh, "msg_timeout/rc", msg_timeout_.rc);
 			read_essential_param(nh, "msg_timeout/cmd", msg_timeout_.cmd);
 			read_essential_param(nh, "msg_timeout/imu", msg_timeout_.imu);
@@ -433,11 +436,13 @@ namespace PayloadMPC
 			read_essential_param(nh, "msg_timeout/rpm", msg_timeout_.rpm);
 			read_essential_param(nh, "msg_timeout/state", msg_timeout_.state);
 			read_essential_param(nh, "msg_timeout/extended_state", msg_timeout_.extended_state);
-			if (!std::isfinite(msg_timeout_.odom) || !std::isfinite(msg_timeout_.rc) ||
+			if (!std::isfinite(msg_timeout_.odom) || !std::isfinite(msg_timeout_.force_attitude_odom) ||
+				!std::isfinite(msg_timeout_.rc) ||
 				!std::isfinite(msg_timeout_.cmd) || !std::isfinite(msg_timeout_.imu) ||
 				!std::isfinite(msg_timeout_.bat) || !std::isfinite(msg_timeout_.rpm) ||
 				!std::isfinite(msg_timeout_.state) || !std::isfinite(msg_timeout_.extended_state) ||
-				msg_timeout_.odom <= 0.0 || msg_timeout_.rc <= 0.0 ||
+				msg_timeout_.odom <= 0.0 || msg_timeout_.force_attitude_odom <= 0.0 ||
+				msg_timeout_.rc <= 0.0 ||
 				msg_timeout_.cmd <= 0.0 || msg_timeout_.imu <= 0.0 ||
 				msg_timeout_.bat <= 0.0 || msg_timeout_.rpm <= 0.0 ||
 				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0)

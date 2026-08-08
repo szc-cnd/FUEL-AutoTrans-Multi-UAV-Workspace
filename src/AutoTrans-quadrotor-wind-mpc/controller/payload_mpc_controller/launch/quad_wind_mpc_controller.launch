@@ -2,6 +2,8 @@
   <!-- Minimal real-quadrotor controller launch: PX4 EKF odom + MAVROS IMU. -->
   <!-- AutoTrans 状态直接使用 FAST-LIO 雷达 Odometry，位置/速度/姿态均来自该世界系。 -->
   <arg name="odom_topic" default="/Odometry"/>
+  <!-- 外力估计单独使用 MAVROS 融合姿态；不替换 NMPC 的 FAST-LIO 状态。 -->
+  <arg name="force_attitude_odom_topic" default="/mavros/local_position/odom"/>
   <arg name="imu_topic" default="/mavros/imu/data"/>
   <!-- MAVROS topics and services are supplied by the vehicle integration launch. -->
   <arg name="state_topic" default="/mavros/state"/>
@@ -9,6 +11,7 @@
   <arg name="rc_topic" default="/mavros/rc/in"/>
   <arg name="esc_status_topic" default="/mavros/esc_status"/>
   <arg name="setpoint_topic" default="/mavros/setpoint_raw/attitude"/>
+  <arg name="set_mode_service" default="/mavros/set_mode"/>
   <arg name="reboot_service" default="/mavros/cmd/command"/>
   <arg name="start_trigger_topic" default="/move_base_simple/goal"/>
   <arg name="cmd_trigger_topic" default="/hummingbird/goal"/>
@@ -40,6 +43,8 @@
 
     <!-- World-frame position, velocity, and attitude estimate from PX4 EKF. -->
     <remap from="~odom" to="$(arg odom_topic)"/>
+    <!-- Only the force estimator consumes this MAVROS fused attitude. -->
+    <remap from="~force_attitude_odom" to="$(arg force_attitude_odom_topic)"/>
     <!-- Body-frame acceleration and angular velocity from MAVROS IMU. -->
     <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
 
@@ -50,6 +55,7 @@
     <remap from="/mavros/battery" to="$(arg battery_topic)"/>
     <remap from="/mavros/esc_status" to="$(arg esc_status_topic)"/>
     <remap from="/mavros/setpoint_raw/attitude" to="$(arg setpoint_topic)"/>
+    <remap from="/mavros/set_mode" to="$(arg set_mode_service)"/>
     <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
 
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->

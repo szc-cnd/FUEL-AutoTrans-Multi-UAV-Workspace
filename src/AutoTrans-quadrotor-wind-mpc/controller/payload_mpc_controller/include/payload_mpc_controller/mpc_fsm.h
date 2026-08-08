@@ -11,6 +11,7 @@
 #include "mpc_input.h"
 #include "mpc_controller.h"
 #include "polynomial_trajectory.h"
+#include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/CommandLong.h>
 #include <mavros_msgs/AttitudeTarget.h>
 #include <mavros_msgs/ESCStatus.h>
@@ -28,6 +29,9 @@ namespace PayloadMPC
 		State_Data_t state_data;
 		ExtendedState_Data_t extended_state_data;
 		Odom_Data_t odom_data;
+		// 外力估计专用的 MAVROS 融合里程计；只提供机体系到本地 ENU 世界系的姿态。
+		// NMPC 的位置、速度和姿态仍使用 odom_data（FAST-LIO /Odometry）。
+		Odom_Data_t force_attitude_odom_data;
 		Imu_Data_t imu_data;
 		Command_Data_t cmd_data;
 		Battery_Data_t bat_data;
@@ -42,6 +46,7 @@ namespace PayloadMPC
 		ros::Publisher pub_force_marker_, pub_force_, pub_force_applied_;
 
 		ros::Publisher debug_pub; // debug
+		ros::ServiceClient set_FCU_mode_srv;
 		ros::ServiceClient reboot_FCU_srv;
 
 		ros::Publisher des_yaw_pub;
@@ -59,7 +64,7 @@ namespace PayloadMPC
 			AUTO_HOVER,		 // 自动悬停：发布 body_rate(rad/s) + MAVROS 归一化 thrust。
 			CMD_CTRL,		 // 指令/轨迹控制：跟踪轨迹或悬停参考，并持续发布 MAVROS setpoint。
 			AUTO_TAKEOFF,	 // 自动起飞：等待 PX4 已进入 OFFBOARD 后平滑爬升，不自动解锁或切 OFFBOARD。
-			AUTO_LAND,		 // 自动降落：内部逐步降低悬停高度，不主动调用 PX4 AUTO.LAND 服务。
+			AUTO_LAND,		 // 自动降落：内部逐步降低悬停高度，末端请求 PX4 AUTO.LAND。
 		};
 
 		enum Exec_Traj_State_t
@@ -96,6 +101,7 @@ namespace PayloadMPC
 		MpcController &controller_;
 		MultiOptForceEstimator force_estimator_;
 		ros::Time land_start_time_;
+		bool auto_land_lockout_{false};
 		bool takeoff_requested_{false};
 		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
@@ -159,6 +165,7 @@ namespace PayloadMPC
 
 		void setEstimateState(const Odom_Data_t &odom_est_state);
 		void setForceEstimation();
+		void clearForceObserverState();
 		DisturbanceGateReason disturbanceCompensationGate(const ros::Time &now) const;
 		void reportDisturbanceGate(DisturbanceGateReason reason);
 		void clearAppliedDisturbance();
@@ -185,6 +192,7 @@ namespace PayloadMPC
 		void abortAutoTakeoff(const char *reason);
 		void completeAutoTakeoff();
 		void publish_trigger(const nav_msgs::Odometry &odom_msg);
+		bool request_px4_auto_land();
 		void reboot_FCU();
 	};
 

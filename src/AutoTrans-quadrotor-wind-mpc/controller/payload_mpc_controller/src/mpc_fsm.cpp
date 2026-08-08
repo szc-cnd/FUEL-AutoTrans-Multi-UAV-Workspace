@@ -92,6 +92,21 @@ namespace PayloadMPC
 		{
 		case MANUAL_CTRL:
 		{
+			if (auto_land_lockout_)
+			{
+				if (rc_data.is_manual_mode)
+				{
+					// PX4 AUTO.LAND 请求后要求 CH8 回低位，确认操作者已退出自动降落请求。
+					auto_land_lockout_ = false;
+					ROS_WARN("[MPCctrl] PX4 AUTO.LAND lockout released by CH8 low.");
+				}
+				else
+				{
+					ROS_WARN_THROTTLE(1.0, "[MPCctrl] Waiting CH8 low to release PX4 AUTO.LAND lockout.");
+					break;
+				}
+			}
+
 			// CH8 低位请求 AUTO_TAKEOFF；CH6 只由 QGC/PX4 负责切换 OFFBOARD。
 			if (!rc_data.is_takeoff_mode)
 			{
@@ -418,10 +433,13 @@ namespace PayloadMPC
 								 (now_time - land_start_time_).toSec() > params_.land_.timeout;
 			if (low_enough || timeout)
 			{
-				// 方案1：CH10 只控制 AutoTrans 的 AUTO_LAND；不调用 PX4 AUTO.LAND 服务。
-				// 目标降到最低高度后保持该状态，操作者通过 CH8/PX4 安全流程退出 OFFBOARD。
-				ROS_WARN_THROTTLE(1.0,
-					"[MPCctrl] AUTO_LAND reached minimum/timeout; waiting for PX4/QGC landing or safe mode exit.");
+				if (request_px4_auto_land())
+				{
+					fsm_state = MANUAL_CTRL;
+					exec_traj_state_ = HOVER;
+					auto_land_lockout_ = true;
+					ROS_WARN("[MPCctrl] PX4 AUTO.LAND accepted. Switch AutoTrans FSM to MANUAL_CTRL.");
+				}
 			}
 
 			break;
@@ -613,7 +631,15 @@ namespace PayloadMPC
 		force_observer_input_valid_ = false;
 		if (!params_.force_estimator_param_.enable_force_estimation)
 		{
-			force_estimator_.reset();
+			clearForceObserverState();
+			return;
+		}
+
+		// 起飞阶段的加速度主要来自起飞瞬态，不作为外力 f_Q 估计；
+		// 基础 NMPC 仍继续运行，进入悬停/命令模式后再重新收集样本。
+		if (fsm_state == AUTO_TAKEOFF)
+		{
+			clearForceObserverState();
 			return;
 		}
 
@@ -627,7 +653,7 @@ namespace PayloadMPC
 			if (in_air && !was_in_air_)
 			{
 				// 地面支持力不属于自由飞行动力学；离地时清空地面窗口，仅保留新的空中样本。
-				force_estimator_.reset();
+				clearForceObserverState();
 				airborne_since_ = now;
 				ROS_INFO("[MPC CTRL] IN_AIR detected. Reset force-estimator window before compensation.");
 			}
@@ -639,26 +665,32 @@ namespace PayloadMPC
 		}
 
 		const bool input_fresh = !imu_data.rcv_stamp.isZero() && !odom_data.rcv_stamp.isZero() &&
+			!force_attitude_odom_data.rcv_stamp.isZero() &&
 			!rpm_data.rcv_stamp.isZero() &&
 			(now - imu_data.rcv_stamp).toSec() < params_.msg_timeout_.imu &&
 			(now - odom_data.rcv_stamp).toSec() < params_.msg_timeout_.odom &&
+			(now - force_attitude_odom_data.rcv_stamp).toSec() < params_.msg_timeout_.force_attitude_odom &&
 			(now - rpm_data.rcv_stamp).toSec() < params_.msg_timeout_.rpm;
-		const bool input_finite = imu_data.filtered_a.allFinite() && odom_data.q.coeffs().allFinite() &&
-			rpm_data.filtered_rpm.allFinite() && odom_data.q.norm() > 1.0e-6;
+		const bool input_finite = imu_data.filtered_a.allFinite() &&
+			force_attitude_odom_data.q.coeffs().allFinite() &&
+			rpm_data.filtered_rpm.allFinite() && force_attitude_odom_data.q.norm() > 1.0e-6;
 		if (!input_fresh || !input_finite)
 		{
 			ROS_ERROR_THROTTLE(1.0, "[MPC CTRL] Force-estimator input stale or non-finite.");
-			force_estimator_.reset();
+			clearForceObserverState();
 			return;
 		}
 
 		if (rpm_data.filtered_rpm.minCoeff() < params_.force_estimator_param_.min_valid_rpm)
 		{
 			ROS_ERROR_THROTTLE(1.0, "[MPC CTRL] RPM below force_estimator/min_valid_rpm.");
-			force_estimator_.reset();
+			clearForceObserverState();
 			return;
 		}
-		force_estimator_.setSystemState(imu_data.filtered_a, odom_data.q, rpm_data.filtered_rpm);
+		// 加速度来自 MAVROS IMU 机体系；姿态来自 MAVROS 融合里程计；
+		// NMPC 的位置、速度和控制姿态仍来自 FAST-LIO /Odometry。
+		force_estimator_.setSystemState(
+			imu_data.filtered_a, force_attitude_odom_data.q, rpm_data.filtered_rpm);
 		force_observer_input_valid_ = true;
 	}
 
@@ -753,12 +785,15 @@ namespace PayloadMPC
 			rpm_data.filtered_rpm.minCoeff() < params_.force_estimator_param_.min_valid_rpm)
 			return DisturbanceGateReason::RPM_INVALID;
 		const bool sensor_fresh = !imu_data.rcv_stamp.isZero() && !odom_data.rcv_stamp.isZero() &&
+			!force_attitude_odom_data.rcv_stamp.isZero() &&
 			!rpm_data.rcv_stamp.isZero() &&
 			(now - imu_data.rcv_stamp).toSec() < params_.msg_timeout_.imu &&
 			(now - odom_data.rcv_stamp).toSec() < params_.msg_timeout_.odom &&
+			(now - force_attitude_odom_data.rcv_stamp).toSec() < params_.msg_timeout_.force_attitude_odom &&
 			(now - rpm_data.rcv_stamp).toSec() < params_.msg_timeout_.rpm;
-		const bool sensor_finite = imu_data.filtered_a.allFinite() && odom_data.q.coeffs().allFinite() &&
-			rpm_data.filtered_rpm.allFinite() && odom_data.q.norm() > 1.0e-6;
+		const bool sensor_finite = imu_data.filtered_a.allFinite() &&
+			force_attitude_odom_data.q.coeffs().allFinite() &&
+			rpm_data.filtered_rpm.allFinite() && force_attitude_odom_data.q.norm() > 1.0e-6;
 		if (!force_observer_input_valid_ || !sensor_fresh || !sensor_finite)
 			return DisturbanceGateReason::SENSOR_INVALID;
 		if (!force_estimator_.windowFull())
@@ -792,6 +827,16 @@ namespace PayloadMPC
 		}
 		ROS_INFO("[MPC CTRL] Disturbance compensation gate: %s", name);
 		last_gate_reason_ = reason;
+	}
+
+	void MPCFSM::clearForceObserverState()
+	{
+		force_estimator_.reset();
+		force_observer_input_valid_ = false;
+		fq_estimate_valid_ = false;
+		fq_estimated_.setZero();
+		fq_applied_.setZero();
+		controller_.setExternalForce(fq_applied_);
 	}
 
 	void MPCFSM::clearAppliedDisturbance()
@@ -1078,7 +1123,7 @@ namespace PayloadMPC
 		hover_yaw_ = takeoff_start_yaw_;
 		trajectory_data.exec_traj = 0;
 		exec_traj_state_ = HOVER;
-		clearAppliedDisturbance();
+		clearForceObserverState();
 		controller_.resetThrustMapping();
 		controller_.setHoverReference(hover_pose_, hover_yaw_);
 		controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
@@ -1354,6 +1399,19 @@ namespace PayloadMPC
 		msg.pose = odom_msg.pose.pose;
 
 		traj_start_trigger_pub.publish(msg);
+	}
+
+	bool MPCFSM::request_px4_auto_land()
+	{
+		mavros_msgs::SetMode land_set_mode;
+		// PX4 AUTO.LAND 由飞控接管最终降落；本函数不负责解锁或起飞。
+		land_set_mode.request.custom_mode = "AUTO.LAND";
+		if (!(set_FCU_mode_srv.call(land_set_mode) && land_set_mode.response.mode_sent))
+		{
+			ROS_ERROR_THROTTLE(1.0, "[MPCctrl] PX4 AUTO.LAND rejected.");
+			return false;
+		}
+		return true;
 	}
 
 	void MPCFSM::reboot_FCU()

@@ -40,6 +40,14 @@ int main(int argc, char **argv)
                                          ros::VoidConstPtr(),
                                          ros::TransportHints().tcpNoDelay());
 
+    // MAVROS 融合里程计只向外力估计器提供姿态四元数；NMPC 状态仍由上面的 FAST-LIO odom 提供。
+    ros::Subscriber force_attitude_odom_sub =
+        nh.subscribe<nav_msgs::Odometry>("force_attitude_odom",
+                                         100,
+                                         boost::bind(&Odom_Data_t::feed, &fsm.force_attitude_odom_data, _1),
+                                         ros::VoidConstPtr(),
+                                         ros::TransportHints().tcpNoDelay());
+
     ros::Subscriber start_trig_sub =
         nh.subscribe<geometry_msgs::PoseStamped>("start_trigger",
                                                  10,
@@ -102,6 +110,7 @@ int main(int argc, char **argv)
 
     // fsm.debug_pub = nh.advertise<quadrotor_msgs::Px4ctrlDebug>("/debugPx4ctrl", 10); // debug
 
+    fsm.set_FCU_mode_srv = nh.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
     fsm.reboot_FCU_srv = nh.serviceClient<mavros_msgs::CommandLong>("/mavros/cmd/command");
 
     ros::Duration(0.5).sleep();
