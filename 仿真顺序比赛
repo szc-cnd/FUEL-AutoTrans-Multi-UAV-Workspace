@@ -1,0 +1,235 @@
+
+二、当前可执行的 UAV0 实机启动顺序
+
+终端 1：启动 UAV0 飞控（MAVROS）
+
+cd ~/match_ws
+sh shfiles/run.sh
+
+检查：
+
+rostopic echo  /UAV0/mavros/state
+
+必须能看到 connected: True。
+
+
+终端 2：启动 UAV0 MID360 雷达
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch livox_ros_driver2 msg_MID360.launch vehicle_ns:=UAV0
+
+当前 `msg_MID360.launch` 源码默认 `publish_freq=30.0 Hz`，无需再通过启动脚本覆盖。
+
+
+终端 3：启动 UAV0 FAST-LIO
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch fast_lio mapping_mid360.launch
+
+
+终端 4：将 FAST-LIO 位姿发送给 UAV0 飞控
+
+cd ~/match_ws/src/cxr_ego_ctrl/src
+source ~/match_ws/devel/setup.bash
+python3 laser_mid360.py iris 0 fastlio off
+
+
+rostopic echo /UAV0/fast_lio/Odometry/pose
+
+rostopic echo /UAV0/mavros/vision_pose/pose
+rostopic echo /UAV0/mavros/local_position/pose
+三、UAV0 规划器与控制器分开启动
+
+UAV0 的原 cxr_egoctrl_v1 和 AutoTrans MPC 不能同时启动。先在一个
+终端单独启动 FUEL 规划器，再根据需要选择原简单控制器或 AutoTrans
+控制器。切换控制器前必须退出 OFFBOARD、落地并上锁。
+
+终端 5：单独启动 UAV0 FUEL 规划器
+
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch
+
+x 7.5 y:4.5
+
+~~~bash
+cd ~/match_ws
+source devel/setup.bash
+roslaunch autotrans_reference_bridge uav0_fuel_planner.launch \
+  enable_rviz:=true
+~~~
+
+这个终端只显示 FUEL 规划器、地图和 RViz 的输出，不启动桥接节点、
+AutoTrans MPC 或 cxr_egoctrl_v1。
+
+方案 A：使用原来的简单控制器
+
+终端 7：启动 UAV0 原简单控制器
+
+cd ~/match_ws/src/control/src
+source ~/match_ws/devel/setup.bash
+rosrun exploration_control cxr_egoctrl_v1 \
+  __name:=UAV0_controller \
+  _vehicle_ns:=/UAV0 \
+  _planner_enable_height:=0.5
+
+方案 B：使用 AutoTrans MPC 控制器
+
+在另一个终端只启动轨迹桥接和 AutoTrans MPC：
+
+
+cd ~/match_ws
+source devel/setup.bash
+roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch \
+  enable_logger:=true
+
+启动两个终端后检查：
+
+rostopic info /UAV0/planning/bspline
+rostopic info /UAV0/planning/autotrans_trajectory
+rostopic echo /UAV0/mavros/setpoint_raw/attitude
+rostopic echo /mpc_controller_node/mpc/force
+rostopic echo /mpc_controller_node/mpc/force_applied
+
+
+
+
+四、原规划器与简单控制器流程（方案 A，双机硬件链路补齐后再执行）
+
+UAV0 方案 A 使用第三节终端 5 的 FUEL 规划器，不再直接启动
+diff_planner run_swarm_indoor1_fuel_exploration.launch，以确保 UAV0
+的雷达里程计、点云和目标点话题保持统一。
+
+后机
+run_uav1_relay_diff.launch
+说明：
+这个 launch 会启动动态障碍物检测，不要同时单独运行
+run_detector_fuel_uav0.launch。
+
+
+终端 7：启动 UAV0 原简单控制器
+
+cd ~/match_ws/src/control/src
+source ~/match_ws/devel/setup.bash
+rosrun exploration_control cxr_egoctrl_v1 \
+  __name:=UAV0_controller \
+  _vehicle_ns:=/UAV0 \
+  _planner_enable_height:=0.5
+
+
+终端 8：启动 UAV1 控制器
+
+cd ~/match_ws/src/control/src
+source ~/match_ws/devel/setup.bash
+rosrun exploration_control cxr_egoctrl_v1 \
+  __name:=UAV1_controller \
+  _vehicle_ns:=/UAV1 \
+  _planner_enable_height:=0.5
+
+控制器已经改为：对应无人机的 FAST-LIO 里程计 z 轴高度大于 0.5 m 后，
+锁存开启规划路径接收。
+
+
+终端 9：双机起飞/就绪管理
+
+cd ~/match_ws
+source devel/setup.bash
+rosrun cxr_ego_ctrl dual_ego_start.py
+
+说明：
+规划器、控制器和 leader_safe_path_follower 已经不再依赖：
+
+/UAV0/start_after_hover
+/UAV1/start_after_hover
+
+双机各自 FAST-LIO 高度超过 0.5m 后只会锁存“允许规划”状态；实际运动仍以
+目标点发布、规划器成功生成轨迹并输出 PositionCommand 为准。
+
+dual_ego_start.py 仍可用于双机 OFFBOARD、解锁和同步起飞，但它发布的
+start_after_hover 不再是规划链路的必要条件。
+
+
+五、当前双机实机运行的缺项
+
+在启动第三部分前，必须先补齐以下内容：
+
+1. UAV1 MAVROS
+   - 独立命名空间：/UAV1/mavros
+   - 独立飞控串口（不能和 UAV0 同时占用 /dev/ttyACM0）
+   - 正确的 target system ID
+
+2. UAV1 MID360
+   - 独立雷达 IP 和主机网卡 IP
+   - 独立 SDK 端口配置
+   - 输出：
+     /UAV1/livox/lidar
+     /UAV1/livox/imu
+
+3. UAV1 FAST-LIO
+   - 输入：
+     /UAV1/livox/lidar
+     /UAV1/livox/imu
+   - 输出：
+     /UAV1/fast_lio/Odometry
+     /UAV1/fast_lio/cloud_registered
+
+4. UAV1 定位融合
+
+cd ~/match_ws/src/cxr_ego_ctrl/src
+source ~/match_ws/devel/setup.bash
+python3 laser_mid360.py iris 1 fastlio off
+
+5. 启动规划器前至少确认：
+
+rostopic echo /UAV0/fast_lio/Odometry
+rostopic hz /UAV1/fast_lio/Odometry
+rostopic hz /UAV0/mavros/vision_pose/pose
+rostopic hz /UAV1/mavros/vision_pose/pose
+
+
+六、当前统一后的主要话题
+
+UAV0：
+
+/UAV0/livox/lidar
+/UAV0/livox/imu
+/UAV0/fast_lio/Odometry
+/UAV0/fast_lio/cloud_registered
+/UAV0/ldot_detector/cloud_registered
+/UAV0/mavros/vision_pose/pose
+
+UAV1（补齐实机配置后应当存在）：
+
+/UAV1/livox/lidar
+/UAV1/livox/imu
+/UAV1/fast_lio/Odometry
+/UAV1/fast_lio/cloud_registered
+/UAV1/ldot_detector/cloud_registered
+/UAV1/mavros/vision_pose/pose
+
+
+七、禁止继续使用的旧仿真话题
+
+/iris_0/fast_lio/Odometry
+/iris_1/fast_lio/Odometry
+/iris_0/perception/dynamic_obstacles
+/iris_1/perception/dynamic_obstacles
+
+实际命名空间统一使用 /UAV0 和 /UAV1。
+
+
+AutoTrans 模式的安全边界：
+
+- 不自动解锁。
+- 不自动切换 OFFBOARD，CH6/QGC/PX4 负责飞控模式。
+- 不自动发布目标点。
+- CH8 低位请求 AUTO_TAKEOFF，中位进入 AUTO_HOVER，高位进入
+  CMD_CTRL；CH10 保持降落触发。
+- 必须确认 MAVROS、FAST-LIO、vision pose 和轨迹桥接正常后，才能由人工
+  切入 OFFBOARD。
+- 丢失 OFFBOARD 后，AutoTrans 会清空旧轨迹并回到手动状态，重新进入时不会
+  恢复旧轨迹。
+

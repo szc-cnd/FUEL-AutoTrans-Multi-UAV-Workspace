@@ -1,0 +1,61 @@
+<launch>
+  <!-- UAV0 FUEL 规划 + 控制器互斥入口；不在飞行中切换 controller_mode。 -->
+  <arg name="controller_mode" default="simple" doc="simple 或 autotrans"/>
+  <arg name="enable_rviz" default="true"/>
+  <arg name="enable_ldot_detection" default="false"/>
+  <arg name="enable_follower_ldot_detection" default="false"/>
+  <arg name="enable_logger" default="true"/>
+
+  <!-- FUEL、雷达和 FAST-LIO 使用 UAV0 雷达世界系，不做坐标旋转或平移。 -->
+  <include file="$(find diff_planner)/launch/exp/run_swarm_indoor1_fuel_exploration.launch">
+    <arg name="vehicle_ns" value="UAV0"/>
+    <arg name="topic_prefix" value="/UAV0"/>
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="cloud_topic" value="/UAV0/fast_lio/cloud_registered"/>
+    <arg name="rviz_goal_topic" value="/UAV0/move_base_simple/goal"/>
+    <arg name="enable_rviz" value="$(arg enable_rviz)"/>
+    <arg name="enable_ldot_detection" value="$(arg enable_ldot_detection)"/>
+    <arg name="enable_follower_ldot_detection" value="$(arg enable_follower_ldot_detection)"/>
+  </include>
+
+  <!-- simple：原有位置/速度控制器，只消费 FUEL traj_server 的 PositionCommand。 -->
+  <node if="$(eval arg('controller_mode') == 'simple')"
+        pkg="exploration_control" type="cxr_egoctrl_v1" name="UAV0_controller" output="screen">
+    <param name="vehicle_ns" value="/UAV0"/>
+    <param name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <param name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
+    <param name="goal_topic" value="/UAV0/move_base_simple/goal"/>
+    <param name="planner_enable_height" value="0.5"/>
+  </node>
+
+  <!-- autotrans：FUEL B-spline -> AutoTrans PolynomialTraj；不启动原控制器。 -->
+  <node if="$(eval arg('controller_mode') == 'autotrans')"
+        pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
+        name="fuel_autotrans_bridge" output="screen">
+    <param name="input_topic" value="/UAV0/planning/bspline"/>
+    <param name="output_topic" value="/UAV0/planning/autotrans_trajectory"/>
+    <param name="frame_id" value="UAV0/camera_init"/>
+    <param name="trajectory_timeout" value="0.5"/>
+  </node>
+
+  <include if="$(eval arg('controller_mode') == 'autotrans')"
+           file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="imu_topic" value="/UAV0/mavros/imu/data"/>
+    <arg name="state_topic" value="/UAV0/mavros/state"/>
+    <arg name="extended_state_topic" value="/UAV0/mavros/extended_state"/>
+    <arg name="rc_topic" value="/UAV0/mavros/rc/in"/>
+    <arg name="battery_topic" value="/UAV0/mavros/battery"/>
+    <arg name="esc_status_topic" value="/UAV0/mavros/esc_status"/>
+    <arg name="setpoint_topic" value="/UAV0/mavros/setpoint_raw/attitude"/>
+    <arg name="reboot_service" value="/UAV0/mavros/cmd/command"/>
+    <arg name="set_mode_service" value="/UAV0/mavros/set_mode"/>
+    <arg name="trajectory_topic" value="/UAV0/planning/autotrans_trajectory"/>
+    <arg name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
+    <arg name="cmd_trigger_topic" value="/UAV0/hummingbird/goal"/>
+    <arg name="goal_topic" value="/UAV0/move_base_simple/goal"/>
+    <arg name="enable_logger" value="$(arg enable_logger)"/>
+  </include>
+
+  <!-- 若 controller_mode 拼写错误，两套控制器都不会启动，避免误启双控制器。 -->
+</launch>

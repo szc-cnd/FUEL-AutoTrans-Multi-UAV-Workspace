@@ -1,0 +1,100 @@
+<launch>
+  <!-- UAV0 默认直接使用 FAST-LIO 雷达 Odometry 和 UAV0 MAVROS。 -->
+  <arg name="odom_topic" default="/UAV0/fast_lio/Odometry"/>
+  <arg name="imu_topic" default="/UAV0/mavros/imu/data"/>
+  <!-- 外力估计专用 PX4 EKF 融合姿态；不替换 NMPC 的 FAST-LIO 状态输入。 -->
+  <arg name="force_attitude_odom_topic" default="/UAV0/mavros/local_position/odom"/>
+  <!-- MAVROS topics and services are supplied by the vehicle integration launch. -->
+  <arg name="state_topic" default="/UAV0/mavros/state"/>
+  <arg name="extended_state_topic" default="/UAV0/mavros/extended_state"/>
+  <arg name="rc_topic" default="/UAV0/mavros/rc/in"/>
+  <arg name="esc_status_topic" default="/UAV0/mavros/esc_status"/>
+  <arg name="setpoint_topic" default="/UAV0/mavros/setpoint_raw/attitude"/>
+  <arg name="reboot_service" default="/UAV0/mavros/cmd/command"/>
+  <arg name="set_mode_service" default="/UAV0/mavros/set_mode"/>
+  <arg name="cmd_trigger_topic" default="/UAV0/hummingbird/goal"/>
+  <!-- bridge 输出的完整 FUEL/规划器多项式轨迹，保持与雷达 Odometry 同一世界坐标语义。 -->
+  <arg name="trajectory_topic" default="/UAV0/planning/autotrans_trajectory"/>
+  <!-- FUEL 入口点阶段的 PositionCommand；完整 PolynomialTraj 到达后优先级更高。 -->
+  <arg name="position_cmd_topic" default="/UAV0/planning/pos_cmd"/>
+  <!-- CAV0 FUEL 原始 B-spline；logger 当前只解析 traj_utils/PolyTraj，故不送入 MPC。 -->
+  <arg name="raw_trajectory_topic" default="/UAV0/planning/bspline"/>
+
+  <!-- Logger only records data; it does not arm, switch OFFBOARD, or change setpoints. -->
+  <arg name="enable_logger" default="true"/>
+  <arg name="log_dir" default="$(env HOME)/.ros/autotrans_mpc_logs"/>
+  <!-- 实验标签只描述风向、控制模式等条件；补偿开关状态由 logger 自动追加。 -->
+  <arg name="experiment_tag" default="unlabeled"/>
+  <arg name="run_name" default=""/>
+  <arg name="flush_every" default="20"/>
+  <arg name="log_rate" default="100.0"/>
+  <arg name="setpoint_timeout" default="0.2"/>
+  <arg name="log_all_rosout" default="false"/>
+  <arg name="goal_topic" default="/UAV0/move_base_simple/goal"/>
+  <arg name="reference_topic" default="/mpc_controller_node/mpc/reference_trajectory"/>
+  <arg name="force_topic" default="/mpc_controller_node/mpc/force"/>
+  <arg name="applied_force_topic" default="/mpc_controller_node/mpc/force_applied"/>
+  <arg name="force_attitude_aligned_topic"
+       default="/mpc_controller_node/mpc/force_attitude_aligned"/>
+  <arg name="force_attitude_yaw_offset_topic"
+       default="/mpc_controller_node/mpc/force_attitude_yaw_offset"/>
+  <!-- MAVROS 电池状态输入：记录总电压(V)和剩余电量比例，不参与控制。 -->
+  <arg name="battery_topic" default="/UAV0/mavros/battery"/>
+
+  <node pkg="payload_mpc_controller" type="mpc_controller_node" name="mpc_controller_node" output="screen">
+    <rosparam command="load" file="$(find payload_mpc_controller)/config/mpc.yaml"/>
+    <rosparam command="load" file="$(find payload_mpc_controller)/config/model.yaml"/>
+
+    <!-- NMPC 的位置、速度和姿态状态来自 FAST-LIO。 -->
+    <remap from="~odom" to="$(arg odom_topic)"/>
+    <!-- 外力估计姿态来自 PX4 EKF 融合 odom，四元数消息顺序为 x,y,z,w。 -->
+    <remap from="~force_attitude_odom" to="$(arg force_attitude_odom_topic)"/>
+    <!-- MAVROS IMU 提供机体系加速度和角速度；仅备用对齐模式读取其中的 PX4 姿态。 -->
+    <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
+
+    <!-- Remap absolute MAVROS names in the controller to the selected vehicle. -->
+    <remap from="/mavros/state" to="$(arg state_topic)"/>
+    <remap from="/mavros/extended_state" to="$(arg extended_state_topic)"/>
+    <remap from="/mavros/rc/in" to="$(arg rc_topic)"/>
+    <remap from="/mavros/battery" to="$(arg battery_topic)"/>
+    <remap from="/mavros/esc_status" to="$(arg esc_status_topic)"/>
+    <remap from="/mavros/setpoint_raw/attitude" to="$(arg setpoint_topic)"/>
+    <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
+    <remap from="/mavros/set_mode" to="$(arg set_mode_service)"/>
+
+    <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
+    <remap from="~traj" to="$(arg trajectory_topic)"/>
+    <remap from="~cmd" to="$(arg position_cmd_topic)"/>
+    <remap from="~cmd_trigger" to="$(arg cmd_trigger_topic)"/>
+  </node>
+
+  <node if="$(arg enable_logger)"
+        pkg="payload_mpc_controller"
+        type="autotrans_mpc_logger.py"
+        name="autotrans_mpc_logger"
+        output="screen">
+    <param name="log_dir" value="$(arg log_dir)"/>
+    <param name="experiment_tag" value="$(arg experiment_tag)"/>
+    <param name="run_name" value="$(arg run_name)"/>
+    <param name="flush_every" value="$(arg flush_every)"/>
+    <param name="log_rate" value="$(arg log_rate)"/>
+    <param name="setpoint_timeout" value="$(arg setpoint_timeout)"/>
+    <param name="log_all_rosout" value="$(arg log_all_rosout)"/>
+    <param name="setpoint_topic" value="$(arg setpoint_topic)"/>
+    <param name="odom_topic" value="$(arg odom_topic)"/>
+    <param name="goal_topic" value="$(arg goal_topic)"/>
+    <param name="reference_topic" value="$(arg reference_topic)"/>
+    <param name="state_topic" value="$(arg state_topic)"/>
+    <param name="extended_state_topic" value="$(arg extended_state_topic)"/>
+    <param name="rc_topic" value="$(arg rc_topic)"/>
+    <param name="force_topic" value="$(arg force_topic)"/>
+    <param name="applied_force_topic" value="$(arg applied_force_topic)"/>
+    <param name="esc_status_topic" value="$(arg esc_status_topic)"/>
+    <param name="battery_topic" value="$(arg battery_topic)"/>
+    <param name="force_attitude_aligned_topic" value="$(arg force_attitude_aligned_topic)"/>
+    <param name="force_attitude_yaw_offset_topic" value="$(arg force_attitude_yaw_offset_topic)"/>
+    <param name="trajectory_topic" value="$(arg trajectory_topic)"/>
+    <param name="raw_trajectory_topic" value="$(arg raw_trajectory_topic)"/>
+    <param name="position_cmd_topic" value="$(arg position_cmd_topic)"/>
+  </node>
+</launch>

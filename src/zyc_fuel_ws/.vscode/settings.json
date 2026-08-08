@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "unordered_map": "cpp",
+        "unordered_set": "cpp",
+        "random": "cpp"
+    },
+    "cmake.sourceDirectory": "/home/guet3/zyc_fuel_ws/src/FUEL/fuel_planner/poly_traj"
+}

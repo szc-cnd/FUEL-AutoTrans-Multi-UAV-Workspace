@@ -1,0 +1,50 @@
+<launch>
+  <!-- CAV1 单机集成入口：传感器/MAVROS 由 start_autotrans_quad_wind_lidar.sh 启动。 -->
+  <arg name="odom_topic" default="/UAV1/fast_lio/Odometry"/>
+  <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
+  <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
+  <arg name="frame_id" default="UAV1/camera_init"/>
+  <arg name="imu_topic" default="/UAV1/mavros/imu/data"/>
+  <arg name="state_topic" default="/UAV1/mavros/state"/>
+  <arg name="extended_state_topic" default="/UAV1/mavros/extended_state"/>
+  <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
+  <arg name="battery_topic" default="/UAV1/mavros/battery"/>
+  <arg name="esc_status_topic" default="/UAV1/mavros/esc_status"/>
+  <arg name="setpoint_topic" default="/UAV1/mavros/setpoint_raw/attitude"/>
+  <arg name="reboot_service" default="/UAV1/mavros/cmd/command"/>
+  <arg name="cmd_trigger_topic" default="/UAV1/hummingbird/goal"/>
+  <arg name="goal_topic" default="/UAV1/planning/goal"/>
+  <arg name="trajectory_timeout" default="0.5"/>
+  <arg name="enable_logger" default="true"/>
+
+  <!-- Diff-Planner 继续输出完整 PolyTraj；不启动旧 px4ctrl。 -->
+  <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch">
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+    <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+  </include>
+
+  <node pkg="autotrans_reference_bridge" type="reference_bridge_node"
+        name="autotrans_reference_bridge" output="screen">
+    <param name="input_topic" value="/drone_1_planning/trajectory"/>
+    <param name="output_topic" value="$(arg trajectory_topic)"/>
+    <param name="frame_id" value="$(arg frame_id)"/>
+    <param name="trajectory_timeout" value="$(arg trajectory_timeout)"/>
+  </node>
+
+  <!-- AutoTrans 直接订阅 FAST-LIO /Odometry，只发布唯一的 attitude setpoint。 -->
+  <include file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+    <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="state_topic" value="$(arg state_topic)"/>
+    <arg name="extended_state_topic" value="$(arg extended_state_topic)"/>
+    <arg name="rc_topic" value="$(arg rc_topic)"/>
+    <arg name="battery_topic" value="$(arg battery_topic)"/>
+    <arg name="esc_status_topic" value="$(arg esc_status_topic)"/>
+    <arg name="setpoint_topic" value="$(arg setpoint_topic)"/>
+    <arg name="reboot_service" value="$(arg reboot_service)"/>
+    <arg name="cmd_trigger_topic" value="$(arg cmd_trigger_topic)"/>
+    <arg name="goal_topic" value="$(arg goal_topic)"/>
+    <arg name="enable_logger" value="$(arg enable_logger)"/>
+  </include>
+</launch>
