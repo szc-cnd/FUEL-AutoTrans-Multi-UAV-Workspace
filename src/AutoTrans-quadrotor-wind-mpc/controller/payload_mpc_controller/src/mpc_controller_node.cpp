@@ -49,11 +49,6 @@ int main(int argc, char **argv)
                                          ros::VoidConstPtr(),
                                          ros::TransportHints().tcpNoDelay());
 
-    ros::Subscriber cmd_trig_sub =
-        nh.subscribe<geometry_msgs::PoseStamped>("cmd_trigger",
-                                                 10,
-                                                 boost::bind(&Cmd_Trigger_Data_t::feed, &fsm.cmd_trigger_data, _1));
-
     ros::Subscriber mpc_traj_sub =
         nh.subscribe<quadrotor_msgs::PolynomialTraj>("traj",
                                                      100,
@@ -61,12 +56,13 @@ int main(int argc, char **argv)
                                                      ros::VoidConstPtr(),
                                                      ros::TransportHints().tcpNoDelay());
 
-    ros::Subscriber cmd_sub =
-        nh.subscribe<quadrotor_msgs::PositionCommand>("cmd",
-                                                      100,
-                                                      boost::bind(&Command_Data_t::feed, &fsm.cmd_data, _1),
-                                                      ros::VoidConstPtr(),
-                                                      ros::TransportHints().tcpNoDelay());
+    // PositionCommand 只由原简单控制器消费；AutoTrans 仅接收完整 PolynomialTraj。
+    ros::Subscriber safety_hold_sub =
+        nh.subscribe<std_msgs::Bool>("safety_hold", 2,
+                                     boost::bind(&MPCFSM::safetyHoldCallback, &fsm, _1));
+    ros::Subscriber landing_request_sub =
+        nh.subscribe<std_msgs::Bool>("landing_request", 2,
+                                     boost::bind(&MPCFSM::landingRequestCallback, &fsm, _1));
 
     ros::Subscriber imu_sub =
         nh.subscribe<sensor_msgs::Imu>("drone_imu/data",

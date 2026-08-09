@@ -73,17 +73,71 @@ namespace PayloadMPC
       last_mpc_solve_success_ = mpc_wrapper_.update(estimated_state, do_preparation_step);
     }
 
-    if (!last_mpc_solve_success_)
+    Eigen::Matrix<real_t, kStateSize, kSamples + 1> candidate_states;
+    Eigen::Matrix<real_t, kInputSize, kSamples> candidate_inputs;
+    if (last_mpc_solve_success_)
     {
-      ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 求解失败，保持上一安全控制量。");
-    }
-    else if (!previous_mpc_solve_success)
-    {
-      ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+      mpc_wrapper_.getStates(candidate_states);
+      mpc_wrapper_.getInputs(candidate_inputs);
+      if (!candidate_states.allFinite() || !candidate_inputs.allFinite())
+      {
+        last_mpc_solve_success_ = false;
+        ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 输出包含非有限值，切换到上一安全控制量。");
+      }
+      else
+      {
+        // 发送前再次限制 body rate 和物理推力，避免数值越界进入 MAVROS。
+        for (int i = 0; i < kSamples; ++i)
+        {
+          candidate_inputs(kThrust, i) = std::max(
+              params_.min_thrust_, std::min(params_.max_thrust_, candidate_inputs(kThrust, i)));
+          candidate_inputs(kRateX, i) = std::max(
+              -params_.max_bodyrate_xy_, std::min(params_.max_bodyrate_xy_, candidate_inputs(kRateX, i)));
+          candidate_inputs(kRateY, i) = std::max(
+              -params_.max_bodyrate_xy_, std::min(params_.max_bodyrate_xy_, candidate_inputs(kRateY, i)));
+          candidate_inputs(kRateZ, i) = std::max(
+              -params_.max_bodyrate_z_, std::min(params_.max_bodyrate_z_, candidate_inputs(kRateZ, i)));
+        }
+      }
     }
 
-    mpc_wrapper_.getStates(predicted_states);
-    mpc_wrapper_.getInputs(control_inputs);
+    if (last_mpc_solve_success_)
+    {
+      predicted_states = candidate_states;
+      control_inputs = candidate_inputs;
+      last_valid_predicted_states_ = candidate_states;
+      last_valid_control_inputs_ = candidate_inputs;
+      has_last_valid_output_ = true;
+      using_fallback_output_ = false;
+      solver_failure_start_ = ros::Time(0);
+      if (!previous_mpc_solve_success)
+      {
+        ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+      }
+    }
+    else
+    {
+      if (solver_failure_start_.isZero())
+      {
+        solver_failure_start_ = ros::Time::now();
+      }
+      using_fallback_output_ = true;
+      if (has_last_valid_output_)
+      {
+        predicted_states = last_valid_predicted_states_;
+        control_inputs = last_valid_control_inputs_;
+      }
+      else
+      {
+        // 尚无历史有效输出时使用零角速度和悬停物理推力；落地时由 FSM 将 thrust 清零。
+        predicted_states = reference_states;
+        control_inputs.setZero();
+        const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
+        control_inputs.row(kThrust).setConstant(
+            std::isfinite(hover_thrust) ? hover_thrust : 0.0);
+      }
+      ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 求解失败，保持上一安全控制量。");
+    }
 
     // Start a thread to prepare for the next execution.
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);
@@ -101,6 +155,16 @@ namespace PayloadMPC
                               Eigen::Matrix<real_t, kInputSize, kSamples> &control_inputs)
   {
     execMPC(reference_states_, reference_inputs_, estimated_state, predicted_states, control_inputs);
+  }
+
+  bool MpcController::solverFailurePersistent(double duration_sec) const
+  {
+    if (last_mpc_solve_success_ || solver_failure_start_.isZero() ||
+        !std::isfinite(duration_sec) || duration_sec <= 0.0)
+    {
+      return false;
+    }
+    return (ros::Time::now() - solver_failure_start_).toSec() >= duration_sec;
   }
   // drone pos
   void MpcController::setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw)

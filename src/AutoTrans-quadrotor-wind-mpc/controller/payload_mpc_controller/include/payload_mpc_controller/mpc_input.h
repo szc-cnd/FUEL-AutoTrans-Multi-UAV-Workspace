@@ -161,8 +161,15 @@ public:
   int exec_traj = 0; // use for aborting the trajectory, 0 means no trajectory is executing
                      // -1 means the trajectory is aborting, 1 means the trajectory is executing
   std::deque<oneTraj_Data_t> traj_queue;
+  // 正常轨迹结束后的悬停终点；只在完整 ACTION_ADD 校验成功后更新。
+  Eigen::Vector3d ending_position{Eigen::Vector3d::Zero()};
+  double ending_yaw{0.0};
+  bool ending_yaw_valid{false};
+  bool ending_pose_valid{false};
 
   Trajectory_Data_t();
+  void clear();
+  void abort();
   void adjust_end_time()
   {
     if (traj_queue.size() < 2)

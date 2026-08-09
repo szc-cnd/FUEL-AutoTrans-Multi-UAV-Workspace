@@ -390,6 +390,18 @@ namespace PayloadMPC
 				ROS_ERROR("[参数] thrust_model/max_hover_percentage_step 必须为有限值且位于 (0, 0.1)。");
 				ROS_BREAK();
 			}
+			const double initial_thrustscale =
+				dyn_params_.mass_q * gravity_ / thr_map_.hover_percentage;
+			const double normalized_capacity =
+				initial_thrustscale * thr_map_.max_normalized_thrust;
+			if (!std::isfinite(initial_thrustscale) || !std::isfinite(normalized_capacity) ||
+				max_thrust_ > normalized_capacity + 1.0e-6)
+			{
+				ROS_ERROR("[参数] max_thrust=%.3f N 超过初始归一化上限对应的 %.3f N；"
+						  "请保持 NMPC 物理推力和 MAVROS normalized thrust 一致。",
+						  static_cast<double>(max_thrust_), normalized_capacity);
+				ROS_BREAK();
+			}
 
 			read_essential_param(nh, "filter/sample_freq_quad_acc", filter_param_.sample_freq_quad_acc);
 			read_essential_param(nh, "filter/sample_freq_quad_omg", filter_param_.sample_freq_quad_omg);

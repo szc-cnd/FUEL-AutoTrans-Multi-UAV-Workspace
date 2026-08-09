@@ -27,6 +27,10 @@ add_executable(fuel_autotrans_bridge_node
 add_dependencies(fuel_autotrans_bridge_node ${catkin_EXPORTED_TARGETS})
 target_link_libraries(fuel_autotrans_bridge_node ${catkin_LIBRARIES})
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test/test_fuel_autotrans_bridge_static.py)
+endif()
+
 install(TARGETS reference_bridge_node fuel_autotrans_bridge_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

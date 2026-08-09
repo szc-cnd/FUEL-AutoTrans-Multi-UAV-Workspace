@@ -69,8 +69,12 @@ namespace PayloadMPC
     void execMPC(const Eigen::Matrix<real_t, kStateSize, 1> &estimated_state,
                  Eigen::Matrix<real_t, kStateSize, kSamples + 1> &predicted_states,
                  Eigen::Matrix<real_t, kInputSize, kSamples> &control_inputs);
+    bool solverFailurePersistent(double duration_sec) const;
+    bool usingFallbackOutput() const { return using_fallback_output_; }
+    bool lastMpcSolveSucceeded() const { return last_mpc_solve_success_; }
     void setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw);
-    // 根据规划器 PositionCommand 生成入口点参考；位置/速度/加速度使用 ENU 世界系，yaw 单位 rad，yaw_rate 单位 rad/s。
+    // 保留 PositionCommand 入口参考函数供旧接口兼容；当前 AutoTrans 节点不订阅 PositionCommand，
+    // 位置/速度/加速度使用 ENU 世界系，yaw 单位 rad，yaw_rate 单位 rad/s。
     bool setPositionCommandReference(const Eigen::Ref<const Eigen::Vector3d> &position,
                                      const Eigen::Ref<const Eigen::Vector3d> &velocity,
                                      const Eigen::Ref<const Eigen::Vector3d> &acceleration,
@@ -144,6 +148,11 @@ namespace PayloadMPC
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
+    bool using_fallback_output_{false};
+    bool has_last_valid_output_{false};
+    ros::Time solver_failure_start_{0};
+    Eigen::Matrix<real_t, kStateSize, kSamples + 1> last_valid_predicted_states_;
+    Eigen::Matrix<real_t, kInputSize, kSamples> last_valid_control_inputs_;
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;

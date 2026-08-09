@@ -34,9 +34,10 @@ max_bodyrate_xy:    3.0       # ~ pi [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
 max_bodyrate_z:     1.2         # ~ pi*2/3 [rad/s]
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
-# 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
+# 对 1.844 kg、g=9.795、hover_percentage=0.54，max_thrust=26.5 N 对应的归一化推力约为 0.792，
+# 与最终 max_normalized_thrust=0.8 保持一致；这里的 max_thrust 单位是 N。
 min_thrust:         1.0
-max_thrust:         29.5
+max_thrust:         26.5
 
 # use ending pos for better ending tracking performance)
 use_trajectory_ending_pos: true

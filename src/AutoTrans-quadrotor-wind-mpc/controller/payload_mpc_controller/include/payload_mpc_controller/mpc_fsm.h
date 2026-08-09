@@ -22,7 +22,6 @@
 #include <mavros_msgs/AttitudeTarget.h>
 #include <mavros_msgs/ESCStatus.h>
 #include "multi_optimization_based_force_estimator.hpp"
-#include "entry_command_reference_limiter.h"
 
 namespace PayloadMPC
 {
@@ -85,6 +84,8 @@ namespace PayloadMPC
 
 		void process();
 		void CMD_CTRL_process();
+		void safetyHoldCallback(const std_msgs::BoolConstPtr &msg);
+		void landingRequestCallback(const std_msgs::BoolConstPtr &msg);
 
 		bool rc_is_received(const ros::Time &now_time) const;
 		bool odom_is_received(const ros::Time &now_time) const;
@@ -113,15 +114,6 @@ namespace PayloadMPC
 		bool takeoff_requested_{false};
 		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
-		// 最后一条有效入口 PositionCommand 持续作为 NMPC 世界系参考，直到新命令或完整轨迹接管。
-		Command_Data_t latched_entry_command_;
-		ros::Time last_entry_command_stamp_{0};
-		// 入口点飞行忽略规划器 yaw；收到新目标时锁定无人机当前世界系偏航角，单位 rad。
-		double entry_command_yaw_{0.0};
-		bool entry_command_active_{false};
-		bool entry_command_reached_{false};
-		EntryCommandReferenceLimiter entry_command_reference_limiter_;
-		ros::Time entry_command_last_update_time_{0};
 		uint32_t last_reported_trajectory_id_{0};
 		int last_reported_trajectory_piece_{-1};
 		Eigen::Vector3d takeoff_start_pose_{Eigen::Vector3d::Zero()};
@@ -129,6 +121,12 @@ namespace PayloadMPC
 		double takeoff_start_yaw_{0.0};
 		ros::Time takeoff_start_time_{0};
 		ros::Time takeoff_settle_start_{0};
+		bool safety_hold_active_{false};
+		bool safety_hold_pose_latched_{false};
+		Eigen::Vector3d safety_hold_pose_{Eigen::Vector3d::Zero()};
+		double safety_hold_yaw_{0.0};
+		bool landing_request_active_{false};
+		ros::Time last_auto_land_request_time_{0};
 
 		long int rmse_cnt_ = 0;
 		double rmse_sum_ = 0;
@@ -206,6 +204,9 @@ namespace PayloadMPC
 		void clearAppliedDisturbance();
 		// PX4 退出 OFFBOARD 后清除旧轨迹和外力补偿，防止重新进入自动模式时恢复旧控制目标。
 		void handleOffboardLoss();
+		void clearTrajectoryAndHoldCurrent(const char *reason);
+		void updateSafetyHoldReference();
+		bool landingRequested() const;
 		ThrustModelGateReason thrustModelGate(const ros::Time &now) const;
 		void reportThrustModelGate(ThrustModelGateReason reason);
 

@@ -78,13 +78,14 @@ rosrun exploration_control cxr_egoctrl_v1 \
 
 方案 B：使用 AutoTrans MPC 控制器
 
-在另一个终端只启动轨迹桥接和 AutoTrans MPC：
+在另一个终端只启动轨迹桥接和 AutoTrans MPC。该入口只消费
+`/UAV0/planning/autotrans_trajectory` 的 `quadrotor_msgs/PolynomialTraj`；
+FUEL 的 `/UAV0/planning/pos_cmd` 仅供方案 A 的简单控制器使用：
 
 
 cd ~/match_ws
 source devel/setup.bash
-roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch \
-  enable_logger:=true
+roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch
 
 启动两个终端后检查：
 

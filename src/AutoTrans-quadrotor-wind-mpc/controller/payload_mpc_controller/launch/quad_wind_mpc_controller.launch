@@ -12,11 +12,14 @@
   <arg name="setpoint_topic" default="/UAV0/mavros/setpoint_raw/attitude"/>
   <arg name="reboot_service" default="/UAV0/mavros/cmd/command"/>
   <arg name="set_mode_service" default="/UAV0/mavros/set_mode"/>
-  <arg name="cmd_trigger_topic" default="/UAV0/hummingbird/goal"/>
   <!-- bridge 输出的完整 FUEL/规划器多项式轨迹，保持与雷达 Odometry 同一世界坐标语义。 -->
   <arg name="trajectory_topic" default="/UAV0/planning/autotrans_trajectory"/>
-  <!-- FUEL 入口点阶段的 PositionCommand；完整 PolynomialTraj 到达后优先级更高。 -->
+  <!-- PositionCommand 只供 logger 记录；AutoTrans 控制器不再订阅它。 -->
   <arg name="position_cmd_topic" default="/UAV0/planning/pos_cmd"/>
+  <!-- 规划器主动安全保持；true 时清空当前轨迹并锁定当前位置。 -->
+  <arg name="safety_hold_topic" default="/UAV0/planning/safety_hold"/>
+  <!-- 外部降落请求与 CH10 使用同一 AUTO.LAND 状态机。 -->
+  <arg name="landing_request_topic" default="/UAV0/mission/landing_request"/>
   <!-- CAV0 FUEL 原始 B-spline；logger 当前只解析 traj_utils/PolyTraj，故不送入 MPC。 -->
   <arg name="raw_trajectory_topic" default="/UAV0/planning/bspline"/>
 
@@ -62,10 +65,10 @@
     <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
     <remap from="/mavros/set_mode" to="$(arg set_mode_service)"/>
 
-    <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
+    <!-- AutoTrans 只接受完整 PolynomialTraj；PositionCommand 不再进入控制器。 -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
-    <remap from="~cmd" to="$(arg position_cmd_topic)"/>
-    <remap from="~cmd_trigger" to="$(arg cmd_trigger_topic)"/>
+    <remap from="~safety_hold" to="$(arg safety_hold_topic)"/>
+    <remap from="~landing_request" to="$(arg landing_request_topic)"/>
   </node>
 
   <node if="$(arg enable_logger)"

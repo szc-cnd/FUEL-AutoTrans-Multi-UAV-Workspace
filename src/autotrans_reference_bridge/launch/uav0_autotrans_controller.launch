@@ -1,7 +1,6 @@
 <launch>
   <!-- 只启动 FUEL 到 AutoTrans 的桥接和 AutoTrans MPC，不启动 FUEL 规划器。 -->
   <arg name="enable_logger" default="true"/>
-  <arg name="trajectory_timeout" default="0.5"/>
 
   <!-- 输入是 FUEL 的 B-spline，输出是 AutoTrans 实际订阅的 PolynomialTraj。 -->
   <node pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
@@ -9,7 +8,6 @@
     <param name="input_topic" value="/UAV0/planning/bspline"/>
     <param name="output_topic" value="/UAV0/planning/autotrans_trajectory"/>
     <param name="frame_id" value="UAV0/camera_init"/>
-    <param name="trajectory_timeout" value="$(arg trajectory_timeout)"/>
   </node>
 
   <!-- AutoTrans 使用 UAV0 FAST-LIO 位姿、UAV0 MAVROS 传感器和控制接口。 -->
@@ -25,9 +23,8 @@
     <arg name="setpoint_topic" value="/UAV0/mavros/setpoint_raw/attitude"/>
     <arg name="reboot_service" value="/UAV0/mavros/cmd/command"/>
     <arg name="trajectory_topic" value="/UAV0/planning/autotrans_trajectory"/>
-    <arg name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
-    <arg name="cmd_trigger_topic" value="/UAV0/hummingbird/goal"/>
-    <arg name="goal_topic" value="/UAV0/move_base_simple/goal"/>
+    <arg name="safety_hold_topic" value="/UAV0/planning/safety_hold"/>
+    <arg name="landing_request_topic" value="/UAV0/mission/landing_request"/>
     <arg name="enable_logger" value="$(arg enable_logger)"/>
   </include>
 </launch>

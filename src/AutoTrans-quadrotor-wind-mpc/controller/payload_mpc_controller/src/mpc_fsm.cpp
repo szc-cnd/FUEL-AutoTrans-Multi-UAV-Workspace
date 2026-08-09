@@ -83,9 +83,6 @@ namespace PayloadMPC
 		pub_rmse_info_ = nh_.advertise<std_msgs::Float64MultiArray>("mpc/rmse_info", 1);
 
 		force_estimator_.init(params_);
-		entry_command_reference_limiter_.configure(
-			params_.entry_command_.max_velocity,
-			params_.entry_command_.max_acceleration);
 		ROS_INFO("[FORCE] 外力估计姿态来源：%s。",
 			params_.force_estimator_param_.use_px4_imu_attitude
 				? "MAVROS IMU 姿态"
@@ -137,13 +134,6 @@ namespace PayloadMPC
 	void MPCFSM::process()
 	{
 		ros::Time now_time = ros::Time::now();
-		if (fsm_state != CMD_CTRL)
-		{
-			entry_command_active_ = false;
-			entry_command_reached_ = false;
-			entry_command_reference_limiter_.clear();
-			entry_command_last_update_time_ = ros::Time(0);
-		}
 
 		setEstimateState(odom_data);
 		setForceEstimation();
@@ -235,7 +225,7 @@ namespace PayloadMPC
 					break;
 				}
 
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				update_mode_hover_pose();
 				controller_.resetThrustMapping();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -263,7 +253,7 @@ namespace PayloadMPC
 					break;
 				}
 
-				trajectory_data.exec_traj = 0; // clean the trajectory data
+				trajectory_data.clear(); // 切换模式时不复用上一轮轨迹
 				update_mode_hover_pose();
 				controller_.resetThrustMapping();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -303,12 +293,12 @@ namespace PayloadMPC
 
 				ROS_WARN("[AUTO_HOVER] 退出到手动：遥控器无效或里程计超时。");
 			}
-			else if (rc_data.enter_land_mode)
+			else if (landingRequested())
 			{
 				// AUTO_LAND 禁止使用风力补偿；先清零 OnlineData，再计算首个降落控制量。
 				clearAppliedDisturbance();
 				land_start_time_ = now_time;
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				exec_traj_state_ = HOVER;
 				update_hover_pose();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -368,12 +358,12 @@ namespace PayloadMPC
 
 				ROS_WARN("[CMD_CTRL] 退出到手动：遥控器无效或里程计超时。");
 			}
-			else if (rc_data.enter_land_mode)
+			else if (landingRequested())
 			{
 				// AUTO_LAND 禁止使用风力补偿；先清零 OnlineData，再计算首个降落控制量。
 				clearAppliedDisturbance();
 				land_start_time_ = now_time;
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				exec_traj_state_ = HOVER;
 				update_hover_pose();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -384,7 +374,7 @@ namespace PayloadMPC
 			else if (!rc_data.is_command_mode)
 			{
 				// 高位退出命令模式后，低位和中位都回到悬停；已在空中的低位不重复启动起飞。
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				exec_traj_state_ = HOVER;
 				update_mode_hover_pose();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -412,7 +402,7 @@ namespace PayloadMPC
 				clearAppliedDisturbance();
 				takeoff_requested_ = false;
 				takeoff_settle_start_ = ros::Time(0);
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				exec_traj_state_ = HOVER;
 				update_hover_pose();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -442,7 +432,7 @@ namespace PayloadMPC
 				break;
 			}
 
-			if (rc_data.enter_land_mode)
+			if (landingRequested())
 			{
 				clearAppliedDisturbance();
 				takeoff_requested_ = false;
@@ -453,7 +443,7 @@ namespace PayloadMPC
 					break;
 				}
 				land_start_time_ = now_time;
-				trajectory_data.exec_traj = 0;
+				trajectory_data.clear();
 				exec_traj_state_ = HOVER;
 				update_hover_pose();
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
@@ -522,12 +512,16 @@ namespace PayloadMPC
 								 (now_time - land_start_time_).toSec() > params_.land_.timeout;
 			if (low_enough || timeout)
 			{
-				if (request_px4_auto_land())
+				if (state_data.current_state.mode == "AUTO.LAND")
 				{
 					fsm_state = MANUAL_CTRL;
 					exec_traj_state_ = HOVER;
 					auto_land_lockout_ = true;
-					ROS_WARN("[AUTO_LAND] PX4 已接受 AUTO.LAND，AutoTrans 切换到手动状态。");
+					ROS_WARN("[AUTO_LAND] PX4 已实际进入 AUTO.LAND，AutoTrans 切换到手动状态。");
+				}
+				else
+				{
+					request_px4_auto_land();
 				}
 			}
 
@@ -535,6 +529,22 @@ namespace PayloadMPC
 		}
 		default:
 			break;
+		}
+
+		if (controller_.solverFailurePersistent(0.2) && fsm_state != MANUAL_CTRL)
+		{
+			// 连续求解失败只锁定控制器内部参考，不替 PX4 自动切换飞行模式。
+			trajectory_data.clear();
+			exec_traj_state_ = HOVER;
+			if (fsm_state == AUTO_TAKEOFF)
+			{
+				takeoff_requested_ = false;
+				fsm_state = AUTO_HOVER;
+			}
+			update_hover_pose();
+			controller_.setHoverReference(hover_pose_, hover_yaw_);
+			ROS_ERROR_THROTTLE(1.0,
+				"[OUTPUT] NMPC 连续求解失败超过 0.2 s，已清除轨迹并锁定当前位置；未自动切换 PX4 模式。 ");
 		}
 
 		if (fsm_state == AUTO_HOVER || fsm_state == CMD_CTRL ||
@@ -595,14 +605,21 @@ namespace PayloadMPC
 		{
 		case HOVER:
 		{
-			if (now_time >= trajectory_data.total_traj_start_time &&
-				now_time <= trajectory_data.total_traj_end_time &&
-				trajectory_data.exec_traj == 1 && (!trajectory_data.traj_queue.empty()))
+			if (safety_hold_active_)
 			{
-				// same as the below
+				updateSafetyHoldReference();
+				controller_.setHoverReference(safety_hold_pose_, safety_hold_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				ROS_INFO_THROTTLE(1.0, "[安全保持] 规划器请求保持当前位置，等待新的 PolynomialTraj。");
+				break;
+			}
+
+			if (trajectory_data.exec_traj == 1 && !trajectory_data.traj_queue.empty() &&
+				now_time >= trajectory_data.total_traj_start_time &&
+				now_time <= trajectory_data.total_traj_end_time)
+			{
 				update_hover_pose();
 				oneTraj_Data_t *traj_info = &trajectory_data.traj_queue.front();
-				traj_info = &trajectory_data.traj_queue.front();
 				trajectory_data.total_traj_start_time = traj_info->traj_start_time;
 
 				double traj_time = (now_time - traj_info->traj_start_time).toSec();
@@ -612,99 +629,21 @@ namespace PayloadMPC
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 
 				exec_traj_state_ = POLY_TRAJ;
-				entry_command_active_ = false;
-				entry_command_reached_ = false;
-				entry_command_reference_limiter_.clear();
-				entry_command_last_update_time_ = ros::Time(0);
 				last_reported_trajectory_id_ = trajectory_data.trajectory_id;
 				last_reported_trajectory_piece_ = -1;
 				ROS_INFO("[TRAJ] 收到完整轨迹，开始轨迹跟踪：HOVER -> POLY_TRAJ。");
 			}
 			else
 			{
-				const bool received_new_command = !cmd_data.rcv_stamp.isZero() &&
-					cmd_data.rcv_stamp != last_entry_command_stamp_;
-				if (received_new_command)
+				// 轨迹中止或空队列时保持当前位置；未来轨迹保留 exec_traj=1 等待开始时间。
+				update_hover_pose();
+				if (trajectory_data.exec_traj == -1 || trajectory_data.traj_queue.empty())
 				{
-					last_entry_command_stamp_ = cmd_data.rcv_stamp;
-					const bool command_valid = cmd_data.p.allFinite() && cmd_data.v.allFinite() &&
-						cmd_data.a.allFinite() && cmd_data.j.allFinite();
-					const bool attitude_valid = odom_is_received(now_time) &&
-						odom_data.q.coeffs().allFinite() && odom_data.q.norm() > 1.0e-6;
-
-					if (command_valid && attitude_valid)
-					{
-						latched_entry_command_ = cmd_data;
-						entry_command_yaw_ = get_yaw_from_quaternion(odom_data.q);
-						if (!entry_command_active_)
-						{
-							entry_command_reference_limiter_.reset(odom_data.p, latched_entry_command_.p);
-						}
-						else
-						{
-							entry_command_reference_limiter_.setTarget(latched_entry_command_.p);
-						}
-						entry_command_last_update_time_ = now_time;
-						entry_command_active_ = true;
-						entry_command_reached_ = false;
-						ROS_INFO("[CMD] 收到 PositionCommand，开始跟踪：位置=(%.2f, %.2f, %.2f) m，忽略规划器 yaw，锁定当前航向=%.2f rad，最大速度=%.2f m/s。",
-							latched_entry_command_.p.x(), latched_entry_command_.p.y(),
-							latched_entry_command_.p.z(), entry_command_yaw_,
-							params_.entry_command_.max_velocity);
-					}
-					else
-					{
-						ROS_WARN_THROTTLE(1.0, "[CMD] 收到无效目标，继续使用上一目标。");
-					}
+					trajectory_data.exec_traj = 0;
 				}
-
-				if (entry_command_active_)
-				{
-					double dt = (now_time - entry_command_last_update_time_).toSec();
-					if (!std::isfinite(dt) || dt <= 0.0) dt = 0.01;
-					dt = std::min(dt, 0.05);
-					entry_command_last_update_time_ = now_time;
-					if (!entry_command_reference_limiter_.update(dt))
-					{
-						entry_command_active_ = false;
-						ROS_ERROR_THROTTLE(1.0,
-							"[CMD] 入口目标限速器失败，回到悬停参考。");
-					}
-				}
-				if (entry_command_active_)
-				{
-					const auto &entry_reference = entry_command_reference_limiter_.reference();
-					const double position_error =
-						(entry_reference.position - latched_entry_command_.p).norm();
-					if (!entry_command_reached_ && position_error <= 0.03 &&
-						entry_reference.velocity.norm() <= 0.05)
-					{
-						entry_command_reached_ = true;
-						ROS_INFO("[CMD] 已到达入口目标，保持当前位置，等待新的 PositionCommand 或 PolynomialTraj。");
-					}
-					if (!controller_.setPositionCommandReference(
-						entry_reference.position, entry_reference.velocity,
-						entry_reference.acceleration, Eigen::Vector3d::Zero(),
-						entry_command_yaw_, 0.0))
-					{
-						entry_command_active_ = false;
-						ROS_ERROR_THROTTLE(1.0,
-							"[CMD] 当前目标变为无效，回到悬停参考。");
-					}
-					else
-					{
-						controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
-						ROS_INFO_THROTTLE(1.0,
-							"[CMD] 正在跟踪入口 PositionCommand 目标。");
-					}
-				}
-				if (!entry_command_active_)
-				{
-					controller_.setHoverReference(hover_pose_, hover_yaw_);
-					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
-					ROS_INFO_THROTTLE(1.0,
-						"[CMD_CTRL] 当前保持悬停，等待 PositionCommand 或 PolynomialTraj。");
-				}
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				ROS_INFO_THROTTLE(1.0, "[CMD_CTRL] 当前保持悬停，等待 PolynomialTraj。");
 			}
 		}
 
@@ -712,15 +651,41 @@ namespace PayloadMPC
 
 		case POLY_TRAJ:
 		{
-			if (now_time < (trajectory_data.total_traj_start_time) || now_time > trajectory_data.total_traj_end_time || trajectory_data.exec_traj != 1 || trajectory_data.traj_queue.empty())
+			if (safety_hold_active_)
 			{
-				if (params_.use_trajectory_ending_pos_ && trajectory_data.exec_traj != -1)
+				updateSafetyHoldReference();
+				controller_.setHoverReference(safety_hold_pose_, safety_hold_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				exec_traj_state_ = HOVER;
+				trajectory_data.clear();
+				ROS_WARN_THROTTLE(1.0, "[安全保持] 中止当前轨迹并锁定当前位置。");
+			}
+			else if (trajectory_data.exec_traj != 1 || trajectory_data.traj_queue.empty())
+			{
+				update_hover_pose();
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				exec_traj_state_ = HOVER;
+				ROS_WARN_THROTTLE(1.0, "[TRAJ] 轨迹无效或队列为空，保持当前位置。");
+				trajectory_data.clear();
+				printandresetRMSE();
+			}
+			else if (now_time < trajectory_data.total_traj_start_time)
+			{
+				update_hover_pose();
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+			}
+			else if (now_time >= trajectory_data.total_traj_end_time)
+			{
+				const bool use_cached_endpoint = params_.use_trajectory_ending_pos_ &&
+					trajectory_data.ending_pose_valid;
+				if (use_cached_endpoint)
 				{
-					// tracking the end point of the trajectory
-					//  the hover pose is the end point of the trajectory
-					auto &traj_info = trajectory_data.traj_queue.front().traj;
-					hover_pose_ = traj_info.getJuncPos(traj_info.getPieceNum());
-					hover_yaw_ = get_yaw_from_quaternion(odom_data.q);
+					hover_pose_ = trajectory_data.ending_position;
+					hover_yaw_ = trajectory_data.ending_yaw_valid
+						? trajectory_data.ending_yaw
+						: get_yaw_from_quaternion(odom_data.q);
 				}
 				else
 				{
@@ -729,54 +694,47 @@ namespace PayloadMPC
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				exec_traj_state_ = HOVER;
-				ROS_INFO("[TRAJ] 轨迹结束，保持终点悬停：POLY_TRAJ -> HOVER。");
-				trajectory_data.exec_traj = 0;
+				ROS_INFO("[TRAJ] 轨迹正常结束，保持%s悬停：POLY_TRAJ -> HOVER。",
+					use_cached_endpoint ? "终点" : "当前位置");
+				trajectory_data.clear();
 				printandresetRMSE();
 			}
 			else
 			{
 				update_hover_pose();
 				oneTraj_Data_t *traj_info = &trajectory_data.traj_queue.front();
-				if (now_time < (traj_info->traj_start_time))
-				{ // the start time of first trajectory should be whole trajectory start time
-					trajectory_data.total_traj_start_time = traj_info->traj_start_time;
+				while (trajectory_data.traj_queue.size() > 1 &&
+					now_time >= trajectory_data.traj_queue.at(1).traj_start_time)
+				{
+					trajectory_data.traj_queue.pop_front();
+				}
+				if (trajectory_data.traj_queue.empty())
+				{
+					update_hover_pose();
 					controller_.setHoverReference(hover_pose_, hover_yaw_);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+					exec_traj_state_ = HOVER;
+					trajectory_data.clear();
+					ROS_WARN_THROTTLE(1.0, "[TRAJ] 轨迹队列在执行中变为空，保持当前位置。");
+					break;
 				}
-				else
-				{
-					if (trajectory_data.traj_queue.size() > 1)
-					{
-						oneTraj_Data_t *next_traj_info = &trajectory_data.traj_queue.at(1);
-						while (now_time > next_traj_info->traj_start_time)
-						{ // finish the first trajectory
-							trajectory_data.traj_queue.pop_front();
-							traj_info = &trajectory_data.traj_queue.front();
-							trajectory_data.total_traj_start_time = traj_info->traj_start_time;
-							trajectory_data.total_traj_end_time = trajectory_data.traj_queue.back().traj_end_time;
-							if (trajectory_data.traj_queue.size() == 1)
-							{
-								break;
-							}
-							next_traj_info = &trajectory_data.traj_queue.at(1);
-						}
-					}
 
-					 double traj_time = (now_time - traj_info->traj_start_time).toSec();
-					double piece_time = traj_time;
-					const int piece_index = traj_info->traj.locatePieceIdx(piece_time);
-					if (piece_index != last_reported_trajectory_piece_)
-					{
-						last_reported_trajectory_piece_ = piece_index;
-						ROS_INFO("[TRAJ] 当前执行第 %d/%d 段。",
-							piece_index + 1, traj_info->traj.getPieceNum());
-					}
-					addRMSE();
-					controller_.setTrajectoyReference(
-						traj_info->traj, traj_time, hover_yaw_,
-						traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
-					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+				traj_info = &trajectory_data.traj_queue.front();
+				trajectory_data.total_traj_start_time = traj_info->traj_start_time;
+				double traj_time = (now_time - traj_info->traj_start_time).toSec();
+				double piece_time = traj_time;
+				const int piece_index = traj_info->traj.locatePieceIdx(piece_time);
+				if (piece_index != last_reported_trajectory_piece_)
+				{
+					last_reported_trajectory_piece_ = piece_index;
+					ROS_INFO("[TRAJ] 当前执行第 %d/%d 段。",
+						piece_index + 1, traj_info->traj.getPieceNum());
 				}
+				addRMSE();
+				controller_.setTrajectoyReference(
+					traj_info->traj, traj_time, hover_yaw_,
+					traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
+				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 			}
 		}
 		break;
@@ -1315,13 +1273,69 @@ namespace PayloadMPC
 		controller_.setExternalForce(fq_applied_);
 	}
 
+	bool MPCFSM::landingRequested() const
+	{
+		return rc_data.enter_land_mode || landing_request_active_;
+	}
+
+	void MPCFSM::updateSafetyHoldReference()
+	{
+		if (!safety_hold_pose_latched_ && odom_data.p.allFinite() &&
+			odom_data.q.coeffs().allFinite() && odom_data.q.norm() > 1.0e-6)
+		{
+			safety_hold_pose_ = odom_data.p;
+			safety_hold_yaw_ = get_yaw_from_quaternion(odom_data.q);
+			safety_hold_pose_latched_ = true;
+		}
+		if (safety_hold_pose_latched_)
+		{
+			hover_pose_ = safety_hold_pose_;
+			hover_yaw_ = safety_hold_yaw_;
+		}
+	}
+
+	void MPCFSM::clearTrajectoryAndHoldCurrent(const char *reason)
+	{
+		trajectory_data.clear();
+		exec_traj_state_ = HOVER;
+		safety_hold_pose_latched_ = false;
+		updateSafetyHoldReference();
+		clearAppliedDisturbance();
+		ROS_WARN_THROTTLE(1.0, "[安全保持] %s，清空轨迹并锁定当前位置。",
+			reason != nullptr ? reason : "收到安全保持请求");
+	}
+
+	void MPCFSM::safetyHoldCallback(const std_msgs::BoolConstPtr &msg)
+	{
+		if (msg->data)
+		{
+			safety_hold_active_ = true;
+			clearTrajectoryAndHoldCurrent("收到 safety_hold=true");
+		}
+		else
+		{
+			// 释放时仍清除保持期间收到的轨迹；之后只接受新到达的轨迹。
+			safety_hold_active_ = false;
+			trajectory_data.clear();
+			exec_traj_state_ = HOVER;
+			safety_hold_pose_latched_ = false;
+			ROS_INFO("[安全保持] safety_hold=false，等待新的 PolynomialTraj。 ");
+		}
+	}
+
+	void MPCFSM::landingRequestCallback(const std_msgs::BoolConstPtr &msg)
+	{
+		landing_request_active_ = msg->data;
+		if (landing_request_active_)
+		{
+			ROS_WARN("[AUTO_LAND] 收到外部降落请求。 ");
+		}
+	}
+
 	void MPCFSM::handleOffboardLoss()
 	{
 		// OFFBOARD 退出后不能保留上一条 FUEL 轨迹或上一周期外力 OnlineData。
-		trajectory_data.traj_queue.clear();
-		trajectory_data.total_traj_start_time = ros::Time(0);
-		trajectory_data.total_traj_end_time = ros::Time(0);
-		trajectory_data.exec_traj = 0;
+		trajectory_data.clear();
 		exec_traj_state_ = HOVER;
 		takeoff_requested_ = false;
 		takeoff_request_latched_ = false;
@@ -1608,7 +1622,7 @@ namespace PayloadMPC
 		last_set_hover_pose_time = now;
 		hover_pose_ = takeoff_start_pose_;
 		hover_yaw_ = takeoff_start_yaw_;
-		trajectory_data.exec_traj = 0;
+		trajectory_data.clear();
 		exec_traj_state_ = HOVER;
 		clearAppliedDisturbance();
 		controller_.resetThrustMapping();
@@ -1855,6 +1869,17 @@ namespace PayloadMPC
 		// collective_thrust = input_bounded(INPUT_BODYRATE::kThrust);
 		bodyrates << predicted_input(INPUT_BODYRATE::kRateX), predicted_input(INPUT_BODYRATE::kRateY),
 			predicted_input(INPUT_BODYRATE::kRateZ);
+		if (!bodyrates.allFinite())
+		{
+			ROS_ERROR_THROTTLE(1.0, "[OUTPUT] body_rate 包含非有限值，发布零角速度。 ");
+			bodyrates.setZero();
+		}
+		bodyrates.x() = std::max(-static_cast<double>(params_.max_bodyrate_xy_),
+			std::min(static_cast<double>(params_.max_bodyrate_xy_), bodyrates.x()));
+		bodyrates.y() = std::max(-static_cast<double>(params_.max_bodyrate_xy_),
+			std::min(static_cast<double>(params_.max_bodyrate_xy_), bodyrates.y()));
+		bodyrates.z() = std::max(-static_cast<double>(params_.max_bodyrate_z_),
+			std::min(static_cast<double>(params_.max_bodyrate_z_), bodyrates.z()));
 
 		msg.body_rate.x = bodyrates[0];
 		msg.body_rate.y = bodyrates[1];
@@ -1862,7 +1887,14 @@ namespace PayloadMPC
 
 		// body_rate.x/y/z 是发送给 MAVROS/PX4 的机体系角速度命令，单位通常为 rad/s。
 		// AttitudeTarget.thrust 是 PX4 归一化推力命令，不是 NMPC 内部的牛顿推力 T。
-		if (params_.use_simulation_)
+		if (controller_.usingFallbackOutput() &&
+			extended_state_data.current_extended_state.landed_state !=
+				mavros_msgs::ExtendedState::LANDED_STATE_IN_AIR)
+		{
+			// 无历史有效输出且仍在地面时，不给飞控发送悬停推力。
+			msg.thrust = 0.0;
+		}
+		else if (params_.use_simulation_)
 		{
 			msg.thrust = predicted_input(INPUT_BODYRATE::kThrust);
 		}
@@ -1870,6 +1902,13 @@ namespace PayloadMPC
 		{
 			msg.thrust = controller_.convertThrust(predicted_input(INPUT_BODYRATE::kThrust), bat_data.volt);
 		}
+
+		if (!std::isfinite(msg.thrust))
+		{
+			ROS_ERROR_THROTTLE(1.0, "[OUTPUT] thrust 包含非有限值，发布 0。 ");
+			msg.thrust = 0.0;
+		}
+		msg.thrust = std::max(0.0f, std::min(1.0f, msg.thrust));
 
 		ROS_INFO_THROTTLE(1.0,
 			"[OUTPUT] 推力=%.3f（MAVROS 归一化值），机体系角速度=(%.2f, %.2f, %.2f) rad/s。",
@@ -1906,15 +1945,24 @@ namespace PayloadMPC
 
 	bool MPCFSM::request_px4_auto_land()
 	{
+		const ros::Time now = ros::Time::now();
+		if (!last_auto_land_request_time_.isZero() &&
+			(now - last_auto_land_request_time_).toSec() < 1.0)
+		{
+			return false;
+		}
+		last_auto_land_request_time_ = now;
+
 		mavros_msgs::SetMode land_set_mode;
 		// PX4 AUTO.LAND 由飞控接管最终降落；本函数不负责解锁或起飞。
 		land_set_mode.request.custom_mode = "AUTO.LAND";
-		if (!(set_FCU_mode_srv.call(land_set_mode) && land_set_mode.response.mode_sent))
+		if (!set_FCU_mode_srv.call(land_set_mode) || !land_set_mode.response.mode_sent)
 		{
-			ROS_ERROR_THROTTLE(1.0, "[AUTO_LAND] PX4 未接受 AUTO.LAND，继续重试。");
+			ROS_WARN_THROTTLE(1.0, "[AUTO_LAND] PX4 未接受 AUTO.LAND 请求，继续重试。");
 			return false;
 		}
-		return true;
+		ROS_INFO_THROTTLE(1.0, "[AUTO_LAND] AUTO.LAND 请求已发送，等待 PX4 实际切换模式。");
+		return false;
 	}
 
 	void MPCFSM::reboot_FCU()
