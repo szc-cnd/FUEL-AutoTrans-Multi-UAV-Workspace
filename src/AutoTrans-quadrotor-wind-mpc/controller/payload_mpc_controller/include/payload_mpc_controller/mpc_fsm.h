@@ -66,7 +66,7 @@ namespace PayloadMPC
 
 		enum State_t
 		{
-			MANUAL_CTRL = 1, // 手动模式：不求解自动控制；发布低值占位 setpoint，避免残留上一帧命令。
+			MANUAL_CTRL = 1, // 手动/等待模式：不求解 NMPC；地面发布低值占位，空中 OFFBOARD 过渡保持安全推力。
 			AUTO_HOVER,		 // 自动悬停：发布 body_rate(rad/s) + MAVROS 归一化 thrust。
 			CMD_CTRL,		 // 指令/轨迹控制：跟踪轨迹或悬停参考，并持续发布 MAVROS setpoint。
 			AUTO_TAKEOFF,	 // 自动起飞：等待 PX4 已进入 OFFBOARD 后平滑爬升，不自动解锁或切 OFFBOARD。
@@ -85,6 +85,8 @@ namespace PayloadMPC
 		void process();
 		void CMD_CTRL_process();
 		void safetyHoldCallback(const std_msgs::BoolConstPtr &msg);
+		void plannerHeartbeatCallback(const std_msgs::EmptyConstPtr &msg);
+		void trajectoryCallback(const quadrotor_msgs::PolynomialTrajConstPtr &msg);
 		void landingRequestCallback(const std_msgs::BoolConstPtr &msg);
 
 		bool rc_is_received(const ros::Time &now_time) const;
@@ -116,6 +118,9 @@ namespace PayloadMPC
 		bool takeoff_request_latched_{false};
 		uint32_t last_reported_trajectory_id_{0};
 		int last_reported_trajectory_piece_{-1};
+		// 当前规划器会话中最后接受的轨迹 ID；用于拒绝重复或倒退的旧轨迹。
+		uint32_t last_accepted_trajectory_id_{0};
+		bool trajectory_sequence_initialized_{false};
 		Eigen::Vector3d takeoff_start_pose_{Eigen::Vector3d::Zero()};
 		double takeoff_target_z_{0.0};
 		double takeoff_start_yaw_{0.0};
@@ -127,6 +132,17 @@ namespace PayloadMPC
 		double safety_hold_yaw_{0.0};
 		bool landing_request_active_{false};
 		ros::Time last_auto_land_request_time_{0};
+		// 最近一帧有效的 MAVROS/PX4 归一化推力；仅在空中仍处于 OFFBOARD 的
+		// MANUAL_CTRL 过渡期使用，避免固定低推力导致突然掉高。
+		double last_safe_normalized_thrust_{0.0};
+		bool has_last_safe_normalized_thrust_{false};
+		// NMPC 求解失败时只锁存一次当前位置，避免每个控制周期移动悬停参考。
+		bool solver_failure_safe_hold_{false};
+		// 规划器心跳只表示 FUEL 进程存活，不包含轨迹数据或目标点。
+		ros::Time last_planner_heartbeat_{0};
+		bool planner_heartbeat_seen_{false};
+		bool planner_heartbeat_lost_{false};
+		bool planner_waiting_new_trajectory_{false};
 
 		long int rmse_cnt_ = 0;
 		double rmse_sum_ = 0;
@@ -206,6 +222,10 @@ namespace PayloadMPC
 		void handleOffboardLoss();
 		void clearTrajectoryAndHoldCurrent(const char *reason);
 		void updateSafetyHoldReference();
+		bool plannerHeartbeatFresh(const ros::Time &now) const;
+		void handlePlannerHeartbeatLoss();
+		bool trajectoryTimestampAcceptable(const quadrotor_msgs::PolynomialTraj &msg,
+			const ros::Time &now) const;
 		bool landingRequested() const;
 		ThrustModelGateReason thrustModelGate(const ros::Time &now) const;
 		void reportThrustModelGate(ThrustModelGateReason reason);
@@ -215,7 +235,8 @@ namespace PayloadMPC
 							   ros::Time &time, double dt);
 
 		void publish_bodyrate_ctrl(const Eigen::Ref<const Eigen::Matrix<real_t, kInputSize, 1>> predicted_input,
-								   const ros::Time &stamp);
+									   const ros::Time &stamp);
+		void publish_solver_failure_safe_ctrl(const ros::Time &stamp);
 		void publish_manual_ctrl(const ros::Time &stamp);
 
 		// ---- tools ----

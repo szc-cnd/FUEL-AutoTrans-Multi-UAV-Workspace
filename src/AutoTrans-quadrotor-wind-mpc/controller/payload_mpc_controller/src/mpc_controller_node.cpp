@@ -52,9 +52,16 @@ int main(int argc, char **argv)
     ros::Subscriber mpc_traj_sub =
         nh.subscribe<quadrotor_msgs::PolynomialTraj>("traj",
                                                      100,
-                                                     boost::bind(&Trajectory_Data_t::feed, &fsm.trajectory_data, _1),
+                                                     boost::bind(&MPCFSM::trajectoryCallback, &fsm, _1),
                                                      ros::VoidConstPtr(),
                                                      ros::TransportHints().tcpNoDelay());
+
+    ros::Subscriber planner_heartbeat_sub =
+        nh.subscribe<std_msgs::Empty>("planner_heartbeat",
+                                      10,
+                                      boost::bind(&MPCFSM::plannerHeartbeatCallback, &fsm, _1),
+                                      ros::VoidConstPtr(),
+                                      ros::TransportHints().tcpNoDelay());
 
     // PositionCommand 只由原简单控制器消费；AutoTrans 仅接收完整 PolynomialTraj。
     ros::Subscriber safety_hold_sub =

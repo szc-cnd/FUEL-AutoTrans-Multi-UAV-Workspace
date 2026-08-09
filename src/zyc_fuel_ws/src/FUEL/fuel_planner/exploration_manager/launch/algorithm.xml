@@ -43,6 +43,7 @@
     <remap from="/planning/new" to="$(arg topic_prefix)/planning/new"/>
     <remap from="/planning/bspline" to="$(arg topic_prefix)/planning/bspline"/>
     <remap from="/planning/safety_hold" to="$(arg topic_prefix)/planning/safety_hold"/>
+    <remap from="/planning/heartbeat" to="$(arg topic_prefix)/planning/heartbeat"/>
     <remap from="/sdf_map/occupancy_all" to="$(arg topic_prefix)/sdf_map/occupancy_all"/>
     <remap from="/sdf_map/occupancy_local" to="$(arg topic_prefix)/sdf_map/occupancy_local"/>
     <remap from="/sdf_map/occupancy_local_inflate" to="$(arg topic_prefix)/sdf_map/occupancy_local_inflate"/>

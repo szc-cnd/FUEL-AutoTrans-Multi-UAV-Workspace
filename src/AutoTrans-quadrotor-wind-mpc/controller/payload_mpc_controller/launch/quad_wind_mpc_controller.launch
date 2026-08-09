@@ -14,6 +14,9 @@
   <arg name="set_mode_service" default="/UAV0/mavros/set_mode"/>
   <!-- bridge 输出的完整 FUEL/规划器多项式轨迹，保持与雷达 Odometry 同一世界坐标语义。 -->
   <arg name="trajectory_topic" default="/UAV0/planning/autotrans_trajectory"/>
+  <!-- FUEL 规划器 10 Hz 存活心跳；控制器据此判断规划器是否仍在运行。 -->
+  <arg name="planner_heartbeat_topic" default="/UAV0/planning/heartbeat"/>
+  <arg name="require_planner_heartbeat" default="false"/>
   <!-- PositionCommand 只供 logger 记录；AutoTrans 控制器不再订阅它。 -->
   <arg name="position_cmd_topic" default="/UAV0/planning/pos_cmd"/>
   <!-- 规划器主动安全保持；true 时清空当前轨迹并锁定当前位置。 -->
@@ -47,6 +50,7 @@
   <node pkg="payload_mpc_controller" type="mpc_controller_node" name="mpc_controller_node" output="screen">
     <rosparam command="load" file="$(find payload_mpc_controller)/config/mpc.yaml"/>
     <rosparam command="load" file="$(find payload_mpc_controller)/config/model.yaml"/>
+    <param name="require_planner_heartbeat" value="$(arg require_planner_heartbeat)"/>
 
     <!-- NMPC 的位置、速度和姿态状态来自 FAST-LIO。 -->
     <remap from="~odom" to="$(arg odom_topic)"/>
@@ -67,6 +71,7 @@
 
     <!-- AutoTrans 只接受完整 PolynomialTraj；PositionCommand 不再进入控制器。 -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
+    <remap from="~planner_heartbeat" to="$(arg planner_heartbeat_topic)"/>
     <remap from="~safety_hold" to="$(arg safety_hold_topic)"/>
     <remap from="~landing_request" to="$(arg landing_request_topic)"/>
   </node>

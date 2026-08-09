@@ -531,26 +531,40 @@ namespace PayloadMPC
 			break;
 		}
 
-		if (controller_.solverFailurePersistent(0.2) && fsm_state != MANUAL_CTRL)
+		if (!controller_.lastMpcSolveSucceeded() && fsm_state != MANUAL_CTRL)
 		{
-			// 连续求解失败只锁定控制器内部参考，不替 PX4 自动切换飞行模式。
-			trajectory_data.clear();
-			exec_traj_state_ = HOVER;
-			if (fsm_state == AUTO_TAKEOFF)
+			// 求解失败立即进入控制器内部安全悬停，不替 PX4 自动切换飞行模式。
+			// 只在首次失败时锁存当前位置，避免悬停参考跟着故障期间的漂移移动。
+			if (!solver_failure_safe_hold_)
 			{
-				takeoff_requested_ = false;
-				fsm_state = AUTO_HOVER;
+				clearTrajectoryAndHoldCurrent("NMPC 求解失败");
+				if (fsm_state == AUTO_TAKEOFF)
+				{
+					takeoff_requested_ = false;
+					fsm_state = AUTO_HOVER;
+				}
+				controller_.setHoverReference(hover_pose_, hover_yaw_);
+				solver_failure_safe_hold_ = true;
 			}
-			update_hover_pose();
-			controller_.setHoverReference(hover_pose_, hover_yaw_);
 			ROS_ERROR_THROTTLE(1.0,
-				"[OUTPUT] NMPC 连续求解失败超过 0.2 s，已清除轨迹并锁定当前位置；未自动切换 PX4 模式。 ");
+				"[OUTPUT] NMPC 求解失败，立即发布安全悬停控制量；未自动切换 PX4 模式。 ");
+		}
+		else
+		{
+			solver_failure_safe_hold_ = false;
 		}
 
 		if (fsm_state == AUTO_HOVER || fsm_state == CMD_CTRL ||
 			fsm_state == AUTO_TAKEOFF || fsm_state == AUTO_LAND)
 		{
-			publish_bodyrate_ctrl(mpc_predicted_inputs_.col(0), now_time);
+			if (!controller_.lastMpcSolveSucceeded())
+			{
+				publish_solver_failure_safe_ctrl(now_time);
+			}
+			else
+			{
+				publish_bodyrate_ctrl(mpc_predicted_inputs_.col(0), now_time);
+			}
 			publishPrediction(controller_.reference_states_, mpc_predicted_states_, now_time, controller_.getTimeStep());
 		}
 		else if (fsm_state == MANUAL_CTRL)
@@ -601,6 +615,27 @@ namespace PayloadMPC
 	void MPCFSM::CMD_CTRL_process()
 	{
 		ros::Time now_time = ros::Time::now();
+		if (params_.require_planner_heartbeat_ && !plannerHeartbeatFresh(now_time))
+		{
+			handlePlannerHeartbeatLoss();
+			updateSafetyHoldReference();
+			controller_.setHoverReference(safety_hold_pose_, safety_hold_yaw_);
+			controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+			ROS_INFO_THROTTLE(1.0,
+				"[规划器心跳] 未收到有效心跳，清空轨迹并保持当前位置，等待规划器恢复。");
+			return;
+		}
+
+		if (planner_waiting_new_trajectory_)
+		{
+			updateSafetyHoldReference();
+			controller_.setHoverReference(safety_hold_pose_, safety_hold_yaw_);
+			controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+			ROS_INFO_THROTTLE(1.0,
+				"[规划器心跳] 已恢复，保持当前位置，等待新的 PolynomialTraj。");
+			return;
+		}
+
 		switch (exec_traj_state_)
 		{
 		case HOVER:
@@ -1305,6 +1340,116 @@ namespace PayloadMPC
 			reason != nullptr ? reason : "收到安全保持请求");
 	}
 
+	bool MPCFSM::plannerHeartbeatFresh(const ros::Time &now) const
+	{
+		if (!planner_heartbeat_seen_ || last_planner_heartbeat_.isZero())
+		{
+			return false;
+		}
+		const double age = (now - last_planner_heartbeat_).toSec();
+		return std::isfinite(age) && age >= 0.0 &&
+			age <= params_.planner_heartbeat_timeout_;
+	}
+
+	void MPCFSM::handlePlannerHeartbeatLoss()
+	{
+		if (planner_heartbeat_lost_)
+		{
+			return;
+		}
+		planner_heartbeat_lost_ = true;
+		planner_waiting_new_trajectory_ = true;
+		// 规划器可能重启并从较小 ID 重新计数；心跳恢复后的第一条新轨迹允许重新建立序列。
+		last_accepted_trajectory_id_ = 0;
+		trajectory_sequence_initialized_ = false;
+		clearTrajectoryAndHoldCurrent("规划器心跳超时");
+		ROS_WARN_THROTTLE(1.0,
+			"[规划器心跳] 超过 %.2f s 未收到心跳，已清空轨迹并锁定当前位置。",
+			params_.planner_heartbeat_timeout_);
+	}
+
+	void MPCFSM::plannerHeartbeatCallback(const std_msgs::EmptyConstPtr &)
+	{
+		const bool was_lost = planner_heartbeat_lost_;
+		last_planner_heartbeat_ = ros::Time::now();
+		planner_heartbeat_seen_ = true;
+		planner_heartbeat_lost_ = false;
+		if (was_lost)
+		{
+			planner_waiting_new_trajectory_ = true;
+			exec_traj_state_ = HOVER;
+			ROS_WARN("[规划器心跳] 已恢复，不恢复旧轨迹，等待新的 PolynomialTraj。");
+		}
+	}
+
+	bool MPCFSM::trajectoryTimestampAcceptable(
+		const quadrotor_msgs::PolynomialTraj &msg, const ros::Time &now) const
+	{
+		if (msg.header.stamp.isZero())
+		{
+			return false;
+		}
+
+		const double age = (now - msg.header.stamp).toSec();
+		if (!std::isfinite(age) || age > params_.msg_timeout_.trajectory ||
+			age < -params_.msg_timeout_.trajectory_future)
+		{
+			return false;
+		}
+
+		if (trajectory_sequence_initialized_ &&
+			msg.trajectory_id <= last_accepted_trajectory_id_)
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	void MPCFSM::trajectoryCallback(const quadrotor_msgs::PolynomialTrajConstPtr &msg)
+	{
+		if (msg->action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
+		{
+			const ros::Time now = ros::Time::now();
+			if (params_.require_planner_heartbeat_ && !plannerHeartbeatFresh(now))
+			{
+				ROS_WARN_THROTTLE(1.0,
+					"[TRAJ] 规划器心跳无效，拒绝新的轨迹并保持当前位置。");
+				return;
+			}
+
+			const uint32_t trajectory_id = msg->trajectory_id;
+			if (!trajectoryTimestampAcceptable(*msg, now))
+			{
+				const double age = msg->header.stamp.isZero()
+					? std::numeric_limits<double>::quiet_NaN()
+					: (now - msg->header.stamp).toSec();
+				ROS_WARN_THROTTLE(1.0,
+					"[TRAJ] 拒绝旧轨迹或未来/乱序轨迹：id=%u，时间戳年龄=%.3f s；保持当前有效轨迹。",
+					trajectory_id, age);
+				return;
+			}
+
+			trajectory_data.feed(msg);
+			if (trajectory_data.exec_traj == 1 && trajectory_data.trajectory_id == trajectory_id)
+			{
+				last_accepted_trajectory_id_ = trajectory_id;
+				trajectory_sequence_initialized_ = true;
+			}
+			if (planner_waiting_new_trajectory_ &&
+				trajectory_data.exec_traj == 1 &&
+				trajectory_data.trajectory_id == trajectory_id)
+			{
+				planner_waiting_new_trajectory_ = false;
+				ROS_INFO("[TRAJ] 已收到心跳恢复后的新 PolynomialTraj，解除等待。");
+			}
+			return;
+		}
+
+		// ACTION_ABORT 等明确控制消息不依赖心跳，用于立即终止当前轨迹。
+		trajectory_data.feed(msg);
+	}
+
 	void MPCFSM::safetyHoldCallback(const std_msgs::BoolConstPtr &msg)
 	{
 		if (msg->data)
@@ -1314,12 +1459,19 @@ namespace PayloadMPC
 		}
 		else
 		{
-			// 释放时仍清除保持期间收到的轨迹；之后只接受新到达的轨迹。
+			// 解除保持只释放安全门控，不清空已经通过校验的新轨迹；
+			// 规划器可能先发布轨迹、再发布 safety_hold=false，清空会丢掉有效轨迹。
 			safety_hold_active_ = false;
-			trajectory_data.clear();
 			exec_traj_state_ = HOVER;
 			safety_hold_pose_latched_ = false;
-			ROS_INFO("[安全保持] safety_hold=false，等待新的 PolynomialTraj。 ");
+			if (trajectory_data.exec_traj == 1 && !trajectory_data.traj_queue.empty())
+			{
+				ROS_INFO("[安全保持] safety_hold=false，保留已接收的 PolynomialTraj，等待开始执行。");
+			}
+			else
+			{
+				ROS_INFO("[安全保持] safety_hold=false，等待新的 PolynomialTraj。");
+			}
 		}
 	}
 
@@ -1909,11 +2061,77 @@ namespace PayloadMPC
 			msg.thrust = 0.0;
 		}
 		msg.thrust = std::max(0.0f, std::min(1.0f, msg.thrust));
+		if (msg.thrust > 0.0f)
+		{
+			last_safe_normalized_thrust_ = msg.thrust;
+			has_last_safe_normalized_thrust_ = true;
+		}
 
 		ROS_INFO_THROTTLE(1.0,
 			"[OUTPUT] 推力=%.3f（MAVROS 归一化值），机体系角速度=(%.2f, %.2f, %.2f) rad/s。",
 			msg.thrust, msg.body_rate.x, msg.body_rate.y, msg.body_rate.z);
 
+		ctrl_FCU_pub.publish(msg);
+	}
+
+	void MPCFSM::publish_solver_failure_safe_ctrl(const ros::Time &stamp)
+	{
+		mavros_msgs::AttitudeTarget msg;
+		msg.header.stamp = stamp;
+		msg.header.frame_id = std::string("FCU");
+		msg.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;
+
+		// 求解失败时只保持当前航向：body_rate.x/y/z 是机体系角速度命令，单位 rad/s。
+		msg.body_rate.x = 0.0;
+		msg.body_rate.y = 0.0;
+		msg.body_rate.z = 0.0;
+
+		const bool state_fresh = !state_data.rcv_stamp.isZero() &&
+			(stamp - state_data.rcv_stamp).toSec() < params_.msg_timeout_.state;
+		const bool extended_state_fresh = !extended_state_data.rcv_stamp.isZero() &&
+			(stamp - extended_state_data.rcv_stamp).toSec() < params_.msg_timeout_.extended_state;
+		// 只有“明确落地/明确未解锁/明确退出 OFFBOARD”才归零推力。
+		// 状态消息暂时超时或 landed_state 未知时，不能据此判断已经落地，
+		// 否则空中会因状态丢包突然失去悬停推力。
+		const bool explicitly_landed = extended_state_fresh &&
+			extended_state_data.current_extended_state.landed_state ==
+			mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND;
+		const bool explicitly_disarmed = state_fresh && !state_data.current_state.armed;
+		const bool explicitly_not_offboard = state_fresh &&
+			state_data.current_state.mode != "OFFBOARD";
+		const bool keep_hover_thrust =
+			!explicitly_landed && !explicitly_disarmed && !explicitly_not_offboard;
+
+		if (keep_hover_thrust)
+		{
+			// getHoverNormalizedThrust() 只计算当前悬停值，不会把安全输出写入 RLS 队列。
+			// AttitudeTarget.thrust 是 MAVROS/PX4 归一化推力，不是牛顿推力。
+			msg.thrust = static_cast<float>(controller_.getHoverNormalizedThrust());
+			if (std::isfinite(msg.thrust) && msg.thrust > 0.0f)
+			{
+				last_safe_normalized_thrust_ = msg.thrust;
+				has_last_safe_normalized_thrust_ = true;
+			}
+		}
+		else
+		{
+			// 只有收到明确的地面/未解锁/非 OFFBOARD 状态时才发布零推力。
+			msg.thrust = 0.0f;
+			if (explicitly_landed || explicitly_disarmed)
+			{
+				has_last_safe_normalized_thrust_ = false;
+			}
+		}
+
+		if (!std::isfinite(msg.thrust))
+		{
+			ROS_ERROR_THROTTLE(1.0, "[OUTPUT] 安全悬停推力无效，发布 0。 ");
+			msg.thrust = 0.0f;
+		}
+		msg.thrust = std::max(0.0f, std::min(1.0f, msg.thrust));
+		ROS_INFO_THROTTLE(1.0,
+			"[OUTPUT] NMPC 求解失败，安全悬停：推力=%.3f（MAVROS 归一化值），机体系角速度=(0, 0, 0) rad/s。",
+			msg.thrust);
 		ctrl_FCU_pub.publish(msg);
 	}
 
@@ -1924,12 +2142,42 @@ namespace PayloadMPC
 		msg.header.frame_id = std::string("FCU");
 		msg.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;
 
-		// Manual 输出只用于清空上一帧自动控制 setpoint：机体系角速度命令为 0 rad/s。
+		// Manual 输出不求解 NMPC，机体系角速度命令保持为 0 rad/s。
 		msg.body_rate.x = 0.0;
 		msg.body_rate.y = 0.0;
 		msg.body_rate.z = 0.0;
-		// 与 IPC 保持一致：这里是 MAVROS/PX4 归一化 thrust，不是牛顿推力。
-		msg.thrust = 0.05;
+
+		const float ground_placeholder_thrust = 0.05f;
+		const bool px4_in_air =
+			extended_state_data.current_extended_state.landed_state ==
+			mavros_msgs::ExtendedState::LANDED_STATE_IN_AIR;
+		const bool px4_offboard_armed =
+			state_data.current_state.armed && state_data.current_state.mode == "OFFBOARD";
+		if (!px4_in_air || !state_data.current_state.armed)
+		{
+			// 跨飞行架次不复用上一架次的推力；下一次空中过渡使用配置悬停比例。
+			has_last_safe_normalized_thrust_ = false;
+		}
+
+		if (px4_in_air && px4_offboard_armed)
+		{
+			// 空中仍处于 OFFBOARD 时，保持最近有效归一化推力；没有历史值时使用
+			// 配置的悬停比例，避免发送固定低推力导致突然掉高。
+			const double fallback_thrust = has_last_safe_normalized_thrust_
+				? last_safe_normalized_thrust_
+				: params_.thr_map_.hover_percentage;
+			msg.thrust = static_cast<float>(std::max(
+				0.0, std::min(params_.thr_map_.max_normalized_thrust, fallback_thrust)));
+			ROS_WARN_THROTTLE(1.0,
+				"[安全] MANUAL_CTRL：空中仍处于 OFFBOARD，保持归一化推力 %.3f，等待 PX4 退出 OFFBOARD。",
+				msg.thrust);
+		}
+		else
+		{
+			// 地面阶段保留低推力占位，维持进入 OFFBOARD 所需的连续 setpoint；
+			// 已退出 OFFBOARD 或已落地时该消息不会被 PX4 作为飞行控制量执行。
+			msg.thrust = ground_placeholder_thrust;
+		}
 
 		ctrl_FCU_pub.publish(msg);
 	}

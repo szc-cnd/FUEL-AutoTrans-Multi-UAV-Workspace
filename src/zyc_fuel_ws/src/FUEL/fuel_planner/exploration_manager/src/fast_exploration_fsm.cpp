@@ -55,6 +55,8 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   exec_timer_ = nh.createTimer(ros::Duration(0.01), &FastExplorationFSM::FSMCallback, this);
   safety_timer_ = nh.createTimer(ros::Duration(0.05), &FastExplorationFSM::safetyCallback, this);
   frontier_timer_ = nh.createTimer(ros::Duration(0.5), &FastExplorationFSM::frontierCallback, this);
+  // 规划器心跳固定 10 Hz，只表示 FUEL 进程仍在运行，不代表发布了新的 B-spline。
+  heartbeat_timer_ = nh.createTimer(ros::Duration(0.1), &FastExplorationFSM::heartbeatCallback, this);
 
   trigger_sub_ =
       nh.subscribe("/waypoint_generator/waypoints", 1, &FastExplorationFSM::triggerCallback, this);
@@ -74,11 +76,18 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   bspline_pub_ = nh.advertise<bspline::Bspline>("/planning/bspline", 10);
   // 2026-07-13: latch 保证后启动的控制器也能收到当前安全门控状态。
   safety_hold_pub_ = nh.advertise<std_msgs::Bool>("/planning/safety_hold", 2, true);
+  // 非 latched 心跳，避免控制器重启时重放旧的“规划器存活”状态。
+  planning_heartbeat_pub_ = nh.advertise<std_msgs::Empty>("/planning/heartbeat", 10, false);
   dynamic_detection_enable_pub_ =
       nh.advertise<std_msgs::Bool>(dynamic_detection_enable_topic, 2, true);
   setSafetyHold(false, "initialization");
   // 2026-07-27: 锁存 false，后启动的 LDOT 在首条通道内轨迹前也必须保持冻结。
   setDynamicDetectionEnable(false, "initialization", true);
+}
+
+void FastExplorationFSM::heartbeatCallback(const ros::TimerEvent&) {
+  std_msgs::Empty heartbeat;
+  planning_heartbeat_pub_.publish(heartbeat);
 }
 
 void FastExplorationFSM::setSafetyHold(bool active, const string& reason) {

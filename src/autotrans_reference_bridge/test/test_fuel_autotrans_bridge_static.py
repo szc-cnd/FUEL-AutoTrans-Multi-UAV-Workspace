@@ -31,6 +31,19 @@ class FuelAutoTransBridgeStaticTest(unittest.TestCase):
         self.assertIn("output_pub_.publish(abort_message)", self.source)
         self.assertIn("ACTION_ABORT", self.source)
 
+    def test_polynomial_coefficients_match_autotrans_descending_convention(self):
+        fit_start = self.source.index("bool fitPiece")
+        build_start = self.source.index("bool buildTrajectory", fit_start)
+        fit_source = self.source[fit_start:build_start]
+        serialization_start = fit_source.index("output.data.reserve")
+        serialization = fit_source[serialization_start:]
+
+        # AutoTrans 的 Piece 将最高次项放在第 0 列、常数项放在最后一列。
+        self.assertRegex(
+            serialization,
+            r"for\s*\(int order = degree; order >= 0; --order\)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

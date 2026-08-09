@@ -50,6 +50,8 @@
     <arg name="reboot_service" value="/UAV0/mavros/cmd/command"/>
     <arg name="set_mode_service" value="/UAV0/mavros/set_mode"/>
     <arg name="trajectory_topic" value="/UAV0/planning/autotrans_trajectory"/>
+    <arg name="planner_heartbeat_topic" value="/UAV0/planning/heartbeat"/>
+    <arg name="require_planner_heartbeat" value="true"/>
     <arg name="safety_hold_topic" value="/UAV0/planning/safety_hold"/>
     <arg name="landing_request_topic" value="/UAV0/mission/landing_request"/>
     <arg name="enable_logger" value="$(arg enable_logger)"/>

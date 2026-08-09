@@ -131,8 +131,9 @@ private:
     output.num_dim = static_cast<uint32_t>(dimension);
     output.duration = duration;
     output.data.reserve(static_cast<std::size_t>((degree + 1) * dimension));
-    // AutoTrans 使用 Eigen::Map<MatrixXd> 按列主序恢复矩阵；这里按阶次再按维度写入。
-    for (int order = 0; order <= degree; ++order)
+    // AutoTrans 的 Piece 按降幂读取多项式：第 0 列是最高次项，最后一列是常数项。
+    // data[] 按列主序保存，每一列依次写入 x/y/z 三轴系数。
+    for (int order = degree; order >= 0; --order)
     {
       for (int dim = 0; dim < dimension; ++dim)
       {

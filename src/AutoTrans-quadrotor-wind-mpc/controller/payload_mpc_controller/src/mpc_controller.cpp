@@ -105,11 +105,7 @@ namespace PayloadMPC
     {
       predicted_states = candidate_states;
       control_inputs = candidate_inputs;
-      last_valid_predicted_states_ = candidate_states;
-      last_valid_control_inputs_ = candidate_inputs;
-      has_last_valid_output_ = true;
       using_fallback_output_ = false;
-      solver_failure_start_ = ros::Time(0);
       if (!previous_mpc_solve_success)
       {
         ROS_INFO("[OUTPUT] NMPC 恢复正常。");
@@ -117,26 +113,15 @@ namespace PayloadMPC
     }
     else
     {
-      if (solver_failure_start_.isZero())
-      {
-        solver_failure_start_ = ros::Time::now();
-      }
       using_fallback_output_ = true;
-      if (has_last_valid_output_)
-      {
-        predicted_states = last_valid_predicted_states_;
-        control_inputs = last_valid_control_inputs_;
-      }
-      else
-      {
-        // 尚无历史有效输出时使用零角速度和悬停物理推力；落地时由 FSM 将 thrust 清零。
-        predicted_states = reference_states;
-        control_inputs.setZero();
-        const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
-        control_inputs.row(kThrust).setConstant(
-            std::isfinite(hover_thrust) ? hover_thrust : 0.0);
-      }
-      ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 求解失败，保持上一安全控制量。");
+      // 求解失败时不再把上一帧可能正在加速或转向的控制量复制回来。
+      // FSM 会在同一控制周期发布零机体系角速度和悬停推力。
+      predicted_states = reference_states;
+      control_inputs.setZero();
+      const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
+      control_inputs.row(kThrust).setConstant(
+          std::isfinite(hover_thrust) ? hover_thrust : 0.0);
+      ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 求解失败，立即切换安全悬停输出。");
     }
 
     // Start a thread to prepare for the next execution.
@@ -157,14 +142,26 @@ namespace PayloadMPC
     execMPC(reference_states_, reference_inputs_, estimated_state, predicted_states, control_inputs);
   }
 
-  bool MpcController::solverFailurePersistent(double duration_sec) const
+  double MpcController::getHoverNormalizedThrust() const
   {
-    if (last_mpc_solve_success_ || solver_failure_start_.isZero() ||
-        !std::isfinite(duration_sec) || duration_sec <= 0.0)
+    const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
+    const double configured_hover = params_.thr_map_.hover_percentage;
+    const double max_normalized = params_.thr_map_.max_normalized_thrust;
+    double normalized = configured_hover;
+
+    if (std::isfinite(hover_thrust) && hover_thrust > 0.0 &&
+        std::isfinite(thrustscale_) && thrustscale_ > 0.0)
     {
-      return false;
+      normalized = hover_thrust / thrustscale_;
     }
-    return (ros::Time::now() - solver_failure_start_).toSec() >= duration_sec;
+
+    if (!std::isfinite(normalized))
+    {
+      normalized = 0.0;
+    }
+    const double upper_bound =
+        std::isfinite(max_normalized) && max_normalized > 0.0 ? max_normalized : 1.0;
+    return std::max(0.0, std::min(upper_bound, normalized));
   }
   // drone pos
   void MpcController::setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw)

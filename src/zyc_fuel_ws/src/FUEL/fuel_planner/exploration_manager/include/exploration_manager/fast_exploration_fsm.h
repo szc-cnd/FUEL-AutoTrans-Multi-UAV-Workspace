@@ -48,9 +48,10 @@ private:
 
   /* ROS utils */
   ros::NodeHandle node_;
-  ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
+  ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_, heartbeat_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
-  ros::Publisher replan_pub_, new_pub_, bspline_pub_, safety_hold_pub_, dynamic_detection_enable_pub_;
+  ros::Publisher replan_pub_, new_pub_, bspline_pub_, safety_hold_pub_,
+      dynamic_detection_enable_pub_, planning_heartbeat_pub_;
   bool safety_hold_active_{false};
   // 2026-07-13: 记录连续跟踪误差起点，区分短时控制滞后与真实失控。
   ros::Time tracking_error_since_;
@@ -77,6 +78,7 @@ private:
   void FSMCallback(const ros::TimerEvent& e);
   void safetyCallback(const ros::TimerEvent& e);
   void frontierCallback(const ros::TimerEvent& e);
+  void heartbeatCallback(const ros::TimerEvent& e);
   void triggerCallback(const nav_msgs::PathConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
   void missionStatusCallback(const std_msgs::StringConstPtr& msg);

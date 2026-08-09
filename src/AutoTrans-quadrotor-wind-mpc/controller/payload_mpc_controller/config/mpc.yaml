@@ -59,7 +59,7 @@ enable_rc_hover_adjust: false
 # x/y/z 是 /mavros/local_position/odom 对应的 ENU 世界坐标，单位 m；yaw 仍取切入时当前航向。
 # 关闭后恢复为“切换瞬间当前位置悬停”。固定模式下会忽略 enable_rc_hover_adjust。
 fixed_hover:
-    enabled: true
+    enabled: false
     x: 0.0
     y: 0.0
     z: 0.5
@@ -217,3 +217,13 @@ msg_timeout:
     state: 1.5
     # /mavros/extended_state 提供 landed_state；超时后禁止外力补偿，单位 s。
     extended_state: 0.5
+    # PolynomialTraj 起始时间最多允许落后当前时间 0.8 s；超过后拒绝旧轨迹，单位 s。
+    trajectory: 0.8
+    # PolynomialTraj 起始时间最多允许超前当前时间 0.1 s，避免时钟/队列异常造成未来轨迹，单位 s。
+    trajectory_future: 0.1
+
+# FUEL 规划器心跳频率约 10 Hz；连续超过该时间未收到心跳时清空轨迹并保持当前位置。
+# 这不是 B-spline 更新超时，正常执行期间没有新规划也不会触发该保护。
+planner_heartbeat_timeout: 0.5
+# 未使用 FUEL 心跳的规划器入口保持 false；CAV0 专用 launch 会显式开启。
+require_planner_heartbeat: false

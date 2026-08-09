@@ -108,6 +108,10 @@ namespace PayloadMPC
 			// /mavros/state 与 /mavros/extended_state 的超时阈值，单位 s。
 			double state;
 			double extended_state;
+			// PolynomialTraj 起始时间允许落后当前时间的最大值，单位 s；超过后拒绝旧轨迹。
+			double trajectory;
+			// PolynomialTraj 起始时间允许超前当前时间的最大值，单位 s；超过后拒绝未来轨迹。
+			double trajectory_future;
 		};
 
 		struct ThrustMapping
@@ -227,6 +231,10 @@ namespace PayloadMPC
 		int step_N_;
 
 		double ctrl_freq_max_;
+		// FUEL 规划器心跳超时阈值，单位 s；仅用于 CMD_CTRL/PolynomialTraj 执行阶段。
+		double planner_heartbeat_timeout_{0.5};
+		// 是否要求规划器心跳；CAV0 FUEL 开启，其他没有心跳的规划器入口显式关闭。
+		bool require_planner_heartbeat_{false};
 
 		bool use_trajectory_ending_pos_;
 
@@ -503,18 +511,26 @@ namespace PayloadMPC
 			read_essential_param(nh, "msg_timeout/rpm", msg_timeout_.rpm);
 			read_essential_param(nh, "msg_timeout/state", msg_timeout_.state);
 			read_essential_param(nh, "msg_timeout/extended_state", msg_timeout_.extended_state);
+			read_essential_param(nh, "msg_timeout/trajectory", msg_timeout_.trajectory);
+			read_essential_param(nh, "msg_timeout/trajectory_future", msg_timeout_.trajectory_future);
+			read_essential_param(nh, "planner_heartbeat_timeout", planner_heartbeat_timeout_);
+			read_essential_param(nh, "require_planner_heartbeat", require_planner_heartbeat_);
 			if (!std::isfinite(msg_timeout_.odom) || !std::isfinite(msg_timeout_.force_attitude_odom) ||
 				!std::isfinite(msg_timeout_.rc) ||
 				!std::isfinite(msg_timeout_.cmd) || !std::isfinite(msg_timeout_.imu) ||
 				!std::isfinite(msg_timeout_.bat) || !std::isfinite(msg_timeout_.rpm) ||
 				!std::isfinite(msg_timeout_.state) || !std::isfinite(msg_timeout_.extended_state) ||
+				!std::isfinite(msg_timeout_.trajectory) || !std::isfinite(msg_timeout_.trajectory_future) ||
+				!std::isfinite(planner_heartbeat_timeout_) ||
 				msg_timeout_.odom <= 0.0 || msg_timeout_.force_attitude_odom <= 0.0 ||
 				msg_timeout_.rc <= 0.0 ||
 				msg_timeout_.cmd <= 0.0 || msg_timeout_.imu <= 0.0 ||
 				msg_timeout_.bat <= 0.0 || msg_timeout_.rpm <= 0.0 ||
-				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0)
+				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0 ||
+				msg_timeout_.trajectory <= 0.0 || msg_timeout_.trajectory_future < 0.0 ||
+				planner_heartbeat_timeout_ <= 0.0)
 			{
-				ROS_ERROR("[参数] 所有 msg_timeout 必须为有限正数。");
+				ROS_ERROR("[参数] 消息和规划器心跳超时参数必须为有限正数。");
 				ROS_BREAK();
 			}
 

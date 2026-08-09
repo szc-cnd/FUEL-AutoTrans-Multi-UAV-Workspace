@@ -69,9 +69,11 @@ namespace PayloadMPC
     void execMPC(const Eigen::Matrix<real_t, kStateSize, 1> &estimated_state,
                  Eigen::Matrix<real_t, kStateSize, kSamples + 1> &predicted_states,
                  Eigen::Matrix<real_t, kInputSize, kSamples> &control_inputs);
-    bool solverFailurePersistent(double duration_sec) const;
     bool usingFallbackOutput() const { return using_fallback_output_; }
     bool lastMpcSolveSucceeded() const { return last_mpc_solve_success_; }
+    // 根据当前 thrustscale 计算悬停所需的 MAVROS/PX4 归一化推力；该函数不写入 RLS 样本队列。
+    // 返回值不是牛顿推力，实际输出范围受 max_normalized_thrust 限制。
+    double getHoverNormalizedThrust() const;
     void setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw);
     // 保留 PositionCommand 入口参考函数供旧接口兼容；当前 AutoTrans 节点不订阅 PositionCommand，
     // 位置/速度/加速度使用 ENU 世界系，yaw 单位 rad，yaw_rate 单位 rad/s。
@@ -149,10 +151,6 @@ namespace PayloadMPC
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
     bool using_fallback_output_{false};
-    bool has_last_valid_output_{false};
-    ros::Time solver_failure_start_{0};
-    Eigen::Matrix<real_t, kStateSize, kSamples + 1> last_valid_predicted_states_;
-    Eigen::Matrix<real_t, kInputSize, kSamples> last_valid_control_inputs_;
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;
