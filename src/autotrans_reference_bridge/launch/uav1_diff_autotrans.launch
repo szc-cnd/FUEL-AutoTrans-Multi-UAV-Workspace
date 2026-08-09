@@ -12,9 +12,9 @@
   <arg name="esc_status_topic" default="/UAV1/mavros/esc_status"/>
   <arg name="setpoint_topic" default="/UAV1/mavros/setpoint_raw/attitude"/>
   <arg name="reboot_service" default="/UAV1/mavros/cmd/command"/>
+  <arg name="cmd_trigger_topic" default="/UAV1/hummingbird/goal"/>
   <arg name="goal_topic" default="/UAV1/planning/goal"/>
-  <arg name="safety_hold_topic" default="/UAV1/planning/safety_hold"/>
-  <arg name="landing_request_topic" default="/UAV1/mission/landing_request"/>
+  <arg name="trajectory_timeout" default="0.5"/>
   <arg name="enable_logger" default="true"/>
 
   <!-- Diff-Planner 继续输出完整 PolyTraj；不启动旧 px4ctrl。 -->
@@ -28,6 +28,7 @@
     <param name="input_topic" value="/drone_1_planning/trajectory"/>
     <param name="output_topic" value="$(arg trajectory_topic)"/>
     <param name="frame_id" value="$(arg frame_id)"/>
+    <param name="trajectory_timeout" value="$(arg trajectory_timeout)"/>
   </node>
 
   <!-- AutoTrans 直接订阅 FAST-LIO /Odometry，只发布唯一的 attitude setpoint。 -->
@@ -42,9 +43,8 @@
     <arg name="esc_status_topic" value="$(arg esc_status_topic)"/>
     <arg name="setpoint_topic" value="$(arg setpoint_topic)"/>
     <arg name="reboot_service" value="$(arg reboot_service)"/>
+    <arg name="cmd_trigger_topic" value="$(arg cmd_trigger_topic)"/>
     <arg name="goal_topic" value="$(arg goal_topic)"/>
-    <arg name="safety_hold_topic" value="$(arg safety_hold_topic)"/>
-    <arg name="landing_request_topic" value="$(arg landing_request_topic)"/>
     <arg name="enable_logger" value="$(arg enable_logger)"/>
   </include>
 </launch>
