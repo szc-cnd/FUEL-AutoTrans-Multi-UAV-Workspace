@@ -8,11 +8,11 @@
 
 | 类型 | `target_reporting` 来源字段 | 消息类型 | 规划器话题 |
 | --- | --- | --- | --- |
-| 彩色标签 | `target_type=color_tag` | `std_msgs/String` `/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/color`；确认 `/UAV0/mission/detection/color` |
-| 二维码 | `target_type=qr_code` | `std_msgs/String` `/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/qrcode`；确认 `/UAV0/mission/detection/qrcode` |
-| 热异常点 | `target_type=thermal_source` | `std_msgs/String` `/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/thermal`；确认 `/UAV0/mission/detection/thermal` |
+| 彩色标签 | `target_type=color_tag` | `std_msgs/String` `/UAV0/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/color`；确认 `/UAV0/mission/detection/color` |
+| 二维码 | `target_type=qr_code` | `std_msgs/String` `/UAV0/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/qrcode`；确认 `/UAV0/mission/detection/qrcode` |
+| 热异常点 | `target_type=thermal_source` | `std_msgs/String` `/UAV0/target_reporting/observation` | 候选 `/UAV0/mission/detection/candidate/thermal`；确认 `/UAV0/mission/detection/thermal` |
 
-三个检测包先分别发布首个有效的原始候选；`target_reporting` 负责候选坐标的 TF 转换、实时远程上报和空间连续命中确认。桥接节点只消费 `/target_reporting/observation`，要求 `position.frame_id=channel`、`position.unit=m`。`confirmed=false` 的首帧/后续帧只发布候选点，`confirmed=true` 后再发布锁存的确认点。
+三个检测包先分别发布首个有效的原始候选；`target_reporting` 负责候选坐标的 TF 转换、实时远程上报和空间连续命中确认。桥接节点只消费 `/UAV0/target_reporting/observation`，要求 `position.frame_id=channel`、`position.unit=m`。`confirmed=false` 的首帧/后续帧只发布候选点，`confirmed=true` 后再发布锁存的确认点。
 
 桥接后的规范化记录发布到 `/UAV0/mission/detection/report`，类型为 `std_msgs/String`。本工程默认 `world` 就是比赛通道坐标系，因此 JSON 中的 `corridor_x/y/z` 与 `world x/y/z` 完全相同，不再做入口原点平移或二次旋转。
 
@@ -49,19 +49,19 @@ source devel/setup.bash
 roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch
 ```
 
-如果通过其他入口 include 此文件，保证 `enable_mission_detection_bridge=true`。如需改桥接输入，只需覆盖 `detection_observation_input`，默认是 `/target_reporting/observation`。
+如果通过其他入口 include 此文件，保证 `enable_mission_detection_bridge=true`。如需改桥接输入，只需覆盖 `detection_observation_input`，默认是 `/UAV0/target_reporting/observation`。
 
 ## 现场检查
 
 ```bash
-rostopic echo /target_reporting/observation
+rostopic echo /UAV0/target_reporting/observation
 rostopic echo /UAV0/mission/detection/candidate/color
 rostopic echo /UAV0/mission/detection/candidate/qrcode
 rostopic echo /UAV0/mission/detection/candidate/thermal
 rostopic echo /UAV0/mission/detection/report
-rostopic echo /mission/task_status
+rostopic echo /UAV0/mission/task_status
 ```
 
-每种目标被 `target_reporting` 观测后，桥接节点会先在对应 `candidate` 话题输出；累计确认后输出 `CONFIRMED`，对应规划器确认话题会保留最后一次结果。若没有进入规划器，先检查 `/target_reporting/observation` 的 `position.frame_id` 是否为 `channel`、`unit` 是否为 `m`，以及 `candidate` 话题是否有消息。
+每种目标被 `target_reporting` 观测后，桥接节点会先在对应 `candidate` 话题输出；累计确认后输出 `CONFIRMED`，对应规划器确认话题会保留最后一次结果。若没有进入规划器，先检查 `/UAV0/target_reporting/observation` 的 `position.frame_id` 是否为 `channel`、`unit` 是否为 `m`，以及 `candidate` 话题是否有消息。
 
 精确降落仍由 `/home/oem/db_ws/src/precision_landing` 的现有链路执行，本次接入没有修改其控制接口。

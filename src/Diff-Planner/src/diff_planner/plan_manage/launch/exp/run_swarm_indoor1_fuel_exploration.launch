@@ -15,7 +15,7 @@
     <arg name="enable_follower_ldot_detection" default="true"/>
     <!-- db_ws/target_reporting 已完成检测坐标转换和稳定确认；本开关只把 channel 结果接入 FUEL。 -->
     <arg name="enable_mission_detection_bridge" default="true"/>
-    <arg name="detection_observation_input" default="/target_reporting/observation"/>
+    <arg name="detection_observation_input" default="/UAV0/target_reporting/observation"/>
     <!-- 2026-07-08 19:26: FUEL 的真正开始触发改为前置通道管理器内部发布，避免 RViz 一点击就直接让 exploration FSM 起跑。 -->
     <arg name="start_trigger_topic" default="/UAV0/corridor_search/exploration_trigger"/>
     <arg name="search_start_waypoint_type" default="point"/>
@@ -128,7 +128,7 @@
     <rosparam param="/exploration_node/mission/camera_obstacle_scan/wall_support_ratio">0.68</rosparam>
     <rosparam param="/exploration_node/mission/workspace_lock_topic">/UAV0/corridor_search/workspace_lock</rosparam>
     <!-- 2026-07-27: FUEL 首条通道内轨迹发布后锁存开启 LDOT，任务状态确认门外后关闭。 -->
-    <rosparam param="/exploration_node/fsm/mission_status_topic">/mission/task_status</rosparam>
+    <rosparam param="/exploration_node/fsm/mission_status_topic">/UAV0/mission/task_status</rosparam>
     <rosparam param="/exploration_node/fsm/dynamic_detection_enable_topic">/UAV0/corridor_search/dynamic_detection_enable</rosparam>
     <rosparam param="/exploration_node/mission/door_back_margin">0.25</rosparam>
     <!-- 2026-07-10: 门后搜索不再按最近 frontier 死板选点；优先沿动态门方向推进，frontier 为空时用安全短步前探继续建图。 -->

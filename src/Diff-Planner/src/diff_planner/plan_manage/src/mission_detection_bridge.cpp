@@ -48,7 +48,7 @@ class MissionDetectionBridge {
   explicit MissionDetectionBridge(ros::NodeHandle& private_nh) : nh_(private_nh) {
     nh_.param("world_frame", world_frame_, std::string("world"));
     nh_.param("observation_input_topic", observation_input_topic_,
-              std::string("/target_reporting/observation"));
+              std::string("/UAV0/target_reporting/observation"));
     nh_.param("input_frame", input_frame_, std::string("channel"));
     nh_.param("color_output_topic", output_topics_[kColor],
               std::string("/UAV0/mission/detection/color"));

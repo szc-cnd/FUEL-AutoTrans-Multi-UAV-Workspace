@@ -274,13 +274,14 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
 
   std::string color_topic, qrcode_topic, thermal_topic, final_qrcode_topic;
   std::string color_candidate_topic, qrcode_candidate_topic, thermal_candidate_topic;
-  nh.param("mission/task_search/color_topic", color_topic, std::string("/mission/detection/color"));
+  nh.param("mission/task_search/color_topic", color_topic,
+           std::string("/UAV0/mission/detection/color"));
   nh.param("mission/task_search/qrcode_topic", qrcode_topic,
-           std::string("/mission/detection/qrcode"));
+           std::string("/UAV0/mission/detection/qrcode"));
   nh.param("mission/task_search/thermal_topic", thermal_topic,
-           std::string("/mission/detection/thermal"));
+           std::string("/UAV0/mission/detection/thermal"));
   nh.param("mission/task_search/final_qrcode_topic", final_qrcode_topic,
-           std::string("/mission/detection/final_qrcode"));
+           std::string("/UAV0/mission/detection/final_qrcode"));
   nh.param("mission/task_search/color_candidate_topic", color_candidate_topic,
            std::string("/UAV0/mission/detection/candidate/color"));
   nh.param("mission/task_search/qrcode_candidate_topic", qrcode_candidate_topic,
