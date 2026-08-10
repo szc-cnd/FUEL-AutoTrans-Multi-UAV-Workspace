@@ -17,10 +17,19 @@
 
 namespace fast_planner {
 
+namespace {
+const char* detectionTargetName(int type) {
+  static const char* names[3] = {"color", "qrcode", "thermal"};
+  return type >= 0 && type < 3 ? names[type] : "unknown";
+}
+}  // namespace
+
 void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/enabled", enabled_, true);
-  // 2026-07-16: false只关闭三类识别对任务状态切换的阻塞，不删除话题订阅和后续接入接口。
-  nh.param("mission/task_search/require_stage2_detections", require_stage2_detections_, true);
+  // false只关闭三类识别对任务状态切换的阻塞，不删除话题订阅和后续接入接口。
+  nh.param("mission/task_search/require_stage2_detections", require_stage2_detections_, false);
+  nh.param("mission/task_search/allow_stage2_exhaustion_fallback",
+           allow_stage2_exhaustion_fallback_, false);
   nh.param("mission/task_search/world_frame", world_frame_, std::string("world"));
   nh.param("mission/task_search/visit_spacing", visit_spacing_, 0.35);
   nh.param("mission/task_search/revisit_radius", revisit_radius_, 0.65);
@@ -39,6 +48,30 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/height_weight", height_weight_, 2.0);
   nh.param("mission/task_search/repeat_penalty", repeat_penalty_, 6.0);
   nh.param("mission/task_search/frontier_gain_weight", frontier_gain_weight_, 0.10);
+  nh.param("mission/task_search/detection_active_observation_enabled",
+           detection_active_observation_enabled_, true);
+  nh.param("mission/task_search/detection_candidate_timeout", detection_candidate_timeout_, 2.5);
+  nh.param("mission/task_search/detection_observation_radius_min",
+           detection_observation_radius_min_, 0.90);
+  nh.param("mission/task_search/detection_observation_radius_max",
+           detection_observation_radius_max_, 1.80);
+  nh.param("mission/task_search/detection_observation_arrive_distance",
+           detection_observation_arrive_distance_, 0.30);
+  nh.param("mission/task_search/detection_observation_ring_samples",
+           detection_observation_ring_samples_, 8);
+  nh.param("mission/task_search/detection_observation_max_attempts",
+           detection_observation_max_attempts_, 3);
+  nh.param("mission/task_search/detection_observation_retry_period",
+           detection_observation_retry_period_, 0.8);
+  detection_candidate_timeout_ = std::max(0.5, detection_candidate_timeout_);
+  detection_observation_radius_min_ = std::max(0.45, detection_observation_radius_min_);
+  detection_observation_radius_max_ =
+      std::max(detection_observation_radius_min_ + 0.10, detection_observation_radius_max_);
+  detection_observation_arrive_distance_ =
+      std::max(0.10, detection_observation_arrive_distance_);
+  detection_observation_ring_samples_ = std::max(4, detection_observation_ring_samples_);
+  detection_observation_max_attempts_ = std::max(1, detection_observation_max_attempts_);
+  detection_observation_retry_period_ = std::max(0.2, detection_observation_retry_period_);
   nh.param("mission/task_search/entry_forward_distance", entry_forward_distance_, 2.0);
   nh.param("mission/task_search/entry_forward_weight", entry_forward_weight_, 1.5);
   // 2026-07-21: 单通道任务不能把单帧frontier耗尽当成死路；默认只接受前向/侧向候选。
@@ -240,6 +273,7 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/exit/landing_trigger_distance", landing_trigger_distance_, 0.35);
 
   std::string color_topic, qrcode_topic, thermal_topic, final_qrcode_topic;
+  std::string color_candidate_topic, qrcode_candidate_topic, thermal_candidate_topic;
   nh.param("mission/task_search/color_topic", color_topic, std::string("/mission/detection/color"));
   nh.param("mission/task_search/qrcode_topic", qrcode_topic,
            std::string("/mission/detection/qrcode"));
@@ -247,11 +281,23 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            std::string("/mission/detection/thermal"));
   nh.param("mission/task_search/final_qrcode_topic", final_qrcode_topic,
            std::string("/mission/detection/final_qrcode"));
+  nh.param("mission/task_search/color_candidate_topic", color_candidate_topic,
+           std::string("/UAV0/mission/detection/candidate/color"));
+  nh.param("mission/task_search/qrcode_candidate_topic", qrcode_candidate_topic,
+           std::string("/UAV0/mission/detection/candidate/qrcode"));
+  nh.param("mission/task_search/thermal_candidate_topic", thermal_candidate_topic,
+           std::string("/UAV0/mission/detection/candidate/thermal"));
   color_detection_sub_ = nh.subscribe(color_topic, 5, &TaskSearchManager::colorDetectionCallback, this);
   qrcode_detection_sub_ =
       nh.subscribe(qrcode_topic, 5, &TaskSearchManager::qrcodeDetectionCallback, this);
   thermal_detection_sub_ =
       nh.subscribe(thermal_topic, 5, &TaskSearchManager::thermalDetectionCallback, this);
+  color_candidate_sub_ = nh.subscribe(color_candidate_topic, 5,
+                                      &TaskSearchManager::colorCandidateCallback, this);
+  qrcode_candidate_sub_ = nh.subscribe(qrcode_candidate_topic, 5,
+                                       &TaskSearchManager::qrcodeCandidateCallback, this);
+  thermal_candidate_sub_ = nh.subscribe(thermal_candidate_topic, 5,
+                                        &TaskSearchManager::thermalCandidateCallback, this);
   final_qrcode_detection_sub_ = nh.subscribe(
       final_qrcode_topic, 5, &TaskSearchManager::finalQrcodeDetectionCallback, this);
   // 2026-07-23: 直接订阅FAST-LIO已外参校正的IMU-body点云，避免再经漂移世界z筛选墙体。
@@ -356,6 +402,196 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
     }
   }
   (void)yaw;
+}
+
+void TaskSearchManager::updateDetectionCandidate(
+    int type, const geometry_msgs::PoseStamped& msg) {
+  if (type < 0 || type >= 3 || targets_[type].found || mission_stage_ != SEARCH_CORRIDOR)
+    return;
+  if (!std::isfinite(msg.pose.position.x) || !std::isfinite(msg.pose.position.y) ||
+      !std::isfinite(msg.pose.position.z))
+    return;
+
+  DetectionCandidate& candidate = detection_candidates_[type];
+  const Eigen::Vector3d previous(candidate.pose.pose.position.x,
+                                 candidate.pose.pose.position.y,
+                                 candidate.pose.pose.position.z);
+  const Eigen::Vector3d current(msg.pose.position.x, msg.pose.position.y,
+                                msg.pose.position.z);
+  if (candidate.valid && detection_observation_type_ == type &&
+      (current - previous).norm() > detection_observation_radius_min_ * 0.45) {
+    detection_observation_goal_valid_ = false;
+    detection_observation_attempts_ = 0;
+    detection_observation_retry_after_ = ros::Time(0);
+  }
+  candidate.pose = msg;
+  candidate.last_update = ros::Time::now();
+  candidate.valid = true;
+}
+
+void TaskSearchManager::clearDetectionCandidate(int type) {
+  if (type < 0 || type >= 3) return;
+  detection_candidates_[type].valid = false;
+  if (detection_observation_type_ == type) {
+    detection_observation_type_ = -1;
+    detection_observation_goal_valid_ = false;
+    detection_observation_attempts_ = 0;
+    detection_observation_retry_after_ = ros::Time(0);
+  }
+}
+
+bool TaskSearchManager::selectDetectionObservationPoint(
+    const Eigen::Vector3d& cur_pos, double cur_yaw, int type, Eigen::Vector3d& goal,
+    double& goal_yaw) const {
+  if (type < 0 || type >= 3 || !detection_candidates_[type].valid || !sdf_map_)
+    return false;
+
+  const auto& candidate = detection_candidates_[type].pose.pose.position;
+  const Eigen::Vector3d target(candidate.x, candidate.y, candidate.z);
+  Eigen::Vector2d base_direction = (cur_pos - target).head<2>();
+  if (base_direction.norm() < 0.10)
+    base_direction = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
+  base_direction.normalize();
+  const double base_angle = std::atan2(base_direction.y(), base_direction.x());
+  const int radial_layers = 3;
+
+  double best_cost = std::numeric_limits<double>::infinity();
+  bool found = false;
+  for (int layer = 0; layer < radial_layers; ++layer) {
+    const double ratio = radial_layers == 1
+                             ? 0.0
+                             : static_cast<double>(layer) / (radial_layers - 1);
+    const double radius = detection_observation_radius_min_ +
+                          ratio * (detection_observation_radius_max_ -
+                                   detection_observation_radius_min_);
+    for (int sample = 0; sample < detection_observation_ring_samples_; ++sample) {
+      const double angle = base_angle +
+                           2.0 * M_PI * static_cast<double>(sample) /
+                               static_cast<double>(detection_observation_ring_samples_);
+      Eigen::Vector3d observation(target.x() + radius * std::cos(angle),
+                                  target.y() + radius * std::sin(angle),
+                                  clampSearchHeight(cur_pos.z()));
+      const Eigen::Vector2d travel = (observation - cur_pos).head<2>();
+      if (travel.norm() < std::max(0.25, detection_observation_arrive_distance_ * 0.8))
+        continue;
+      if (prefer_motion_forward_ && travel.norm() > 0.20) {
+        const Eigen::Vector2d forward(std::cos(cur_yaw), std::sin(cur_yaw));
+        if (travel.normalized().dot(forward) < backward_cos_threshold_) continue;
+      }
+      if (!mapPointSafe(observation) || !isTaskMotionAllowed(observation) ||
+          goalTemporarilyBlocked(observation))
+        continue;
+
+      const double target_yaw = std::atan2(target.y() - observation.y(),
+                                           target.x() - observation.x());
+      const double yaw_delta = std::fabs(wrapYaw(target_yaw - cur_yaw));
+      const double cost = travel.norm() + 0.25 * yaw_delta + 0.08 * radius;
+      if (cost < best_cost) {
+        best_cost = cost;
+        goal = observation;
+        goal_yaw = target_yaw;
+        found = true;
+      }
+    }
+  }
+  return found;
+}
+
+bool TaskSearchManager::buildDetectionObservationGoal(
+    const Eigen::Vector3d& cur_pos, double cur_yaw, Eigen::Vector3d& goal,
+    double& goal_yaw) {
+  if (!detection_active_observation_enabled_ || !enabled_ || landing_requested_ ||
+      mission_stage_ != SEARCH_CORRIDOR || exitVerificationActive())
+    return false;
+
+  const ros::Time now = ros::Time::now();
+  for (int type = 0; type < 3; ++type) {
+    if (detection_candidates_[type].valid &&
+        (now - detection_candidates_[type].last_update).toSec() >
+            detection_candidate_timeout_) {
+      clearDetectionCandidate(type);
+    }
+  }
+
+  // 保持当前正在观察的目标，避免颜色/二维码/热源三个检测器以不同频率
+  // 发布候选时，规划器在每个重规划周期来回切换观察对象。只有当前候选失效、
+  // 已确认或超时清除后，才从其他有效候选中选择最新的一类。
+  int selected_type = detection_observation_type_;
+  if (selected_type < 0 || selected_type >= 3 ||
+      !detection_candidates_[selected_type].valid || targets_[selected_type].found) {
+    selected_type = -1;
+    ros::Time newest;
+    for (int type = 0; type < 3; ++type) {
+      if (!detection_candidates_[type].valid || targets_[type].found) continue;
+      if (selected_type < 0 || detection_candidates_[type].last_update > newest) {
+        selected_type = type;
+        newest = detection_candidates_[type].last_update;
+      }
+    }
+  }
+  if (selected_type < 0) {
+    detection_observation_type_ = -1;
+    detection_observation_goal_valid_ = false;
+    detection_observation_attempts_ = 0;
+    return false;
+  }
+
+  if (detection_observation_type_ != selected_type) {
+    detection_observation_type_ = selected_type;
+    detection_observation_goal_valid_ = false;
+    detection_observation_attempts_ = 0;
+    detection_observation_retry_after_ = ros::Time(0);
+  }
+
+  const Eigen::Vector3d target(
+      detection_candidates_[selected_type].pose.pose.position.x,
+      detection_candidates_[selected_type].pose.pose.position.y,
+      detection_candidates_[selected_type].pose.pose.position.z);
+  if (detection_observation_goal_valid_) {
+    if ((cur_pos - detection_observation_goal_).head<2>().norm() >
+        detection_observation_arrive_distance_) {
+      goal = detection_observation_goal_;
+      goal_yaw = std::atan2(target.y() - goal.y(), target.x() - goal.x());
+      return true;
+    }
+    // 已到达观察点但仍未确认，换一个安全视角；有限次失败后恢复普通探索。
+    detection_observation_goal_valid_ = false;
+    if (detection_observation_attempts_ >= detection_observation_max_attempts_) {
+      ROS_WARN("[detection_observation] %s verification attempts exhausted; resume exploration.",
+               detectionTargetName(selected_type));
+      clearDetectionCandidate(selected_type);
+      detection_observation_retry_after_ = now +
+                                           ros::Duration(detection_observation_retry_period_);
+      return false;
+    }
+  }
+
+  if (!detection_observation_retry_after_.isZero() &&
+      now < detection_observation_retry_after_)
+    return false;
+
+  Eigen::Vector3d observation_goal;
+  double observation_yaw = cur_yaw;
+  if (!selectDetectionObservationPoint(cur_pos, cur_yaw, selected_type, observation_goal,
+                                       observation_yaw)) {
+    detection_observation_retry_after_ = now +
+                                         ros::Duration(detection_observation_retry_period_);
+    return false;
+  }
+
+  detection_observation_goal_ = observation_goal;
+  detection_observation_goal_valid_ = true;
+  ++detection_observation_attempts_;
+  detection_observation_retry_after_ = ros::Time(0);
+  goal = observation_goal;
+  goal_yaw = observation_yaw;
+  ROS_WARN_THROTTLE(
+      1.0,
+      "[detection_observation] verify %s from safe point=(%.2f, %.2f, %.2f), "
+      "target=(%.2f, %.2f, %.2f), attempt=%d/%d.",
+      detectionTargetName(selected_type), goal.x(), goal.y(), goal.z(), target.x(), target.y(), target.z(),
+      detection_observation_attempts_, detection_observation_max_attempts_);
+  return true;
 }
 
 // 2026-07-23: 机体系点云仅按仰角保留近水平射线，再用最新XY/yaw放入1.5秒局部平面；
@@ -1153,11 +1389,28 @@ void TaskSearchManager::recordSelectedGoal(const Eigen::Vector3d& goal) {
 
 void TaskSearchManager::reportGoalFailure(const Eigen::Vector3d& goal) {
   // 2026-07-13: A*/足迹检查失败的目标短时拉黑，规划器不能以 100Hz 重试同一点。
-  failed_goals_.emplace_back(goal, ros::Time::now());
+  const ros::Time now = ros::Time::now();
+  failed_goals_.emplace_back(goal, now);
   while (failed_goals_.size() > 20) failed_goals_.pop_front();
   if (active_goal_valid_ &&
       (active_goal_.head<2>() - goal.head<2>()).norm() < failed_goal_radius_)
     active_goal_valid_ = false;
+
+  // 候选观察点也必须遵守失败冷却，但不能让一次不可达的观察点把规划器
+  // 永久卡在该候选上。保留有限次重采样，超过上限后放弃这次候选并继续普通搜索；
+  // confirmed 话题仍可在之后独立登记目标。
+  if (detection_observation_goal_valid_ &&
+      (detection_observation_goal_.head<2>() - goal.head<2>()).norm() <
+          std::max(failed_goal_radius_, detection_observation_arrive_distance_)) {
+    detection_observation_goal_valid_ = false;
+    detection_observation_retry_after_ = now + ros::Duration(detection_observation_retry_period_);
+    if (detection_observation_attempts_ >= detection_observation_max_attempts_ &&
+        detection_observation_type_ >= 0) {
+      ROS_WARN("[detection_observation] %s goal failed too many times; resume exploration.",
+               detectionTargetName(detection_observation_type_));
+      clearDetectionCandidate(detection_observation_type_);
+    }
+  }
 }
 
 bool TaskSearchManager::goalTemporarilyBlocked(const Eigen::Vector3d& goal) const {
@@ -1178,6 +1431,18 @@ void TaskSearchManager::qrcodeDetectionCallback(const geometry_msgs::PoseStamped
 }
 void TaskSearchManager::thermalDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg) {
   registerDetection(2, *msg);
+}
+
+void TaskSearchManager::colorCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg) {
+  updateDetectionCandidate(0, *msg);
+}
+
+void TaskSearchManager::qrcodeCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg) {
+  updateDetectionCandidate(1, *msg);
+}
+
+void TaskSearchManager::thermalCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg) {
+  updateDetectionCandidate(2, *msg);
 }
 
 void TaskSearchManager::finalQrcodeDetectionCallback(
@@ -1213,21 +1478,16 @@ void TaskSearchManager::finalQrcodeDetectionCallback(
 
 void TaskSearchManager::registerDetection(int type, const geometry_msgs::PoseStamped& msg) {
   if (type < 0 || type >= 3) return;
+  clearDetectionCandidate(type);
   targets_[type].found = true;
   targets_[type].pose = msg;
   targets_[type].stamp = ros::Time::now();
 
   const char* names[] = {"COLOR", "QRCODE", "THERMAL"};
   Eigen::Vector3d point(msg.pose.position.x, msg.pose.position.y, msg.pose.position.z);
-  Eigen::Vector3d corridor_point = point;
-  if (corridor_frame_received_) {
-    const Eigen::Vector3d lateral(-corridor_dir_.y(), corridor_dir_.x(), 0.0);
-    const Eigen::Vector3d rel = point - corridor_origin_;
-    corridor_point = Eigen::Vector3d(rel.dot(corridor_dir_), rel.dot(lateral), rel.z());
-  }
-  ROS_WARN("[task_search] target %s registered world=(%.2f, %.2f, %.2f) corridor=(%.2f, %.2f, %.2f).",
-           names[type], point.x(), point.y(), point.z(), corridor_point.x(), corridor_point.y(),
-           corridor_point.z());
+  // 当前 world 即比赛通道坐标系；workspace_lock 只用于入口越界约束，不参与目标坐标换算。
+  ROS_WARN("[task_search] target %s registered corridor/world=(%.2f, %.2f, %.2f).",
+           names[type], point.x(), point.y(), point.z());
   publishSearchState();
 }
 
@@ -2698,10 +2958,23 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
   updateExitCandidate(cur_pos);
 
   if (mission_stage_ == SEARCH_CORRIDOR) {
-    // 2026-07-16: 无摄像头时三类接口不阻塞任务，但也不能把“关闭识别”冒充目标全部找到，
-    // 否则会在第一个中途出口候选处过早切换；当前直降模式由最终出口距离和到达条件独立触发。
+    // 三类检测默认只记分；只有显式开启 require_stage2_detections 时才作为出口门槛。
+    // 无论是否启用检测门槛，正常出口仍由搜索覆盖、门框和门外自由空间证据决定。
     const bool targets_complete = require_stage2_detections_ && allStage2TargetsFound();
     if (!targets_complete) {
+      // 严格模式下，颜色标签、普通二维码和温度异常点必须全部被识别并记录。
+      // frontier 短时耗尽只表示当前地图没有新候选，不是作业完成证据。
+      if (require_stage2_detections_ && !allow_stage2_exhaustion_fallback_) {
+        if (search_exhausted) {
+          ROS_WARN_THROTTLE(
+              1.0,
+              "[task_search] search coverage exhausted but required detections are incomplete "
+              "(color=%d qr=%d thermal=%d); keep SEARCH_CORRIDOR.",
+              static_cast<int>(targets_[0].found), static_cast<int>(targets_[1].found),
+              static_cast<int>(targets_[2].found));
+        }
+        return false;
+      }
       if (!search_exhausted) {
         // 2026-07-16: false调用也用于正常搜索期刷新出口推测，不能在这里清零耗尽计时；
         // 只有reportSearchCoverageAvailable确认本轮确有frontier/viewpoint时才取消计时。

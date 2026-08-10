@@ -13,6 +13,9 @@
     <arg name="enable_ldot_detection" default="false"/>
     <!-- 2026-07-27: 后机默认同时启动独立UAV1 LDOT；可单独关闭以进行算力对比。 -->
     <arg name="enable_follower_ldot_detection" default="true"/>
+    <!-- db_ws/target_reporting 已完成检测坐标转换和稳定确认；本开关只把 channel 结果接入 FUEL。 -->
+    <arg name="enable_mission_detection_bridge" default="true"/>
+    <arg name="detection_observation_input" default="/target_reporting/observation"/>
     <!-- 2026-07-08 19:26: FUEL 的真正开始触发改为前置通道管理器内部发布，避免 RViz 一点击就直接让 exploration FSM 起跑。 -->
     <arg name="start_trigger_topic" default="/UAV0/corridor_search/exploration_trigger"/>
     <arg name="search_start_waypoint_type" default="point"/>
@@ -101,11 +104,11 @@
     <!-- 入口门确认后全局生效：所有frontier、fallback、任务目标和完整A*路径均不得回门外/旧通道。
          关闭仅用于故障回撤调试；正常U形通道通过连续转弯且隔墙支路不会被旧航迹管误杀。 -->
     <rosparam param="/exploration_node/mission/global_no_return">true</rosparam>
-    <!-- 2026-07-16: 当前Mid360模式先保证向目标平移；未来接入相机后改为true即可恢复viewpoint观测航向。 -->
-    <rosparam param="/exploration_node/mission/use_camera_viewpoint_yaw">false</rosparam>
+    <!-- 相机检测已接入，使用 frontier viewpoint 航向让前视 D435 真正对准未覆盖区。 -->
+    <rosparam param="/exploration_node/mission/use_camera_viewpoint_yaw">true</rosparam>
     <!-- 2026-07-24: 取消整条通道持续360度环扫；直段只做小幅快扫，弯道关闭附加扫描，
          累计占据图剔除连续墙后发现新障碍物，才以6秒一圈重点扫描并按位置去重。 -->
-    <rosparam param="/exploration_node/mission/camera_head_sweep/enabled">false</rosparam>
+    <rosparam param="/exploration_node/mission/camera_head_sweep/enabled">true</rosparam>
     <rosparam param="/exploration_node/mission/camera_head_sweep/full_rotation">false</rosparam>
     <rosparam param="/exploration_node/mission/camera_head_sweep/amplitude_deg">30.0</rosparam>
     <rosparam param="/exploration_node/mission/camera_head_sweep/period">10.0</rosparam>
@@ -198,12 +201,23 @@
     <rosparam param="/exploration_node/mission/task_search/recovery/turn_wall_min_half_width">0.35</rosparam>
     <rosparam param="/exploration_node/mission/task_search/recovery/turn_wall_max_half_width">1.05</rosparam>
     <rosparam param="/exploration_node/mission/task_search/recovery/turn_min_wall_support">2</rosparam>
-    <!-- 2026-07-16: 当前没有摄像头，颜色、普通二维码、温度识别只预留PoseStamped接口，不作为任务完成门槛；
-         后续三类识别接入并验证后改为true，无需修改规划代码。 -->
+    <!-- 三类检测用于比赛记分、位置登记和RViz标记，不阻塞正常出口流程；
+             即使漏检，仍按搜索覆盖和出口几何证据正常出通道。 -->
     <rosparam param="/exploration_node/mission/task_search/require_stage2_detections">false</rosparam>
     <rosparam param="/exploration_node/mission/task_search/color_topic">/UAV0/mission/detection/color</rosparam>
     <rosparam param="/exploration_node/mission/task_search/qrcode_topic">/UAV0/mission/detection/qrcode</rosparam>
     <rosparam param="/exploration_node/mission/task_search/thermal_topic">/UAV0/mission/detection/thermal</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/color_candidate_topic">/UAV0/mission/detection/candidate/color</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/qrcode_candidate_topic">/UAV0/mission/detection/candidate/qrcode</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/thermal_candidate_topic">/UAV0/mission/detection/candidate/thermal</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_active_observation_enabled">true</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_candidate_timeout">2.5</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_radius_min">0.90</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_radius_max">1.80</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_arrive_distance">0.30</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_ring_samples">8</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_max_attempts">3</rosparam>
+    <rosparam param="/exploration_node/mission/task_search/detection_observation_retry_period">0.8</rosparam>
     <!-- 2026-07-13: 第三阶段从累计 SDFMap 计算入口到可达自由区的拓扑最远端，稳定确认后去出口扫描终点二维码。 -->
     <rosparam param="/exploration_node/mission/task_search/exit/grid_resolution">0.20</rosparam>
     <rosparam param="/exploration_node/mission/task_search/exit/inference_period">1.0</rosparam>
@@ -413,7 +427,7 @@
         <param name="search_manager/search_period" value="0.15"/>
         <param name="search_manager/front_search_half_fov_deg" value="50.0"/>
         <param name="search_manager/front_search_step_deg" value="10.0"/>
-        <param name="search_manager/min_entry_support_points" value="16"/>
+        <param name="search_manager/min_entry_support_points" value="12"/>
         <param name="search_manager/min_entry_progress" value="0.55"/>
         <param name="search_manager/prefer_progress_weight" value="1.8"/>
         <!-- 2026-07-09: 改成显式门框检测，先找“墙-开口-墙”，并把 through-point 放到门后，再允许切给 FUEL。 -->
@@ -453,6 +467,26 @@
         <param name="search_manager/search_region_max_y" value="6.80"/>
         <!-- 2026-07-28: 与FUEL三维A*上限对齐，避免上方恢复点被静态任务区反向过滤。 -->
         <param name="search_manager/search_region_max_z" value="1.90"/>
+    </node>
+
+    <!-- target_reporting 已将检测结果转换为比赛 channel 坐标；此处只做消息适配，
+         因为本工程默认 world 与 channel 坐标一致，不再重复做 TF/里程计/外参转换。 -->
+    <node if="$(arg enable_mission_detection_bridge)"
+          pkg="diff_planner" type="mission_detection_bridge"
+          name="mission_detection_bridge" output="screen">
+        <param name="world_frame" value="world"/>
+        <param name="observation_input_topic" value="$(arg detection_observation_input)"/>
+        <param name="input_frame" value="channel"/>
+        <param name="color_output_topic" value="/UAV0/mission/detection/color"/>
+        <param name="qrcode_output_topic" value="/UAV0/mission/detection/qrcode"/>
+        <param name="thermal_output_topic" value="/UAV0/mission/detection/thermal"/>
+        <param name="color_candidate_topic" value="/UAV0/mission/detection/candidate/color"/>
+        <param name="qrcode_candidate_topic" value="/UAV0/mission/detection/candidate/qrcode"/>
+        <param name="thermal_candidate_topic" value="/UAV0/mission/detection/candidate/thermal"/>
+        <param name="report_topic" value="/UAV0/mission/detection/report"/>
+        <param name="confirmation_count" value="3"/>
+        <param name="confirmation_radius" value="0.45"/>
+        <param name="confirmation_max_gap" value="0.80"/>
     </node>
 
     <!-- 2026-07-08: exploration_manager 对 /waypoint_generator/waypoints 只把它当合法开始触发，不依赖具体 path 内容。
