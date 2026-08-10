@@ -1,0 +1,367 @@
+# 三类目标检测—规划闭环改动说明
+
+## 1. 改动背景
+
+本次改动把彩色标签、二维码、热成像三个检测包接入 FUEL 任务规划器，同时保持原有远程上报和精确降落链路不变。
+
+比赛任务中的目标检测不能只等检测器自身“稳定”后才通知规划器。否则无人机在远处无法主动靠近目标，检测器也无法获得更好的观察视角，检测和规划会互相等待。
+
+因此本次采用两级结果：
+
+1. **候选（candidate）**：检测包首次得到有效几何位置后立即发布，用于远程实时观察和规划器生成安全观察位姿。
+2. **确认（confirmed）**：后续检测帧经过空间一致性确认后发布，用于正式登记、计分和保存证据图。
+
+候选不是最终成绩，也不会驱动无人机飞到目标坐标；确认后只登记目标，规划器继续执行普通搜索、出口和降落流程。
+
+## 2. 完整闭环
+
+```text
+检测包首次得到有效候选
+        |
+        v
+发布相机坐标候选 + 候选状态
+        |
+        v
+target_reporting 做 TF 转换到 camera_init/channel
+        |
+        +--> 立即发布 /target_reporting/observation
+        |    并发送远程实时通道
+        |
+        v
+mission_detection_bridge 发布候选 PoseStamped
+        |
+        v
+TaskSearchManager 暂停普通 frontier，寻找安全观察位姿
+        |
+        v
+FUEL 通过地图、足迹、任务区域、A* 和轨迹安全检查
+        |
+        v
+无人机到安全观察位姿，检测器继续输出后续帧
+        |
+        v
+target_reporting 空间连续确认（默认 3 次）
+        |
+        +--> confirmed=true：登记目标、发送最终事件和证据图
+        |
+        v
+清除候选观察任务，恢复正常规划
+```
+
+如果候选在观察期间超时、没有可行的安全观察位姿或观察尝试耗尽，规划器会放弃本次候选并恢复普通搜索。漏检不会阻塞出通道。
+
+## 3. 候选的有效条件
+
+候选不是任意一帧的像素点，必须先得到可用于空间规划的有效位置。
+
+### 3.1 彩色标签
+
+`color_tag_detector/scripts/color_tag_detector.py` 在不等待稳定窗口的情况下，要求当前候选满足：
+
+- HSV 颜色分割和轮廓几何约束通过；
+- 面积、长宽比、填充率、实心度和检测 ROI 约束通过；
+- 深度有效比例、深度标准差和深度范围通过；
+- 相机内参有效，能反投影出相机坐标；
+- 真实宽高范围合理；
+- 综合评分达到 `score_threshold`（当前配置为 `0.60`）；
+- 不是丢失保持帧（`held`）。
+
+颜色检测器自身的 `stable_window=8`、`stable_min_count=5` 仍用于旧的稳定结果话题，但不再阻塞候选话题。
+
+新增话题：
+
+```text
+/color_tag_detector/candidate_point_camera  geometry_msgs/PointStamped
+/color_tag_detector/candidate_text           std_msgs/String(JSON)
+```
+
+### 3.2 二维码
+
+`qr_detector/scripts/qr_detector_node.py` 在原始图像帧中要求：
+
+- OpenCV 检测到四边形二维码角点；
+- 四边形面积、边长比例和角度约束通过；
+- 深度在当前配置范围 `0.15~8.0 m` 内；
+- 相机内参有效，能够反投影出 `x/y/z`；
+- 不是被保持的旧结果。
+
+只要原始检测和深度位置有效，就会发布候选，不等待 `confirm_frames=3` 的旧稳定输出。
+
+新增话题：
+
+```text
+/vision/qr_candidate_pose_camera  geometry_msgs/PoseStamped
+/vision/qr_candidate_detected     std_msgs/String(JSON)
+```
+
+### 3.3 热成像
+
+`uvc_ubuntu/thermal_detect.py` 对原始热点要求：
+
+- 热点位于有效 ROI 内；
+- 热点轮廓面积在当前配置 `20~5000` 像素内；
+- 热点像素映射到 D435 彩色图像后能找到有效深度；
+- 深度在当前配置 `0.2~5.0 m` 内；
+- D435 相机内参有效，能够生成相机坐标。
+
+热成像原有 `stable_min_hits=2` 的稳定滤波仍保留在稳定结果链路中，但候选链路直接使用原始热点和融合后的相机点。
+
+新增话题：
+
+```text
+/thermal/target_candidate_detected
+/thermal/target_candidate_pixel
+/thermal/target_candidate_camera_point
+```
+
+## 4. `target_reporting` 改动
+
+目录：`/home/oem/db_ws/src/target_reporting`
+
+### 4.1 默认输入
+
+`config/target_reporting.yaml` 现在默认：
+
+```yaml
+use_detector_candidates: true
+confirm_hits: 3
+dedup_distance_m: 0.30
+report_frame: channel
+```
+
+节点订阅三个检测包的候选位置和状态，而不是等待检测包的稳定结果。
+
+### 4.2 候选和确认的区别
+
+收到首个有效候选并完成 TF 后，立即发布：
+
+```json
+{
+  "message_type": "observation",
+  "candidate": true,
+  "confirmed": false,
+  "hits": 1,
+  "position": {"frame_id": "channel", "unit": "m"}
+}
+```
+
+候选观测会：
+
+- 发布到 `/target_reporting/observation`；
+- 通过 `LatestJsonClient` 发送远程实时通道；
+- 不写入最终 `reports.jsonl`；
+- 不生成最终证据图；
+- 不发送最终事件 ACK。
+
+同一目标的坐标在 `dedup_distance_m=0.30 m` 范围内累计达到 `confirm_hits=3` 后，生成：
+
+```json
+{
+  "message_type": "observation",
+  "candidate": false,
+  "confirmed": true,
+  "hits": 3,
+  "position": {"frame_id": "channel", "unit": "m"}
+}
+```
+
+确认结果随后生成 `confirmed_target` 最终事件，保存证据图并通过带 ACK 的 TCP 链路发送。
+
+另外增加了 TF 失败重试：如果节点启动时 TF 尚未建立，候选不会因为一次查询失败而永久丢失。
+
+### 4.3 坐标系
+
+坐标转换仍集中在 `target_reporting`：
+
+```text
+相机光学坐标 -> TF -> camera_init -> 上报业务坐标 channel
+```
+
+本次规划器侧默认世界坐标与通道坐标数值相同。`mission_detection_bridge` 不再做相机外参、里程计或入口原点的二次转换。
+
+## 5. 规划器改动
+
+### 5.1 桥接层
+
+文件：
+
+```text
+src/Diff-Planner/src/diff_planner/plan_manage/src/mission_detection_bridge.cpp
+```
+
+桥接节点订阅：
+
+```text
+/target_reporting/observation
+```
+
+输出候选：
+
+```text
+/UAV0/mission/detection/candidate/color
+/UAV0/mission/detection/candidate/qrcode
+/UAV0/mission/detection/candidate/thermal
+```
+
+输出确认：
+
+```text
+/UAV0/mission/detection/color
+/UAV0/mission/detection/qrcode
+/UAV0/mission/detection/thermal
+```
+
+候选输出为非锁存 `PoseStamped`，确认输出为锁存 `PoseStamped`。桥接层优先读取 JSON 中的 `confirmed` 字段；没有该字段时才使用 `hits` 作为兼容回退。
+
+### 5.2 `TaskSearchManager`
+
+文件：
+
+```text
+src/zyc_fuel_ws/src/FUEL/fuel_planner/exploration_manager/include/exploration_manager/task_search_manager.h
+src/zyc_fuel_ws/src/FUEL/fuel_planner/exploration_manager/src/task_search_manager.cpp
+```
+
+`TaskSearchManager` 负责候选目标的生命周期：
+
+- 接收候选位置并记录最近更新时间；
+- 只在 `SEARCH_CORRIDOR` 阶段处理候选观察；
+- 已确认目标不再重复观察；
+- 候选超过 `2.5 s` 未更新时自动失效；
+- 当前候选位置变化较大时重新采样观察位姿；
+- 观察失败达到上限后恢复普通搜索；
+- 收到确认结果后清除候选，只把目标写入 `targets_`。
+
+确认后的目标坐标不会被设置为飞行目标，也不会触发飞向目标中心的动作。
+
+### 5.3 安全观察位姿
+
+候选目标本身不作为飞行点。规划器围绕候选位置采样观察位姿：
+
+```text
+最小半径：0.90 m
+最大半径：1.80 m
+环向采样：8 个方向
+到达判定：0.30 m
+最大观察尝试：3 次
+失败重试周期：0.8 s
+```
+
+每个观察位姿必须通过：
+
+1. 累计 SDF 自由和膨胀占据检查；
+2. 无人机机体足迹检查；
+3. 任务区域和通道单向约束；
+4. 失败目标冷却检查；
+5. A* 可达性检查；
+6. 最终轨迹安全检查。
+
+观察位姿规划期间仍然服从原有避障和任务区域约束。
+
+### 5.4 正常规划恢复
+
+目标确认后，当前候选观察任务被清除。下一次重规划恢复普通 frontier/任务搜索，继续执行：
+
+- 通道内搜索；
+- 出口几何确认和穿越；
+- 出口外二维码搜索；
+- 精确降落流程。
+
+`require_stage2_detections=false`，因此三类目标没有全部确认也不会阻塞出通道。
+
+## 6. 启动顺序
+
+建议按以下顺序启动：
+
+1. 远程端 `target_report_server.py`；
+2. FAST-LIO 和相机驱动；
+3. `color_tag_detector`；
+4. `qr_detector`；
+5. `uvc_ubuntu` 热成像检测和 D435 融合；
+6. `target_reporting`；
+7. `match_ws` 规划器。
+
+示例：
+
+```bash
+roslaunch target_reporting target_reporting.launch
+roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch
+```
+
+规划器启动文件中已启用：
+
+```xml
+<arg name="enable_mission_detection_bridge" default="true"/>
+<rosparam param="/exploration_node/mission/task_search/require_stage2_detections">false</rosparam>
+```
+
+## 7. 现场检查命令
+
+检查检测候选：
+
+```bash
+rostopic echo /color_tag_detector/candidate_text
+rostopic echo /vision/qr_candidate_detected
+rostopic echo /thermal/target_candidate_detected
+```
+
+检查上报闭环：
+
+```bash
+rostopic echo /target_reporting/observation
+rostopic echo /UAV0/mission/detection/candidate/color
+rostopic echo /UAV0/mission/detection/candidate/qrcode
+rostopic echo /UAV0/mission/detection/candidate/thermal
+```
+
+检查确认和规划状态：
+
+```bash
+rostopic echo /UAV0/mission/detection/color
+rostopic echo /UAV0/mission/detection/qrcode
+rostopic echo /UAV0/mission/detection/thermal
+rostopic echo /mission/task_status
+```
+
+检查坐标转换：
+
+```bash
+rosrun tf tf_echo camera_init camera_color_optical_frame
+```
+
+重点确认：
+
+- 候选消息的 `frame_id` 是真实相机光学坐标系；
+- 上报消息的 `position.frame_id` 是 `channel`；
+- 坐标单位是米；
+- 候选消息先出现，确认消息在后续 `hits=3` 后出现；
+- 确认后没有新的目标飞行点，规划器恢复 frontier 搜索。
+
+## 8. 验证结果
+
+已完成以下验证：
+
+- 三个检测节点和 `target_reporting` Python 语法检查通过；
+- `target_reporting` 核心、TCP 传输、证据图和端到端测试通过；
+- UVC ROS 包布局、流配置、可执行文件路径等 12 项测试通过；
+- QR 启动脚本检查通过；
+- `mission_detection_bridge` 编译通过；
+- `exploration_manager` 编译通过；
+- 检测包、上报包和规划器启动文件 XML 检查通过；
+- ROS 参数转储确认候选话题和 `require_stage2_detections=false` 生效。
+
+尚未替代真机完成实际飞行测试，正式比赛前仍需在真实相机、FAST-LIO、地图和避障链路下验证候选更新频率、TF 延迟、观察位姿可达性和出口状态切换。
+
+## 9. 本次 Git 提交
+
+| 仓库 | 提交 | 说明 |
+| --- | --- | --- |
+| `color_tag_detector` | `2b55f7b` | 颜色检测增加首帧原始候选输出 |
+| `qr_detector` | `35a3847` | 二维码检测增加首帧原始候选输出 |
+| `uvc_ubuntu` | `d760364` | 热成像检测增加原始候选融合输出 |
+| `target_reporting` | `dd13477` | 转发候选并保留确认记录 |
+| `precision_landing` | `c2bbe65` | 初始化本地仓库，控制逻辑未改 |
+| `match_ws` | `aa070df` | 候选观察、确认登记和规划器接入 |
+
+`match_ws` 中原有的 FAST-LIO 参数、视频、PDF 和临时备份文件没有纳入本次提交。
+
