@@ -9,6 +9,8 @@
     <arg name="vehicle_ns" default="UAV0"/>
     <arg name="topic_prefix" default="/UAV0"/>
     <arg name="enable_rviz" default="true"/>
+    <!-- 纯显示适配：只把 target_reporting 观测转成 RViz MarkerArray，不接入规划器。 -->
+    <arg name="enable_detection_rviz" default="true"/>
     <!-- 2026-07-27: 默认随前机规划链启动LDOT，避免漏开独立终端导致门内使能话题无人订阅。 -->
     <arg name="enable_ldot_detection" default="false"/>
     <!-- 2026-07-27: 后机默认同时启动独立UAV1 LDOT；可单独关闭以进行算力对比。 -->
@@ -556,5 +558,15 @@
         args="-d $(find plan_manage)/config/traj.rviz" required="true">
         <!-- 2026-07-13: RViz 工具栏仍发布标准目标话题，在节点边界转发给 iris_0 的比赛开始触发。 -->
         <remap from="/move_base_simple/goal" to="$(arg rviz_goal_topic)"/>
+    </node>
+
+    <!-- target_reporting 已完成检测坐标转换；此节点只为本启动流程使用的 traj.rviz 提供显示消息，
+         不发布任何 /mission/detection 或规划目标话题。 -->
+    <node if="$(arg enable_detection_rviz)"
+          pkg="target_reporting" type="target_rviz_marker_node.py"
+          name="target_rviz_marker" output="screen">
+        <param name="observation_topic" value="/UAV0/target_reporting/observation"/>
+        <param name="marker_topic" value="/UAV0/target_reporting/markers"/>
+        <param name="marker_frame" value="world"/>
     </node>
 </launch>

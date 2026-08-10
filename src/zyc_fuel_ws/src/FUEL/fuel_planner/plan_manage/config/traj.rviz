@@ -78,6 +78,54 @@ Visualization Manager:
       Value: true
     - Class: rviz/Group
       Displays:
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /UAV0/target_reporting/markers
+          Name: detection_targets
+          Namespaces:
+            {}
+          Queue Size: 100
+          Value: true
+        - Class: rviz/Image
+          Enabled: false
+          Image Topic: /UAV0/color_tag_detector/debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: color_detection_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: false
+        - Class: rviz/Image
+          Enabled: false
+          Image Topic: /UAV0/vision/qr_debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: qr_detection_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: false
+        - Class: rviz/Image
+          Enabled: false
+          Image Topic: /UAV0/thermal/debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: thermal_detection_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: false
+      Enabled: true
+      Name: Detection Results
+    - Class: rviz/Group
+      Displays:
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /UAV0/planning_vis/trajectory
