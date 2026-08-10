@@ -652,7 +652,6 @@ int FastExplorationManager::planExploreMotion(
   double next_yaw = yaw[0];
   bool use_forced_entry_target = false;
   bool use_stage3_target = false;
-  bool use_detection_observation_target = false;
   if (task_search_manager_ && task_search_manager_->landingRequested()) {
     // 2026-07-13: AUTO.LAND 已由控制器接管后，探索器不再发布新的平移轨迹。
     ROS_WARN_THROTTLE(1.0, "[exit_mission] landing is active; exploration planning stopped.");
@@ -668,14 +667,7 @@ int FastExplorationManager::planExploreMotion(
                       "[mission_exploration] force entry transit to %.2f %.2f %.2f before frontier search.",
                       next_pos.x(), next_pos.y(), next_pos.z());
   }
-  if (!use_forced_entry_target && task_search_manager_ &&
-      task_search_manager_->buildDetectionObservationGoal(pos, yaw[0], next_pos, next_yaw)) {
-    // 候选目标只生成安全观察位姿，目标本身不作为飞行点；后续统一走A*/足迹/轨迹安全检查。
-    use_detection_observation_target = true;
-    task_search_manager_->reportSearchCoverageAvailable();
-  }
-  if (!use_forced_entry_target && !use_detection_observation_target && task_search_manager_ &&
-      task_search_manager_->stage3Active()) {
+  if (!use_forced_entry_target && task_search_manager_ && task_search_manager_->stage3Active()) {
     // 2026-07-16: 只有已经正式进入第三阶段才在frontier搜索前取终点目标；搜索期必须先看本轮地图覆盖。
     use_stage3_target =
         task_search_manager_->buildStage3Goal(pos, yaw[0], false, next_pos, next_yaw);
@@ -696,28 +688,21 @@ int FastExplorationManager::planExploreMotion(
   frontier_finder_->getTopViewpointsInfo(pos, ed_->points_, ed_->yaws_, ed_->averages_);
   // 2026-07-20: 不能仅凭原始frontier非空就取消搜索耗尽计时；全部候选都被重复访问、
   // 失败冷却或门平面约束过滤时并没有可执行路径，旧逻辑会让FSM原地空转十几秒。
-  if (!use_forced_entry_target && !use_stage3_target && !use_detection_observation_target &&
-      task_search_manager_ &&
-      task_search_manager_->buildDetectionObservationGoal(pos, yaw[0], next_pos, next_yaw)) {
-    use_detection_observation_target = true;
-    task_search_manager_->reportSearchCoverageAvailable();
-  }
-  if (!use_forced_entry_target && !use_stage3_target && !use_detection_observation_target &&
-      task_search_manager_ &&
+  if (!use_forced_entry_target && !use_stage3_target && task_search_manager_ &&
       task_search_manager_->buildStage3Goal(pos, yaw[0], false, next_pos, next_yaw)) {
     // 2026-07-16: 搜索期仅在三个任务目标确实全部找到时允许主动切换；普通出口推测不能抢占frontier。
     use_stage3_target = true;
   }
   const bool use_mission_filtered_direct_view =
-      !use_forced_entry_target && !use_stage3_target && !use_detection_observation_target &&
+      !use_forced_entry_target && !use_stage3_target &&
       (ep_->mission_use_takeoff_exclusion_box_ || ep_->mission_prefer_search_region_frontiers_ ||
        ep_->mission_use_workspace_lock_);
   bool use_mission_forward_fallback = false;
-  if (!use_forced_entry_target && !use_stage3_target && !use_detection_observation_target) {
+  if (!use_forced_entry_target && !use_stage3_target) {
     applyMissionFrontierFilter();
   }
 
-  if (!use_forced_entry_target && !use_stage3_target && !use_detection_observation_target &&
+  if (!use_forced_entry_target && !use_stage3_target &&
       (ed_->frontiers_.empty() || ed_->points_.empty())) {
     ROS_WARN("No coverable frontier after mission filter.");
     // 2026-07-13: 搜索候选耗尽时优先进入地图出口阶段，不能继续在通道内盲目前探。
@@ -750,8 +735,7 @@ int FastExplorationManager::planExploreMotion(
 
   // 2026-07-13: 门后由任务覆盖和重复访问选点；现有 frontier 全是已搜索局部点时主动切换多方向恢复。
   int task_candidate_idx = -1;
-  if (!use_forced_entry_target && !use_stage3_target && !use_detection_observation_target &&
-      use_mission_filtered_direct_view &&
+  if (!use_forced_entry_target && !use_stage3_target && use_mission_filtered_direct_view &&
       !use_mission_forward_fallback && task_search_manager_ && task_search_manager_->enabled()) {
     task_candidate_idx = task_search_manager_->selectSearchCandidate(
         ed_->points_, ed_->yaws_, ed_->frontiers_, pos, yaw[0]);
@@ -794,17 +778,7 @@ int FastExplorationManager::planExploreMotion(
       ed_->points_.size(), view_time);
 
   // Do global and local tour planning and retrieve the next viewpoint
-  if (use_detection_observation_target) {
-    if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
-    ed_->global_tour_ = {pos, next_pos};
-    ed_->refined_tour_.clear();
-    ed_->refined_views1_.clear();
-    ed_->refined_views2_.clear();
-    ROS_INFO_THROTTLE(1.0,
-                      "[detection_observation] safe observation goal=(%.2f, %.2f, %.2f), "
-                      "yaw=%.1fdeg.",
-                      next_pos.x(), next_pos.y(), next_pos.z(), next_yaw * 180.0 / M_PI);
-  } else if (use_stage3_target) {
+  if (use_stage3_target) {
     // 2026-07-13: 出口接近、二维码环扫和降落接近都走同一条安全 A*/轨迹生成后端。
     if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
     ed_->global_tour_ = {pos, next_pos};
@@ -961,7 +935,6 @@ int FastExplorationManager::planExploreMotion(
     ROS_WARN("[camera_scan] CANCEL obstacle rotation: exit portal verification has priority.");
   }
   if (camera_head_sweep_enabled_ && !use_forced_entry_target && !use_stage3_target &&
-      !use_detection_observation_target &&
       task_search_manager_ && task_search_manager_->enabled() &&
       !task_search_manager_->stage3Active() &&
       !task_search_manager_->finalExitFrontierGuardActive() &&
@@ -1107,8 +1080,7 @@ int FastExplorationManager::planExploreMotion(
     Vector3d local_recovery_pos;
     double local_recovery_yaw = next_yaw;
     const bool allow_local_recovery =
-        !use_forced_entry_target && !use_stage3_target &&
-        !use_detection_observation_target && !exit_transit_active;
+        !use_forced_entry_target && !use_stage3_target && !exit_transit_active;
     if (allow_local_recovery &&
         buildMissionForwardFallback(pos, yaw[0], local_recovery_pos, local_recovery_yaw)) {
       ROS_WARN("[task_route] remote goal (%.2f,%.2f,%.2f) disconnected; use connected "

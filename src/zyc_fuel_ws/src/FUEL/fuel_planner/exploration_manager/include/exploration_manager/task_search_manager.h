@@ -25,9 +25,6 @@ public:
   void setMap(const std::shared_ptr<SDFMap>& map);
   void setCorridorFrame(const Eigen::Vector3d& origin, const Eigen::Vector3d& inside_dir);
   void updateRobotPose(const Eigen::Vector3d& pos, double yaw);
-  // 候选目标只触发安全观察动作；目标点本身永远不作为飞行目标。
-  bool buildDetectionObservationGoal(const Eigen::Vector3d& cur_pos, double cur_yaw,
-                                     Eigen::Vector3d& goal, double& goal_yaw);
   int selectSearchCandidate(const std::vector<Eigen::Vector3d>& points,
                             const std::vector<double>& yaws,
                             const std::vector<std::vector<Eigen::Vector3d>>& frontiers,
@@ -86,12 +83,6 @@ private:
     ros::Time stamp;
   };
 
-  struct DetectionCandidate {
-    bool valid{false};
-    geometry_msgs::PoseStamped pose;
-    ros::Time last_update;
-  };
-
   enum MissionStage {
     SEARCH_CORRIDOR = 0,
     EXIT_APPROACH_INSIDE = 1,
@@ -104,18 +95,10 @@ private:
   void colorDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void qrcodeDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void thermalDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void colorCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void qrcodeCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void thermalCandidateCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void finalQrcodeDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   // 2026-07-23: 用短时机体系 Mid360 点云检测通道双墙共同终止，出口判断不再依赖会随 z 漂移失真的绝对高度切片。
   void bodyCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg);
   void registerDetection(int type, const geometry_msgs::PoseStamped& msg);
-  void updateDetectionCandidate(int type, const geometry_msgs::PoseStamped& msg);
-  void clearDetectionCandidate(int type);
-  bool selectDetectionObservationPoint(const Eigen::Vector3d& cur_pos, double cur_yaw,
-                                       int type, Eigen::Vector3d& goal,
-                                       double& goal_yaw) const;
   void updateExitCandidate(const Eigen::Vector3d& cur_pos);
   struct RadarExitResult {
     Eigen::Vector3d portal_center{0.0, 0.0, 0.0};
@@ -177,9 +160,6 @@ private:
   ros::Subscriber color_detection_sub_;
   ros::Subscriber qrcode_detection_sub_;
   ros::Subscriber thermal_detection_sub_;
-  ros::Subscriber color_candidate_sub_;
-  ros::Subscriber qrcode_candidate_sub_;
-  ros::Subscriber thermal_candidate_sub_;
   ros::Subscriber final_qrcode_detection_sub_;
   ros::Subscriber body_cloud_sub_;
   ros::Publisher marker_pub_;
@@ -192,10 +172,8 @@ private:
   std::shared_ptr<SDFMap> sdf_map_;
 
   bool enabled_{true};
-  // 三类检测用于记分和位置登记，默认不阻塞正常出口；需要严格任务门槛时再显式开启。
-  bool require_stage2_detections_{false};
-  // 仅在显式开启 require_stage2_detections 后，才可用此开关允许搜索耗尽时降级出场。
-  bool allow_stage2_exhaustion_fallback_{false};
+  // 2026-07-16: 颜色、普通二维码、温度识别接口始终保留；无摄像头时可关闭其任务完成门槛。
+  bool require_stage2_detections_{true};
   bool corridor_frame_received_{false};
   std::string world_frame_{"world"};
   Eigen::Vector3d corridor_origin_{0.0, 0.0, 0.0};
@@ -217,12 +195,6 @@ private:
   // 一次性状态推进；入口穿越一旦锁存，任何局部墙端/拐角都不能把状态重新解释成门外。
   bool corridor_entry_crossed_{false};
   TargetRecord targets_[3];
-  DetectionCandidate detection_candidates_[3];
-  int detection_observation_type_{-1};
-  Eigen::Vector3d detection_observation_goal_{0.0, 0.0, 0.75};
-  bool detection_observation_goal_valid_{false};
-  int detection_observation_attempts_{0};
-  ros::Time detection_observation_retry_after_;
   TargetRecord final_qrcode_;
   MissionStage mission_stage_{SEARCH_CORRIDOR};
 
@@ -280,14 +252,6 @@ private:
   double height_weight_{2.0};
   double repeat_penalty_{6.0};
   double frontier_gain_weight_{0.10};
-  bool detection_active_observation_enabled_{true};
-  double detection_candidate_timeout_{2.5};
-  double detection_observation_radius_min_{0.90};
-  double detection_observation_radius_max_{1.80};
-  double detection_observation_arrive_distance_{0.30};
-  int detection_observation_ring_samples_{8};
-  int detection_observation_max_attempts_{3};
-  double detection_observation_retry_period_{0.8};
   double entry_forward_distance_{2.0};
   double entry_forward_weight_{1.5};
   // 2026-07-21: 普通单通道搜索默认禁止把“暂无前向候选”解释成掉头；显式故障回撤才允许后向恢复。
