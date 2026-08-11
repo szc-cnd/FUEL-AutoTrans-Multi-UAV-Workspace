@@ -81,7 +81,8 @@ python3 laser_mid360.py iris 0 fastlio off
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
-rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_thermal:=false
 ```
 
 该脚本每次运行会自动创建独立日志目录：
@@ -90,14 +91,16 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh
 ~/match_ws/logs/uav0/YYYYMMDD_HHMMSS_NNNNNNNNN/
 ```
 
-并将本次 ROS 节点日志写入其中，不需要手动创建目录。
+并将本次 ROS 节点日志写入其中，不需要手动创建目录。本机未接热成像相机，
+因此流程显式关闭热成像节点，避免其设备打开失败影响统一入口中的其他节点。
 
 颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
 RealSense 节点。如果 D435 已经在其他终端运行，才改用：
 
 ```bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
-  enable_realsense:=false
+  enable_realsense:=false \
+  enable_thermal:=false
 ```
 
 入口默认启动：
@@ -145,6 +148,7 @@ py -3 .\scripts\target_report_server.py `
 ```bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
+  enable_thermal:=false \
   enable_down_camera:=true \
   enable_precision_landing:=true
 ```
