@@ -262,6 +262,7 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
 `/UAV0/target_reporting/detected_object_cloud` 也已配置在同一个 RViz 中。
 三维线框包围盒话题 `/UAV0/target_reporting/detected_object_boxes` 也已配置在
 `Detection Results` 分组中；包围盒由目标附近点云估计，只用于可视化。
+RViz 不单独显示 D435 深度图像，深度数据仅作为点云过滤和三维包围盒估计的输入。
 这里启动的 `target_rviz_marker` 只负责显示，不会给 FUEL 发布检测目标或观察位姿。
 
 如果只想运行规划而不启动检测显示，可加：

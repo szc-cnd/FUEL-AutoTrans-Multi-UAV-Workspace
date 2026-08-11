@@ -10,7 +10,6 @@ Panels:
         - /active_perception1/frontier1
         - /active_perception1/frontier1/Namespaces1
         - /active_perception1/viewpoint1/Namespaces1
-        - /active_perception1/depth1
         - /LocalMap1/occupied_local1/Autocompute Value Bounds1
         - /LocalMap1/occupied_all1
         - /LocalMap1/occupied_all1/Autocompute Value Bounds1
@@ -350,18 +349,6 @@ Visualization Manager:
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
-        - Class: rviz/Image
-          Enabled: true
-          Image Topic: /image_converter/output_video
-          Max Value: 1
-          Median window: 5
-          Min Value: 0
-          Name: depth
-          Normalize Range: true
-          Queue Size: 2
-          Transport Hint: raw
-          Unreliable: false
           Value: true
       Enabled: true
       Name: active_perception
@@ -938,18 +925,6 @@ Visualization Manager:
       Topic: /vins_estimator/camera_pose
       Unreliable: false
       Value: false
-    - Class: rviz/Image
-      Enabled: false
-      Image Topic: /camera/depth/image_rect_raw
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Image
-      Normalize Range: true
-      Queue Size: 2
-      Transport Hint: raw
-      Unreliable: false
-      Value: false
     - Class: rviz/Marker
       Enabled: false
       Marker Topic: /firefly/visualization_marker
@@ -1128,5 +1103,3 @@ Window Geometry:
   Width: 1848
   X: 72
   Y: 27
-  depth:
-    collapsed: false
