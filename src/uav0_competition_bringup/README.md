@@ -53,13 +53,13 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_target_rviz:=true
 ```
 
-## 精确降落
+## 精确降落（当前暂不纳入流程）
 
-连接下视相机并确认设备路径、标定文件有效后，可以在统一入口中同时启动检测、
-上报和精确降落。下面两种完整方案二选一，不需要再重复执行前面的检测命令。
+当前比赛流程不启动下视相机和精确降落，`enable_down_camera` 与
+`enable_precision_landing` 均保持默认值 `false`。以后确认下视相机设备路径和
+标定文件有效后，再在统一入口中追加以下参数：
 
 ```bash
-# 完整方案 A：D435 + 颜色/二维码 + 上报 + 精确降落，不启动热成像
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
@@ -67,17 +67,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_precision_landing:=true
 ```
 
-```bash
-# 完整方案 B：D435 + 颜色/二维码 + 热成像 + 上报 + 精确降落
-rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
-  enable_realsense:=true \
-  enable_thermal:=true \
-  enable_down_camera:=true \
-  enable_precision_landing:=true
-```
-
 该入口不会自动解锁、切换 `OFFBOARD` 或触发降落；仍需按现场安全流程发布
-上升沿 `/need_to_land`。仿真或未连接下视相机时保持这两个开关为 `false`。
+上升沿 `/need_to_land`。
 
 ## 话题关系
 

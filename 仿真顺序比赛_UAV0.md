@@ -150,14 +150,13 @@ py -3 .\scripts\target_report_server.py `
 `remote_host` 改成 Windows 的局域网 IP。Windows 服务端未启动时，检测、规划
 和 RViz 仍可正常运行；上报客户端会重试，已确认记录会在网络恢复后补发。
 
-### 精确降落（需要下视相机时）
+### 精确降落（当前暂不纳入流程）
 
-精确降落节点默认关闭。仿真或未接下视相机时保持默认值；实机确认下视相机和
-标定文件有效后，可以在统一入口中同时启动检测、上报和精确降落。下面两种完整
-方案二选一，不需要再重复执行前面的检测命令。
+当前比赛流程不启动下视相机和精确降落，`enable_down_camera` 与
+`enable_precision_landing` 均保持默认值 `false`。以后确认下视相机设备路径和
+标定文件有效后，再在统一入口中追加以下参数：
 
 ```bash
-# 完整方案 A：D435 + 颜色/二维码 + 上报 + 精确降落，不启动热成像
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
@@ -165,19 +164,9 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_precision_landing:=true
 ```
 
-```bash
-# 完整方案 B：D435 + 颜色/二维码 + 热成像 + 上报 + 精确降落
-rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
-  enable_realsense:=true \
-  enable_thermal:=true \
-  enable_down_camera:=true \
-  enable_precision_landing:=true
-```
-
-上述完整配置会在检测和上报节点之外启动下视相机及降落控制节点，但不会自动
-解锁、切换 `OFFBOARD` 或发布降落触发；仍需按现场安全流程发布上升沿
-`/need_to_land`。不要在统一入口已经运行后再次单独启动同名的
-`precision_landing` 节点。
+该配置会启动下视相机和降落控制节点，但不会自动解锁、切换 `OFFBOARD` 或发布
+降落触发；仍需按现场安全流程发布上升沿 `/need_to_land`。不要在统一入口已经
+运行后再次单独启动同名的 `precision_landing` 节点。
 
 ## 6. 启动 UAV0 规划器
 
