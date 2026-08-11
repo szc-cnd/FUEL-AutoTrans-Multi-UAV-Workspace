@@ -18,7 +18,12 @@
   <arg name="realsense_align_depth" default="true" />
   <arg name="realsense_enable_color" default="true" />
   <arg name="realsense_enable_depth" default="true" />
+  <!-- D435 点云只用于 RViz 可视化，不参与检测或规划决策。 -->
+  <arg name="realsense_enable_pointcloud" default="true" />
   <arg name="camera_body_tf_odom_topic" default="/Odometry" />
+  <!-- 当前 FAST-LIO/UAV0 使用 UAV0/body；相机驱动仍发布 camera_link。 -->
+  <arg name="camera_body_tf_parent_frame" default="UAV0/body" />
+  <arg name="camera_body_tf_child_frame" default="camera_link" />
   <arg name="camera_body_tf_calibration_file"
        default="/home/oem/handeye_calibration/body_camera_03.yaml" />
   <arg name="down_camera_device"
@@ -34,6 +39,7 @@
     <arg name="align_depth" value="$(arg realsense_align_depth)" />
     <arg name="enable_color" value="$(arg realsense_enable_color)" />
     <arg name="enable_depth" value="$(arg realsense_enable_depth)" />
+    <arg name="enable_pointcloud" value="$(arg realsense_enable_pointcloud)" />
   </include>
 
   <include if="$(arg enable_color_tag)"
@@ -51,6 +57,8 @@
            file="$(find target_reporting)/launch/camera_body_tf.launch">
     <arg name="odom_topic" value="$(arg camera_body_tf_odom_topic)" />
     <arg name="calibration_file" value="$(arg camera_body_tf_calibration_file)" />
+    <arg name="parent_frame" value="$(arg camera_body_tf_parent_frame)" />
+    <arg name="child_frame" value="$(arg camera_body_tf_child_frame)" />
   </include>
 
   <include if="$(arg enable_target_reporting)"

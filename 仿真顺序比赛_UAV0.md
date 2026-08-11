@@ -76,9 +76,12 @@ python3 laser_mid360.py iris 0 fastlio off
 ```
 
 根据热成像相机是否接入，选择以下一种统一启动方式。两种方式都会启动 D435、
-颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
+D435 点云、颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
 相机外参 TF 使用 `/home/oem/handeye_calibration/body_camera_03.yaml`，不需要
 再单独执行 `camera_body_tf.launch` 或 `target_reporting.launch`。
+统一入口默认将该外参发布为 `UAV0/body -> camera_link`，与当前 FAST-LIO 的
+`UAV0/body` 坐标系对齐；若实际 FAST-LIO 使用无前缀 `body`，可追加
+`camera_body_tf_parent_frame:=body`。
 
 ```bash
 cd ~/match_ws
@@ -88,6 +91,7 @@ source devel/setup.bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
+  realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
@@ -98,6 +102,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=true \
+  realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
@@ -115,6 +120,9 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 最近一次运行也可以通过 `~/.ros/log/latest/` 查看。未接热成像相机时使用
 方案 A，避免热成像设备打开失败；接入并确认设备正常后再使用方案 B。
 
+D435 点云话题为 `/camera/depth/color/points`，只用于 RViz 显示；如需降低相机
+负载，可在统一启动命令中将 `realsense_enable_pointcloud:=true` 改为 `false`。
+
 颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
 RealSense 节点。如果 D435 已经在其他终端运行，才改用：
 
@@ -131,6 +139,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 - `color_tag_detector`：颜色标签检测；
 - `qr_detector`：普通二维码检测；
 - `uvc_ubuntu`：热成像检测和 D435 深度融合；
+- D435 PointCloud2：`/camera/depth/color/points`，仅供 RViz 可视化；
 - `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
 - `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
 
@@ -145,6 +154,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 ```bash
 rostopic echo /UAV0/target_reporting/observation
 rostopic echo /UAV0/target_reporting/markers
+rostopic hz /camera/depth/color/points
 rostopic hz /UAV0/color_tag_detector/debug_image
 rostopic hz /UAV0/vision/qr_debug_image
 rostopic hz /UAV0/thermal/debug_image
@@ -231,7 +241,10 @@ source devel/setup.bash
 roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_exploration.launch"
 ```
 
-该入口启动 UAV0 的 FUEL 规划器和 RViz。RViz 的 `Detection Results` 分组会显示 `/UAV0/target_reporting/markers`，黄色为候选、绿色为确认；颜色、二维码和热成像调试图像也已配置在同一个 RViz 中。这里启动的 `target_rviz_marker` 只负责显示，不会给 FUEL 发布检测目标或观察位姿。
+该入口启动 UAV0 的 FUEL 规划器和 RViz。RViz 的 `Detection Results` 分组会显示
+`/UAV0/target_reporting/markers`，黄色为候选、绿色为确认；颜色、二维码和热成像
+调试图像以及 D435 点云 `/camera/depth/color/points` 也已配置在同一个 RViz 中。
+这里启动的 `target_rviz_marker` 只负责显示，不会给 FUEL 发布检测目标或观察位姿。
 
 如果只想运行规划而不启动检测显示，可加：
 

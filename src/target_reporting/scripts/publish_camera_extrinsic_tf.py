@@ -34,8 +34,10 @@ def main():
         return 2
     transform = TransformStamped()
     transform.header.stamp = rospy.Time.now()
-    transform.header.frame_id = document["parent_frame"].lstrip("/")
-    transform.child_frame_id = document["child_frame"].lstrip("/")
+    parent_frame = rospy.get_param("~parent_frame", "").strip()
+    child_frame = rospy.get_param("~child_frame", "").strip()
+    transform.header.frame_id = (parent_frame or document["parent_frame"]).lstrip("/")
+    transform.child_frame_id = (child_frame or document["child_frame"]).lstrip("/")
     transform.transform.translation.x = translation[0]
     transform.transform.translation.y = translation[1]
     transform.transform.translation.z = translation[2]

@@ -50,13 +50,18 @@ FAST-LIO 在整场任务中不得重启或重置。UAV0 统一启动配置使用
 所有空间消息必须使用真实相机光学坐标 `frame_id`、源图像时间戳和米制坐标。TF树至少需要连通：
 
 ```text
-camera_init -> body -> camera_color_optical_frame
+UAV0/camera_init -> UAV0/body -> camera_link -> camera_color_optical_frame
+UAV0/camera_init -> UAV0/body -> camera_link -> camera_depth_optical_frame
 ```
+
+其中 `camera_link` 到彩色/深度光学坐标由 RealSense 发布，`UAV0/body` 到
+`camera_link` 使用手眼标定外参。D435 点云 `/camera/depth/color/points` 使用
+`camera_depth_optical_frame`，RViz 会通过这棵 TF 树转换到固定坐标系。
 
 检查命令：
 
 ```bash
-rosrun tf tf_echo camera_init camera_color_optical_frame
+rosrun tf tf_echo UAV0/camera_init camera_color_optical_frame
 rostopic echo /UAV0/target_reporting/observation
 ```
 
