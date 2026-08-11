@@ -175,7 +175,8 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20
 /home/oem/handeye_calibration/body_camera_03.yaml
 ```
 
-然后新开终端启动 UAV0 检测、TF 和上报统一入口（热成像按设备情况二选一）：
+然后新开终端只执行一次 UAV0 检测、TF 和上报统一入口。当前 match_ws 的
+FAST-LIO 里程计话题为 `/UAV0/fast_lio/Odometry`，因此直接使用下面的命令：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -184,23 +185,18 @@ source /home/oem/match_ws/devel/setup.bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
 ```
 
 接入并确认热成像相机正常后，将上面的 `enable_thermal:=false` 改为
 `enable_thermal:=true`。机载端配置文件为
 `/home/oem/match_ws/src/target_reporting/config/target_reporting.yaml`。
 
-如果 match_ws 中 FAST-LIO 发布的里程计话题是
-`/UAV0/fast_lio/Odometry`，使用下面的启动命令：
-
-```bash
-rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
-  enable_realsense:=true \
-  enable_thermal:=false \
-  enable_camera_body_tf:=true \
-  camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
-```
+上面的命令已经包含相机外参 TF 和目标上报，不要再重复启动
+`camera_body_tf.launch` 或 `target_reporting.launch`。如果实际里程计话题仍为
+`/Odometry`，只需把命令最后一行改为
+`camera_body_tf_odom_topic:=/Odometry`，同样只执行一次。
 
 配置文件应保持以下关键参数：
 
