@@ -67,7 +67,7 @@ python3 laser_mid360.py iris 0 fastlio off
 
 输出：`/UAV0/mavros/vision_pose/pose`。
 
-## 5. 启动 UAV0 检测、上报和降落统一入口
+## 5. 启动 UAV0 检测和上报统一入口
 
 统一入口是 `uav0_competition_bringup`，源码在：
 
@@ -76,7 +76,9 @@ python3 laser_mid360.py iris 0 fastlio off
 ```
 
 根据热成像相机是否接入，选择以下一种统一启动方式。两种方式都会启动 D435、
-颜色标签、二维码和目标上报；方案 B 另外启动热成像检测：
+颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
+相机外参 TF 使用 `/home/oem/handeye_calibration/body_camera_03.yaml`，不需要
+再单独执行 `camera_body_tf.launch` 或 `target_reporting.launch`。
 
 ```bash
 cd ~/match_ws
@@ -85,14 +87,16 @@ source devel/setup.bash
 # 方案 A：启动 D435，关闭热成像（当前电脑使用此方案）
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
-  enable_thermal:=false
+  enable_thermal:=false \
+  enable_camera_body_tf:=true
 ```
 
 ```bash
 # 方案 B：D435 和热成像都启动（已接入热成像相机时使用）
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
-  enable_thermal:=true
+  enable_thermal:=true \
+  enable_camera_body_tf:=true
 ```
 
 该脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
@@ -110,7 +114,8 @@ RealSense 节点。如果 D435 已经在其他终端运行，才改用：
 ```bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=false \
-  enable_thermal:=false
+  enable_thermal:=false \
+  enable_camera_body_tf:=true
 ```
 
 入口默认启动：
@@ -118,6 +123,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 - `color_tag_detector`：颜色标签检测；
 - `qr_detector`：普通二维码检测；
 - `uvc_ubuntu`：热成像检测和 D435 深度融合；
+- `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
 - `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
 
 没有热成像硬件的仿真环境可加 `enable_thermal:=false`。同一套 D435 或 UVC
