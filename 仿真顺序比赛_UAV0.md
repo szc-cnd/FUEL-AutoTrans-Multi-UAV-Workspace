@@ -135,13 +135,16 @@ rostopic hz /UAV0/thermal/debug_image
 
 ### 远程 Windows 端
 
-Windows 端不需要 ROS，只运行 `target_reporting` 中的 TCP 服务端。把
-`match_ws/src/target_reporting` 复制到 Windows 后，在 PowerShell 中执行：
+Windows 端不需要 ROS，只运行 `target_reporting` 中的 TCP 服务端。先把
+`match_ws/src/target_reporting` 整个复制到 Windows 任意目录。下面以
+`D:\UAV0\target_reporting` 为例；如果你的实际目录不同，只修改第一行路径：
 
 ```powershell
-cd C:\match_ws\target_reporting
-$env:PYTHONPATH = "$PWD\src"
-py -3 .\scripts\target_report_server.py `
+$targetReportingDir = "D:\UAV0\target_reporting"
+$serverScript = Join-Path $targetReportingDir "scripts\target_report_server.py"
+$env:PYTHONPATH = Join-Path $targetReportingDir "src"
+if (-not (Test-Path $serverScript)) { throw "找不到 target_report_server.py：$serverScript" }
+py -3 $serverScript `
   --host 0.0.0.0 --port 5000 --image-port 5001 `
   --output C:\target_reports --mission-id competition_current
 ```
