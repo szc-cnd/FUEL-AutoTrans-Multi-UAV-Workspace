@@ -1,10 +1,10 @@
 <launch>
   <!--
     UAV0 统一启动入口。
-    默认启动三类检测和 target_reporting；下视相机、精确降落和独立 RViz
+    默认启动 D435、三类检测和 target_reporting；下视相机、精确降落和独立 RViz
     显示均需要显式打开，避免仿真或未接硬件时误启动飞行相关节点。
   -->
-  <arg name="enable_realsense" default="false" />
+  <arg name="enable_realsense" default="true" />
   <arg name="enable_color_tag" default="true" />
   <arg name="enable_qr" default="true" />
   <arg name="enable_thermal" default="true" />

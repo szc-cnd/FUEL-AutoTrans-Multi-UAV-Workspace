@@ -75,21 +75,22 @@ python3 laser_mid360.py iris 0 fastlio off
 ~/match_ws/src/uav0_competition_bringup
 ```
 
-先启动三个检测节点和目标上报（D435 已经由其他终端启动时）：
+统一入口会同时启动 D435、三个检测节点和目标上报：
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
 roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
-  enable_realsense:=false
+  enable_realsense:=true
 ```
 
-如果 D435 还没有启动，让统一入口启动它；颜色标签和二维码共用这一套 D435：
+颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
+RealSense 节点。如果 D435 已经在其他终端运行，才改用：
 
 ```bash
 roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
-  enable_realsense:=true
+  enable_realsense:=false
 ```
 
 入口默认启动：

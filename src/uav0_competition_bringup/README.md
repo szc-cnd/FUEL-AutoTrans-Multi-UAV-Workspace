@@ -1,23 +1,29 @@
 # UAV0 比赛统一启动包
 
-`uav0_detection_landing_stack.launch` 把 `match_ws/src` 中的颜色标签、二维码、
-热成像融合、目标远程上报和精确降落包集中到一个入口。默认启动三类检测和
-`target_reporting`，不默认打开下视相机、精确降落或独立 RViz。
+`uav0_detection_landing_stack.launch` 把 `match_ws/src` 中的 RealSense D435、
+颜色标签、二维码、热成像融合、目标远程上报和精确降落包集中到一个入口。
+默认启动 D435、三类检测和 `target_reporting`，不默认打开下视相机、精确降落
+或独立 RViz。
 
 ## 仿真/检测显示
 
-如果 D435 已由其他终端启动：
+默认由统一入口启动 D435：
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
 roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
-  enable_realsense:=false
+  enable_realsense:=true
 ```
 
-如果本入口负责启动 D435，改为 `enable_realsense:=true`。颜色标签和二维码
-共用 D435，不能重复启动第二个 RealSense 节点。
+颜色标签和二维码共用这一套 D435，不能重复启动第二个 RealSense 节点。
+如果 D435 已经由其他终端启动，才使用：
+
+```bash
+roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+  enable_realsense:=false
+```
 
 规划器已经在自己的 RViz 中启动 `target_rviz_marker`，因此通常不要把
 `enable_target_rviz` 设为 `true`。独立查看检测结果时才使用：
