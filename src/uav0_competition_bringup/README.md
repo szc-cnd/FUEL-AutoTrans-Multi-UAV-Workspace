@@ -55,11 +55,23 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 
 ## 精确降落
 
-连接下视相机并确认标定文件后，显式打开：
+连接下视相机并确认设备路径、标定文件有效后，可以在统一入口中同时启动检测、
+上报和精确降落。下面两种完整方案二选一，不需要再重复执行前面的检测命令。
 
 ```bash
+# 完整方案 A：D435 + 颜色/二维码 + 上报 + 精确降落，不启动热成像
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
   enable_thermal:=false \
+  enable_down_camera:=true \
+  enable_precision_landing:=true
+```
+
+```bash
+# 完整方案 B：D435 + 颜色/二维码 + 热成像 + 上报 + 精确降落
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=true \
   enable_down_camera:=true \
   enable_precision_landing:=true
 ```

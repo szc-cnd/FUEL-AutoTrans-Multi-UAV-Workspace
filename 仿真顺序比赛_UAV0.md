@@ -153,9 +153,11 @@ py -3 .\scripts\target_report_server.py `
 ### 精确降落（需要下视相机时）
 
 精确降落节点默认关闭。仿真或未接下视相机时保持默认值；实机确认下视相机和
-标定文件有效后，在启动统一入口时同时打开：
+标定文件有效后，可以在统一入口中同时启动检测、上报和精确降落。下面两种完整
+方案二选一，不需要再重复执行前面的检测命令。
 
 ```bash
+# 完整方案 A：D435 + 颜色/二维码 + 上报 + 精确降落，不启动热成像
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
@@ -163,9 +165,19 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_precision_landing:=true
 ```
 
-这只启动下视相机和降落控制节点，不会自动解锁、切换 `OFFBOARD` 或发布降落
-触发；仍需按现场安全流程发布上升沿 `/need_to_land`。不要在统一入口已经运行
-后再次单独启动同名的 `precision_landing` 节点。
+```bash
+# 完整方案 B：D435 + 颜色/二维码 + 热成像 + 上报 + 精确降落
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=true \
+  enable_down_camera:=true \
+  enable_precision_landing:=true
+```
+
+上述完整配置会在检测和上报节点之外启动下视相机及降落控制节点，但不会自动
+解锁、切换 `OFFBOARD` 或发布降落触发；仍需按现场安全流程发布上升沿
+`/need_to_land`。不要在统一入口已经运行后再次单独启动同名的
+`precision_landing` 节点。
 
 ## 6. 启动 UAV0 规划器
 
