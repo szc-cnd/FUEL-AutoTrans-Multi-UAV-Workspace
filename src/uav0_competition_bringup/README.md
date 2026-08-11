@@ -13,15 +13,22 @@
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
-roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
-  enable_realsense:=true
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh
 ```
+
+脚本会自动创建：
+
+```text
+~/match_ws/logs/uav0/YYYYMMDD_HHMMSS_NNNNNNNNN/
+```
+
+并将本次 ROS 节点日志写入该目录。也可以通过 `UAV0_LOG_ROOT` 指定日志根目录。
 
 颜色标签和二维码共用这一套 D435，不能重复启动第二个 RealSense 节点。
 如果 D435 已经由其他终端启动，才使用：
 
 ```bash
-roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=false
 ```
 
@@ -29,7 +36,7 @@ roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
 `enable_target_rviz` 设为 `true`。独立查看检测结果时才使用：
 
 ```bash
-roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_target_rviz:=true
 ```
 
@@ -38,7 +45,7 @@ roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
 连接下视相机并确认标定文件后，显式打开：
 
 ```bash
-roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_down_camera:=true \
   enable_precision_landing:=true
 ```
