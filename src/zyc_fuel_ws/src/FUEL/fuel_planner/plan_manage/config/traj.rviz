@@ -131,8 +131,8 @@ Visualization Manager:
           Axis: Z
           Channel Name: intensity
           Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: RGB8
+          Color: 255; 140; 0
+          Color Transformer: FlatColor
           Decay Time: 0
           Enabled: true
           Invert Rainbow: false
@@ -140,14 +140,14 @@ Visualization Manager:
           Max Intensity: 4096
           Min Color: 0; 0; 0
           Min Intensity: 0
-          Name: camera_point_cloud
+          Name: detected_object_cloud
           Position Transformer: XYZ
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
           Size (m): 0.01
           Style: Flat Squares
-          Topic: /camera/depth/color/points
+          Topic: /UAV0/target_reporting/detected_object_cloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true

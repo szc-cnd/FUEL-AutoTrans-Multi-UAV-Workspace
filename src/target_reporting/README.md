@@ -55,8 +55,9 @@ UAV0/camera_init -> UAV0/body -> camera_link -> camera_depth_optical_frame
 ```
 
 其中 `camera_link` 到彩色/深度光学坐标由 RealSense 发布，`UAV0/body` 到
-`camera_link` 使用手眼标定外参。D435 点云 `/camera/depth/color/points` 使用
-`camera_depth_optical_frame`，RViz 会通过这棵 TF 树转换到固定坐标系。
+`camera_link` 使用手眼标定外参。D435 原始点云 `/camera/depth/color/points` 使用
+`camera_depth_optical_frame`；显示适配器再输出只包含检测目标附近点的
+`/UAV0/target_reporting/detected_object_cloud`，默认保留目标中心半径 0.25 m 内的点。
 
 检查命令：
 
@@ -69,6 +70,7 @@ RViz 标记输出：
 
 ```text
 /UAV0/target_reporting/markers  visualization_msgs/MarkerArray
+/UAV0/target_reporting/detected_object_cloud  sensor_msgs/PointCloud2
 ```
 
 标记使用 `world` 坐标系；当前比赛配置中 `world` 与 `channel` 的数值坐标一致。黄色球和文字表示候选，绿色球和文字表示已确认目标。

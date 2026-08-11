@@ -560,13 +560,16 @@
         <remap from="/move_base_simple/goal" to="$(arg rviz_goal_topic)"/>
     </node>
 
-    <!-- target_reporting 已完成检测坐标转换；此节点只为本启动流程使用的 traj.rviz 提供显示消息，
-         不发布任何 /mission/detection 或规划目标话题。 -->
+    <!-- target_reporting 已完成检测坐标转换；此节点只为本启动流程使用的 traj.rviz 提供
+         检测标记和目标附近过滤点云，不发布任何 /mission/detection 或规划目标话题。 -->
     <node if="$(arg enable_detection_rviz)"
           pkg="target_reporting" type="target_rviz_marker_node.py"
           name="target_rviz_marker" output="screen">
         <param name="observation_topic" value="/UAV0/target_reporting/observation"/>
         <param name="marker_topic" value="/UAV0/target_reporting/markers"/>
         <param name="marker_frame" value="world"/>
+        <param name="cloud_topic" value="/camera/depth/color/points"/>
+        <param name="object_cloud_topic" value="/UAV0/target_reporting/detected_object_cloud"/>
+        <param name="object_cloud_radius" value="0.25"/>
     </node>
 </launch>
