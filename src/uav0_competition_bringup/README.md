@@ -113,7 +113,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 候选/确认跟踪、TCP 远程上报，并发布 `/UAV0/target_reporting/observation`。
 规划器 RViz 的标记适配器再将观测转成 `/UAV0/target_reporting/markers`。
 候选结果目前只用于机载端 RViz 显示，不通过 TCP 发送到 Windows；Windows 端只接收确认目标
-及其最终证据图片，候选和确认结果都不参与规划决策。
+及其最终证据图片。确认图片由 `target_reporting` 根据检测几何统一绘制二维码四角、颜色标签
+或热源矩形框；候选和确认结果都不参与规划决策。
 任务编号默认按当天生成，也可以通过 `target_reporting_mission_id` 显式指定。
 
 D435 原始点云 `/camera/depth/color/points` 只作为显示过滤器输入；RViz 实际显示

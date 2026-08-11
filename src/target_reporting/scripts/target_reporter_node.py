@@ -123,9 +123,9 @@ class TargetReporterNode:
                 PointStamped,
                 rospy.get_param(
                     "~thermal_candidate_status_topic",
-                    "/UAV0/thermal/target_candidate_detected",
+                    "/UAV0/thermal/target_candidate_status",
                 ),
-                Bool,
+                String,
                 "/UAV0/thermal/debug_image",
             )
         else:

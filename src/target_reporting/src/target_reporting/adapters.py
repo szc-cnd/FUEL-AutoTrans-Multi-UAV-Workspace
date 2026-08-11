@@ -1,6 +1,26 @@
 import json
 
 
+def _copy_geometry(data, result):
+    """Keep detector geometry for evidence images without changing semantics."""
+    points = data.get("points")
+    if isinstance(points, (list, tuple)) and points:
+        result["points"] = points
+
+    bbox = data.get("bbox")
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        result["bbox"] = list(bbox[:4])
+
+    # Color and thermal detectors use u/v or cx/cy; normalize both forms so
+    # the evidence renderer can use one schema.
+    center_u = data.get("center_u", data.get("u", data.get("cx")))
+    center_v = data.get("center_v", data.get("v", data.get("cy")))
+    if center_u is not None and center_v is not None:
+        result["center_u"] = center_u
+        result["center_v"] = center_v
+    return result
+
+
 def parse_color_status(text):
     data = json.loads(text)
     # Candidate messages are valid geometric observations even before the
@@ -10,17 +30,30 @@ def parse_color_status(text):
         return None
     if not data.get("stable") and not data.get("candidate"):
         return None
-    return {"color": str(data.get("color", "unknown"))}, data.get("score")
+    result = {"color": str(data.get("color", "unknown"))}
+    return _copy_geometry(data, result), data.get("score")
 
 
 def parse_qr_status(text):
     data = json.loads(text)
     if not data.get("detected") or data.get("held"):
         return None
-    return {"content": str(data.get("data", ""))}, None
+    result = {"content": str(data.get("data", ""))}
+    return _copy_geometry(data, result), None
 
 
 def parse_thermal_status(detected):
+    """Parse legacy Bool and geometry-carrying JSON String messages."""
+    if hasattr(detected, "data"):
+        detected = detected.data
+
+    if isinstance(detected, str):
+        data = json.loads(detected)
+        if not data.get("detected"):
+            return None
+        result = {"detected": True}
+        return _copy_geometry(data, result), None
+
     if not detected:
         return None
     return {"detected": True}, None

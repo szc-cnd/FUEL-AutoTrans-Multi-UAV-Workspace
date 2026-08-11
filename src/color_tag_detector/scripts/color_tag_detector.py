@@ -986,6 +986,7 @@ class ColorTagDetector(object):
             "color": best["color"],
             "u": int(round(best["u"])),
             "v": int(round(best["v"])),
+            "bbox": [int(value) for value in best["bbox"]],
             "depth": round(float(best["depth"]), 4),
             "point_camera": [round(float(value), 4) for value in point_out],
             "score": round(float(best["final_score"]), 3),
@@ -1047,6 +1048,7 @@ class ColorTagDetector(object):
             "color": best["color"],
             "u": int(round(u_out)),
             "v": int(round(v_out)),
+            "bbox": [int(value) for value in best["bbox"]],
             "depth": round(float(depth_out), 4) if depth_out is not None else None,
             "point_camera": [round(float(x), 4) for x in point_out]
             if point_out is not None

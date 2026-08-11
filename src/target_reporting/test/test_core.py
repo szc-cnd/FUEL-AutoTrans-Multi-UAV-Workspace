@@ -13,7 +13,7 @@ from target_reporting.model import Position, TargetEvent
 from target_reporting.protocol import decode_json_line, encode_json_line, validate_event
 from target_reporting.store import MissionStore
 from target_reporting.candidates import CandidateTracker
-from target_reporting.adapters import parse_color_status, parse_qr_status
+from target_reporting.adapters import parse_color_status, parse_qr_status, parse_thermal_status
 
 
 class CoreTests(unittest.TestCase):
@@ -104,6 +104,24 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(({"content": ""}, None), parse_qr_status(
             '{"detected":true,"held":false,"data":""}'
         ))
+        self.assertEqual(
+            ({"detected": True, "bbox": [2, 3, 20, 16], "center_u": 12, "center_v": 8}, None),
+            parse_thermal_status(
+                '{"detected":true,"candidate":true,"cx":12,"cy":8,"bbox":[2,3,20,16]}'
+            ),
+        )
+
+    def test_geometry_does_not_split_one_logical_candidate(self):
+        tracker = CandidateTracker(distance_m=0.3, confirm_hits=3)
+        result_a = {"color": "blue", "bbox": [10, 10, 20, 20], "center_u": 20}
+        result_b = {"color": "blue", "bbox": [11, 10, 20, 20], "center_u": 21}
+        tracker.update("color_tag", result_a, {"x": 1.0, "y": 0.0, "z": 0.5})
+        tracker.update("color_tag", result_b, {"x": 1.0, "y": 0.0, "z": 0.5})
+        candidate, confirmed = tracker.update(
+            "color_tag", result_a, {"x": 1.0, "y": 0.0, "z": 0.5}
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(3, candidate["hits"])
 
     def test_qr_held_result_is_not_reportable(self):
         self.assertIsNone(parse_qr_status(

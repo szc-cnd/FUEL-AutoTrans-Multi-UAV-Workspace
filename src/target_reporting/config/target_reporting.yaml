@@ -9,7 +9,7 @@ color_candidate_status_topic: "/UAV0/color_tag_detector/candidate_text"
 qr_candidate_point_topic: "/UAV0/vision/qr_candidate_pose_camera"
 qr_candidate_status_topic: "/UAV0/vision/qr_candidate_detected"
 thermal_candidate_point_topic: "/UAV0/thermal/target_candidate_camera_point"
-thermal_candidate_status_topic: "/UAV0/thermal/target_candidate_detected"
+thermal_candidate_status_topic: "/UAV0/thermal/target_candidate_status"
 
 remote_host: "192.168.31.147"
 remote_port: 5000

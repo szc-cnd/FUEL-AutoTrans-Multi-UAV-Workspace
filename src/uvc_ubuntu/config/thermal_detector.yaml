@@ -12,6 +12,7 @@ display: false
 uvc_demo_path: "uvc_demo"
 uvc_offset_fix: 0
 candidate_detected_topic: "/UAV0/thermal/target_candidate_detected"
+candidate_status_topic: "/UAV0/thermal/target_candidate_status"
 candidate_pixel_topic: "/UAV0/thermal/target_candidate_pixel"
 
 stable_filter_enable: true

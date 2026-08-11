@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import sys
 from collections import deque
@@ -9,7 +10,7 @@ import rospkg
 import rospy
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 try:
@@ -136,6 +137,13 @@ class ThermalDetectorNode:
             Bool,
             queue_size=1,
         )
+        self.candidate_status_pub = rospy.Publisher(
+            rospy.get_param(
+                "~candidate_status_topic", "/UAV0/thermal/target_candidate_status"
+            ),
+            String,
+            queue_size=1,
+        )
         self.candidate_pixel_pub = rospy.Publisher(
             rospy.get_param(
                 "~candidate_pixel_topic", "/UAV0/thermal/target_candidate_pixel"
@@ -182,6 +190,17 @@ class ThermalDetectorNode:
         # before the rolling 2/3-frame filter confirms it.
         candidate_detected = bool(detection["detected"])
         self.candidate_detected_pub.publish(Bool(data=candidate_detected))
+        candidate_status = {
+            "detected": candidate_detected,
+            "candidate": candidate_detected,
+            "cx": int(detection["cx"]) if candidate_detected else None,
+            "cy": int(detection["cy"]) if candidate_detected else None,
+            "bbox": list(detection["bbox"]) if candidate_detected else None,
+            "area": float(detection["area"]) if candidate_detected else 0.0,
+        }
+        self.candidate_status_pub.publish(
+            String(data=json.dumps(candidate_status, ensure_ascii=False))
+        )
         if candidate_detected:
             candidate_msg = PointStamped()
             candidate_msg.header.stamp = stamp

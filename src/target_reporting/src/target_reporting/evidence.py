@@ -1,5 +1,6 @@
 from collections import defaultdict, deque
 import hashlib
+import math
 import threading
 
 
@@ -39,12 +40,122 @@ def evidence_overlay_layout(image_shape, line_count, margin=12, line_height=22):
     return height - panel_height, panel_height
 
 
+def _finite_float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _image_points(value):
+    """Convert detector points ({u,v} or [u,v]) into a finite Nx2 array."""
+    import numpy as np
+
+    if not isinstance(value, (list, tuple)):
+        return None
+    points = []
+    for point in value:
+        if isinstance(point, dict):
+            u, v = point.get("u"), point.get("v")
+        elif isinstance(point, (list, tuple)) and len(point) >= 2:
+            u, v = point[0], point[1]
+        else:
+            continue
+        u, v = _finite_float(u), _finite_float(v)
+        if u is not None and v is not None:
+            points.append((u, v))
+    if len(points) < 4:
+        return None
+    return np.asarray(points, dtype=np.float32).reshape((-1, 1, 2))
+
+
+def _image_bbox(value):
+    if isinstance(value, dict):
+        value = [value.get("x"), value.get("y"), value.get("w"), value.get("h")]
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return None
+    values = [_finite_float(item) for item in value[:4]]
+    if any(item is None for item in values):
+        return None
+    x, y, width, height = values
+    if width <= 0.0 or height <= 0.0:
+        return None
+    return x, y, width, height
+
+
+def draw_detection_overlay(image, event):
+    """Draw the confirmed detector geometry on the evidence image.
+
+    Detector debug images are intentionally allowed to show raw candidates,
+    but their own temporal filters may still be false when the reporting
+    tracker confirms a target.  Drawing from the status geometry here keeps
+    the remote evidence image tied to the exact confirmed observation.
+    """
+    import cv2
+    import numpy as np
+
+    result = event.get("result") or {}
+    target_type = str(event.get("target_type", ""))
+    color = {
+        "color_tag": (0, 165, 255),      # orange in BGR
+        "qr_code": (0, 255, 0),          # green
+        "thermal_source": (255, 0, 255),  # magenta
+    }.get(target_type, (0, 255, 255))
+
+    points = _image_points(result.get("points"))
+    center = None
+    if points is not None:
+        cv2.polylines(image, [np.round(points).astype(np.int32)], True, color, 3, cv2.LINE_AA)
+        center = tuple(np.round(points.reshape(-1, 2).mean(axis=0)).astype(int))
+    else:
+        bbox = _image_bbox(result.get("bbox"))
+        if bbox is not None:
+            x, y, width, height = bbox
+            top_left = (int(round(x)), int(round(y)))
+            bottom_right = (int(round(x + width)), int(round(y + height)))
+            cv2.rectangle(image, top_left, bottom_right, color, 3, cv2.LINE_AA)
+            center = (
+                int(round(x + 0.5 * width)),
+                int(round(y + 0.5 * height)),
+            )
+
+    if center is None:
+        center_u = _finite_float(result.get("center_u"))
+        center_v = _finite_float(result.get("center_v"))
+        if center_u is not None and center_v is not None:
+            center = (int(round(center_u)), int(round(center_v)))
+
+    if center is None:
+        return image
+
+    cv2.drawMarker(
+        image, center, color, markerType=cv2.MARKER_CROSS,
+        markerSize=18, thickness=2, line_type=cv2.LINE_AA,
+    )
+    label = "CONFIRMED {}".format(target_type)
+    label_x = max(4, center[0] - 80)
+    label_y = max(24, center[1] - 12)
+    cv2.putText(image, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX,
+                0.60, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(image, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX,
+                0.60, color, 1, cv2.LINE_AA)
+    return image
+
+
 def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
     import cv2
 
     canvas = image.copy()
     position = event["position"]
-    result_text = ", ".join("{}={}".format(k, v) for k, v in event["result"].items())
+    geometry_keys = {
+        "points", "bbox", "center_u", "center_v", "u", "v", "cx", "cy",
+    }
+    result_text = ", ".join(
+        "{}={}".format(k, v)
+        for k, v in event["result"].items()
+        if k not in geometry_keys
+    )
     lines = [
         "{}  {}".format(event["target_type"], result_text),
         "Channel: X={:.3f} Y={:.3f} Z={:.3f} m".format(
@@ -67,6 +178,9 @@ def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
         y += 24
+    # Draw last so a target close to the bottom edge is not hidden by the
+    # evidence text panel.
+    draw_detection_overlay(canvas, event)
     ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     if not ok:
         raise ValueError("JPEG encoding failed")

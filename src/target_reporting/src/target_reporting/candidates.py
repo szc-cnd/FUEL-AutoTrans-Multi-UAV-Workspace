@@ -2,6 +2,15 @@ import math
 
 
 class CandidateTracker:
+    # Detector geometry changes every frame and must not create a new logical
+    # target.  Only semantic identity fields participate in de-duplication.
+    _GEOMETRY_KEYS = {
+        "points", "bbox", "center_u", "center_v", "u", "v", "cx", "cy",
+        "depth", "area", "side_px", "score", "stable_count", "reason",
+        "point_camera", "real_width", "real_height", "valid_depth_ratio",
+        "depth_std", "pixel_area", "fill_ratio", "method", "preprocess",
+    }
+
     def __init__(self, distance_m=0.30, confirm_hits=3):
         self.distance_m = float(distance_m)
         self.confirm_hits = max(1, int(confirm_hits))
@@ -10,7 +19,13 @@ class CandidateTracker:
 
     @staticmethod
     def _result_key(result):
-        return tuple(sorted((str(k), str(v)) for k, v in result.items()))
+        return tuple(
+            sorted(
+                (str(k), str(v))
+                for k, v in result.items()
+                if k not in CandidateTracker._GEOMETRY_KEYS
+            )
+        )
 
     def update(self, target_type, result, position):
         key = self._result_key(result)
@@ -42,4 +57,3 @@ class CandidateTracker:
         if newly_confirmed:
             best["reported"] = True
         return best, newly_confirmed
-

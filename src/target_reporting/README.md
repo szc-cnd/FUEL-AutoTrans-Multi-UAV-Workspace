@@ -28,7 +28,7 @@ FAST-LIO 在整场任务中不得重启或重置。UAV0 统一启动配置使用
 /UAV0/vision/qr_candidate_pose_camera            geometry_msgs/PoseStamped
 /UAV0/vision/qr_candidate_detected               std_msgs/String(JSON)
 /UAV0/thermal/target_candidate_camera_point      geometry_msgs/PointStamped
-/UAV0/thermal/target_candidate_detected          std_msgs/Bool
+/UAV0/thermal/target_candidate_status            std_msgs/String(JSON)
 ```
 
 旧版检测节点可将 `use_detector_candidates` 设为 `false`，回退到下面的稳定结果话题：
@@ -147,7 +147,8 @@ roslaunch target_reporting remote_server.launch
 远程端默认写入指定的 `--output` 目录，结构相同。候选观测和确认观测都会发布到机载端的
 `/UAV0/target_reporting/observation`，因此规划器 RViz 仍能看到候选；默认只有确认观测
 通过 TCP 5000 发往远程端，候选不会传到 Windows，也不会生成远程记录或图片。只有确认目标
-生成最终 JSON 和带检测框的证据图片；确认目标不会再产生飞行目标。若确实需要兼容旧流程，
+生成最终 JSON 和带检测框的证据图片；二维码四角、颜色标签和热源矩形框由确认状态随上报数据
+传入并在机载端统一绘制，不依赖检测器当帧是否已经稳定绘框。确认目标不会再产生飞行目标。若确实需要兼容旧流程，
 将 `send_candidate_observations` 设为 `true` 才会重新发送候选实时观测。
 
 `mission_id: auto` 会按当天自动生成 `onboard_test_YYYYMMDD`。Windows 端也要使用同一个日期编号；
