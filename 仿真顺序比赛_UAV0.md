@@ -88,7 +88,8 @@ source devel/setup.bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 ```bash
@@ -96,7 +97,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=true \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 该脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
@@ -115,7 +117,8 @@ RealSense 节点。如果 D435 已经在其他终端运行，才改用：
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=false \
   enable_thermal:=false \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 入口默认启动：
@@ -125,6 +128,9 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 - `uvc_ubuntu`：热成像检测和 D435 深度融合；
 - `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
 - `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
+
+`enable_target_reporting:=true` 是远程数据传输开关，必须保持为 `true`；Windows
+接收服务器仍需按下面的远程端步骤单独启动。
 
 没有热成像硬件的仿真环境可加 `enable_thermal:=false`。同一套 D435 或 UVC
 设备不要在其他终端重复启动。
@@ -186,6 +192,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
   enable_camera_body_tf:=true \
+  enable_target_reporting:=true \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
 ```
 

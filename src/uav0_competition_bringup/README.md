@@ -18,7 +18,8 @@ source devel/setup.bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 ```bash
@@ -26,7 +27,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=true \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 入口还会自动启动 `camera_body_tf.launch`，读取：
@@ -56,7 +58,8 @@ ROS 默认日志目录：
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=false \
   enable_thermal:=false \
-  enable_camera_body_tf:=true
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true
 ```
 
 规划器已经在自己的 RViz 中启动 `target_rviz_marker`，因此通常不要把
@@ -66,6 +69,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=false \
   enable_camera_body_tf:=true \
+  enable_target_reporting:=true \
   enable_target_rviz:=true
 ```
 
@@ -80,6 +84,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
   enable_camera_body_tf:=true \
+  enable_target_reporting:=true \
   enable_down_camera:=true \
   enable_precision_landing:=true
 ```
