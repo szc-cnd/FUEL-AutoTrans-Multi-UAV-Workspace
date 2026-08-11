@@ -1,0 +1,25 @@
+<launch>
+  <arg name="allow_arming" default="true"/>
+  <arg name="auto_start" default="true"/>
+  <arg name="auto_start_delay_sec" default="5.0"/>
+  <!-- 2.05 m target with 0.05 m tolerance prevents handoff below 2.00 m. -->
+  <arg name="takeoff_height_m" default="2.05"/>
+
+  <include file="$(find precision_landing)/launch/precision_landing.launch"/>
+
+  <node pkg="precision_landing" type="landing_test_mission_node"
+        name="landing_test" output="screen" required="true">
+    <param name="allow_arming" value="$(arg allow_arming)"/>
+    <param name="auto_start" value="$(arg auto_start)"/>
+    <param name="auto_start_delay_sec" value="$(arg auto_start_delay_sec)"/>
+    <param name="takeoff_height_m" value="$(arg takeoff_height_m)"/>
+    <param name="publish_rate_hz" value="20.0"/>
+    <param name="prestream_sec" value="2.0"/>
+    <param name="hover_stable_sec" value="0.10"/>
+    <param name="altitude_tolerance_m" value="0.05"/>
+    <param name="xy_tolerance_m" value="0.20"/>
+    <param name="state_timeout_sec" value="1.50"/>
+    <param name="pose_timeout_sec" value="0.50"/>
+    <param name="operation_timeout_sec" value="30.0"/>
+  </node>
+</launch>

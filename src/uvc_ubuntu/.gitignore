@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.o
+uvc_demo
+**/uvc_demo
+len
+offset
+size
+wWidth
+*.bak
+*.bak*
+*.bad
+*.before_*
+*.layer_bad
+backup_yuv_only_384x288_ok/
+check_backup_now/

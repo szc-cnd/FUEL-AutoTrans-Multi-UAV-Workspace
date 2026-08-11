@@ -1,0 +1,14 @@
+<launch>
+  <arg name="image_topic" default="/usb_cam/image_raw"/>
+  <arg name="camera_info_topic" default="/usb_cam/camera_info"/>
+
+  <node pkg="precision_landing" type="precision_landing_node"
+        name="precision_landing_node" output="screen">
+    <rosparam command="load"
+              file="$(find precision_landing)/config/precision_landing.yaml"/>
+
+    <!-- These arguments intentionally override the corresponding YAML defaults. -->
+    <param name="topics/image" value="$(arg image_topic)"/>
+    <param name="topics/camera_info" value="$(arg camera_info_topic)"/>
+  </node>
+</launch>

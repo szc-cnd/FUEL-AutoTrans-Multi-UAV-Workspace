@@ -1,0 +1,12 @@
+<launch>
+  <arg name="config_file" default="$(find uvc_ubuntu)/config/thermal_d435_fusion.yaml" />
+
+  <node
+    pkg="uvc_ubuntu"
+    type="thermal_d435_fusion_node.py"
+    name="thermal_d435_fusion_node"
+    output="screen">
+    <param name="config_path" value="$(arg config_file)" />
+    <rosparam command="load" file="$(arg config_file)" />
+  </node>
+</launch>

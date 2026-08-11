@@ -1,0 +1,12 @@
+<launch>
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="calibration_file" default="$(env HOME)/handeye_calibration/body_camera.yaml" />
+
+  <node pkg="target_reporting" type="odometry_to_tf.py" name="fastlio_odometry_tf" output="screen">
+    <param name="odom_topic" value="$(arg odom_topic)" />
+  </node>
+
+  <node pkg="target_reporting" type="publish_camera_extrinsic_tf.py" name="body_camera_static_tf" output="screen">
+    <param name="calibration_file" value="$(arg calibration_file)" />
+  </node>
+</launch>

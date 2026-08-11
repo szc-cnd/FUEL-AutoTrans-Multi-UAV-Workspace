@@ -1,6 +1,6 @@
 # UAV0 比赛启动流程（精简版）
 
-本流程对应 `~/match_ws` 的 UAV0 实机。保留原有启动顺序：MAVROS、MID360、FAST-LIO、位姿回传、检测上报、FUEL 规划器和原控制器分开启动。检测结果只进入远程上报和本流程的 RViz 显示，不改变规划器逻辑。
+本流程对应 `~/match_ws` 的 UAV0 仿真/实机验证。启动顺序为：MAVROS、MID360、FAST-LIO、位姿回传、UAV0 统一检测与上报、FUEL 规划器和原控制器。五个功能包以及统一启动包都位于 `match_ws/src`，不再依赖 `~/db_ws`。检测结果只进入远程上报和本流程的 RViz 显示，不改变规划器逻辑。
 
 传感器和节点不会自动解锁，也不会自动切换 `OFFBOARD`。确认数据正常后，再按现场飞行流程操作。
 
@@ -67,22 +67,83 @@ python3 laser_mid360.py iris 0 fastlio off
 
 输出：`/UAV0/mavros/vision_pose/pose`。
 
-## 5. 启动 UAV0 检测结果上报
+## 5. 启动 UAV0 检测、上报和降落统一入口
 
-如果三个检测节点已经启动，在规划器前启动 `target_reporting`。它负责接收候选/确认结果、完成已有坐标转换和远程上报；规划器启动时会自动启动 RViz 显示适配节点。
+统一入口是 `uav0_competition_bringup`，源码在：
+
+```text
+~/match_ws/src/uav0_competition_bringup
+```
+
+先启动三个检测节点和目标上报（D435 已经由其他终端启动时）：
 
 ```bash
-cd ~/db_ws
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
 source devel/setup.bash
-roslaunch target_reporting target_reporting.launch
+roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+  enable_realsense:=false
 ```
+
+如果 D435 还没有启动，让统一入口启动它；颜色标签和二维码共用这一套 D435：
+
+```bash
+roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+  enable_realsense:=true
+```
+
+入口默认启动：
+
+- `color_tag_detector`：颜色标签检测；
+- `qr_detector`：普通二维码检测；
+- `uvc_ubuntu`：热成像检测和 D435 深度融合；
+- `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
+
+没有热成像硬件的仿真环境可加 `enable_thermal:=false`。同一套 D435 或 UVC
+设备不要在其他终端重复启动。
 
 检查检测观测和 RViz 标记话题：
 
 ```bash
 rostopic echo /UAV0/target_reporting/observation
 rostopic echo /UAV0/target_reporting/markers
+rostopic hz /UAV0/color_tag_detector/debug_image
+rostopic hz /UAV0/vision/qr_debug_image
+rostopic hz /UAV0/thermal/debug_image
 ```
+
+### 远程 Windows 端
+
+Windows 端不需要 ROS，只运行 `target_reporting` 中的 TCP 服务端。把
+`match_ws/src/target_reporting` 复制到 Windows 后，在 PowerShell 中执行：
+
+```powershell
+cd C:\match_ws\target_reporting
+$env:PYTHONPATH = "$PWD\src"
+py -3 .\scripts\target_report_server.py `
+  --host 0.0.0.0 --port 5000 --image-port 5001 `
+  --output C:\target_reports --mission-id competition_current
+```
+
+机载端的 `src/target_reporting/config/target_reporting.yaml` 中将
+`remote_host` 改成 Windows 的局域网 IP。Windows 服务端未启动时，检测、规划
+和 RViz 仍可正常运行；上报客户端会重试，已确认记录会在网络恢复后补发。
+
+### 精确降落（需要下视相机时）
+
+精确降落节点默认关闭。仿真或未接下视相机时保持默认值；实机确认下视相机和
+标定文件有效后，在启动统一入口时同时打开：
+
+```bash
+roslaunch uav0_competition_bringup uav0_detection_landing_stack.launch \
+  enable_realsense:=true \
+  enable_down_camera:=true \
+  enable_precision_landing:=true
+```
+
+这只启动下视相机和降落控制节点，不会自动解锁、切换 `OFFBOARD` 或发布降落
+触发；仍需按现场安全流程发布上升沿 `/need_to_land`。不要在统一入口已经运行
+后再次单独启动同名的 `precision_landing` 节点。
 
 ## 6. 启动 UAV0 规划器
 
@@ -133,7 +194,7 @@ rostopic echo /UAV0/target_reporting/markers
 ## 9. 停止顺序
 
 1. 退出 UAV0 控制器和规划器。
-2. 停止 `target_reporting`。
+2. 停止统一入口（包含三个检测、`target_reporting`，以及按开关启动的降落节点）。
 3. 确认无人机已退出自动控制、落地并上锁。
 4. 停止位姿回传、FAST-LIO 和 MID360。
 5. 最后停止 MAVROS。

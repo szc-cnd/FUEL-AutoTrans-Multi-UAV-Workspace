@@ -1,0 +1,44 @@
+# Input topics. Defaults match realsense2_camera aligned depth output.
+image_topic: /camera/color/image_raw
+depth_topic: /camera/aligned_depth_to_color/image_raw
+camera_info_topic: /camera/color/camera_info
+candidate_pose_topic: /UAV0/vision/qr_candidate_pose_camera
+candidate_detected_topic: /UAV0/vision/qr_candidate_detected
+
+# Runtime performance.
+# 0 means OpenCV default. Use 1-2 on CPU-limited platforms to avoid QR detection
+# occupying all cores at high color resolutions.
+opencv_num_threads: 2
+publish_debug_image: true
+
+# QR candidate and depth settings.
+depth_window_size: 11
+min_area: 100.0
+min_side_length: 12.0
+max_side_ratio: 8.0
+max_angle_cos: 0.90
+qr_eps_x: 0.25
+qr_eps_y: 0.25
+depth_min: 0.15
+depth_max: 8.0
+
+# QR image preprocessing.
+# Options: gray, equalize, sharpen, adaptive.
+# OpenCV 4.8+ usually detects this target from gray directly. If field images
+# get soft, change preprocess_mode to sharpen first before increasing upscale.
+preprocess_mode: gray
+upscale_factor: 1.5
+enable_preprocess_fallbacks: false
+decode_qr_data: false
+# Only draw a box after the detector has been stable for confirm_frames.
+draw_raw_candidates: false
+
+# Temporal stability.
+confirm_frames: 3
+lost_hold_time: 0.3
+ema_alpha: 0.35
+
+# Save failed color frames for later data collection / YOLO fallback training.
+save_failed_frame: false
+failed_frame_dir: ~/qr_failed_frames
+failed_frame_interval: 1.0

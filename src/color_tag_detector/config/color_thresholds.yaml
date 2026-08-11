@@ -1,0 +1,124 @@
+# Intel RealSense D435 color-tag detector parameters.
+#
+# HSV tuning notes:
+#   - OpenCV HSV range is H: 0..179, S: 0..255, V: 0..255.
+#   - If the mask is noisy, raise S/V lower bounds or increase morph_open_kernel.
+#   - If the tag is broken into pieces, lower S/V lower bounds or increase
+#     morph_close_kernel.
+#   - Red wraps around hue=0, so it uses two ranges.
+#   - Human skin can fall near red/orange hue. For red, use a higher S lower
+#     bound and exclude low/mid-saturation skin-like pixels.
+#   - Dark tiles, shadows, and dark chair backs usually have lower V. For light
+#     green/blue tags, keep S lower bounds moderate but require higher V.
+
+color_topic: /camera/color/image_raw
+depth_topic: /camera/aligned_depth_to_color/image_raw
+camera_info_topic: /camera/color/camera_info
+candidate_point_topic: /UAV0/color_tag_detector/candidate_point_camera
+candidate_text_topic: /UAV0/color_tag_detector/candidate_text
+
+target_color: ""
+enabled_colors: []
+
+debug_draw_mode: 1
+max_debug_candidates: 3
+max_contours_per_color: 8
+
+colors:
+  red:
+    draw_bgr: [0, 0, 255]
+    ranges:
+      - lower: [0, 130, 60]
+        upper: [15, 255, 255]
+      - lower: [165, 110, 60]
+        upper: [179, 255, 255]
+    exclude_ranges:
+      - lower: [0, 20, 70]
+        upper: [25, 110, 255]
+    min_mean_saturation: 135
+    min_mean_value: 70
+    area_min: 900
+    fill_ratio_min: 0.40
+    min_valid_depth_ratio: 0.55
+    max_depth_std: 0.16
+    min_real_width: 0.07
+    min_real_height: 0.07
+
+  yellow:
+    draw_bgr: [0, 255, 255]
+    ranges:
+      - lower: [18, 80, 80]
+        upper: [38, 255, 255]
+    min_mean_saturation: 90
+    min_mean_value: 80
+
+  green:
+    draw_bgr: [0, 255, 0]
+    ranges:
+      - lower: [36, 28, 85]
+        upper: [88, 255, 255]
+    max_mean_hue: 82
+    min_mean_saturation: 35
+    min_mean_value: 95
+    area_min: 800
+    min_real_width: 0.07
+    min_real_height: 0.07
+    min_valid_depth_ratio: 0.55
+    max_depth_std: 0.16
+
+  blue:
+    draw_bgr: [255, 0, 0]
+    ranges:
+      - lower: [86, 35, 105]
+        upper: [128, 255, 255]
+    min_mean_hue: 88
+    min_mean_saturation: 45
+    min_mean_value: 115
+    min_valid_depth_ratio: 0.60
+    max_depth_std: 0.12
+    area_max_ratio: 0.08
+    max_real_width: 0.50
+    max_real_height: 0.50
+
+area_min: 900
+area_max_ratio: 0.10
+aspect_ratio_min: 0.30
+aspect_ratio_max: 3.5
+fill_ratio_min: 0.40
+
+min_extent: 0.40
+min_solidity: 0.0
+
+max_bbox_width_ratio: 0.80
+max_bbox_height_ratio: 0.80
+
+roi_x_min_ratio: 0.10
+roi_x_max_ratio: 0.90
+roi_y_min_ratio: 0.10
+roi_y_max_ratio: 0.90
+
+depth_min: 0.30
+depth_max: 5.0
+roi_size: 15
+min_valid_depth_ratio: 0.55
+max_depth_std: 0.16
+
+min_real_width: 0.07
+min_real_height: 0.07
+max_real_width: 0.55
+max_real_height: 0.55
+
+score_threshold: 0.60
+switch_score_margin: 0.18
+lost_keep_frames: 8
+
+stable_window: 8
+stable_min_count: 5
+max_pixel_jump: 50
+max_depth_jump: 0.25
+
+morph_open_kernel: 3
+morph_close_kernel: 7
+
+sync_queue_size: 10
+sync_slop: 0.08

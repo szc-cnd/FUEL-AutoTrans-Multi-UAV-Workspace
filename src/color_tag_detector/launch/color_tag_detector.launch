@@ -1,0 +1,8 @@
+<launch>
+  <node pkg="color_tag_detector"
+        type="color_tag_detector.py"
+        name="color_tag_detector"
+        output="screen">
+    <rosparam command="load" file="$(find color_tag_detector)/config/color_thresholds.yaml" />
+  </node>
+</launch>

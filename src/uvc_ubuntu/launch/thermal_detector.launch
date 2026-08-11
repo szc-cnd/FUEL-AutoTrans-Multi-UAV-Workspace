@@ -1,0 +1,12 @@
+<launch>
+  <arg name="config_file" default="$(find uvc_ubuntu)/config/thermal_detector.yaml" />
+
+  <node
+    pkg="uvc_ubuntu"
+    type="thermal_ros_node.py"
+    name="thermal_detector_node"
+    output="screen"
+    required="true">
+    <rosparam command="load" file="$(arg config_file)" />
+  </node>
+</launch>

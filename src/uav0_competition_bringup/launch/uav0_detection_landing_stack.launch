@@ -1,0 +1,66 @@
+<launch>
+  <!--
+    UAV0 统一启动入口。
+    默认启动三类检测和 target_reporting；下视相机、精确降落和独立 RViz
+    显示均需要显式打开，避免仿真或未接硬件时误启动飞行相关节点。
+  -->
+  <arg name="enable_realsense" default="false" />
+  <arg name="enable_color_tag" default="true" />
+  <arg name="enable_qr" default="true" />
+  <arg name="enable_thermal" default="true" />
+  <arg name="enable_target_reporting" default="true" />
+  <arg name="enable_target_rviz" default="false" />
+  <arg name="target_rviz_open_rviz" default="true" />
+  <arg name="enable_down_camera" default="false" />
+  <arg name="enable_precision_landing" default="false" />
+
+  <arg name="realsense_align_depth" default="true" />
+  <arg name="realsense_enable_color" default="true" />
+  <arg name="realsense_enable_depth" default="true" />
+  <arg name="down_camera_device"
+       default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0" />
+  <arg name="down_camera_info_url"
+       default="file://$(env HOME)/.ros/camera_info/down_camera.yaml" />
+  <arg name="landing_image_topic" default="/usb_cam/image_raw" />
+  <arg name="landing_camera_info_topic" default="/usb_cam/camera_info" />
+
+  <!-- D435 只启动一次；颜色和二维码检测共用它的图像/深度话题。 -->
+  <include if="$(arg enable_realsense)"
+           file="$(find realsense2_camera)/launch/rs_camera.launch">
+    <arg name="align_depth" value="$(arg realsense_align_depth)" />
+    <arg name="enable_color" value="$(arg realsense_enable_color)" />
+    <arg name="enable_depth" value="$(arg realsense_enable_depth)" />
+  </include>
+
+  <include if="$(arg enable_color_tag)"
+           file="$(find color_tag_detector)/launch/color_tag_detector.launch" />
+
+  <include if="$(arg enable_qr)"
+           file="$(find qr_detector)/launch/qr_detector.launch" />
+
+  <!-- thermal_d435_system 同时启动 UVC 热源检测和 D435 深度融合。 -->
+  <include if="$(arg enable_thermal)"
+           file="$(find uvc_ubuntu)/launch/thermal_d435_system.launch" />
+
+  <include if="$(arg enable_target_reporting)"
+           file="$(find target_reporting)/launch/target_reporting.launch" />
+
+  <!-- 规划器 launch 已经提供同一 RViz 中的 target_rviz_marker；只有独立查看时才打开本项。 -->
+  <include if="$(arg enable_target_rviz)"
+           file="$(find target_reporting)/launch/target_rviz.launch">
+    <arg name="open_rviz" value="$(arg target_rviz_open_rviz)" />
+  </include>
+
+  <!-- 下视相机和降落控制默认关闭；打开后仍需外部发布 /need_to_land=true 才会进入降落控制。 -->
+  <include if="$(arg enable_down_camera)"
+           file="$(find precision_landing)/launch/down_camera.launch">
+    <arg name="video_device" value="$(arg down_camera_device)" />
+    <arg name="camera_info_url" value="$(arg down_camera_info_url)" />
+  </include>
+
+  <include if="$(arg enable_precision_landing)"
+           file="$(find precision_landing)/launch/precision_landing.launch">
+    <arg name="image_topic" value="$(arg landing_image_topic)" />
+    <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
+  </include>
+</launch>

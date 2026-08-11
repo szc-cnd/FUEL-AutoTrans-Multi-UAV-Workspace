@@ -1,0 +1,57 @@
+topics:
+  trigger: /need_to_land
+  target_id: /landing/target_id
+  image: /usb_cam/image_raw
+  camera_info: /usb_cam/camera_info
+  local_pose: /mavros/local_position/pose
+  mavros_state: /mavros/state
+  setpoint: /mavros/setpoint_raw/local
+  set_mode_service: /mavros/set_mode
+
+marker:
+  dictionary: DICT_4X4_250
+  size_m: 0.60
+  requested_id: -1
+  stable_frames: 5
+  max_reprojection_error_px: 4.0
+  min_distance_m: 0.15
+  max_distance_m: 6.0
+  max_position_jump_m: 0.60
+  max_tilt_deg: 60.0
+
+control:
+  publish_rate_hz: 20.0
+  kp_xy: 0.55
+  max_xy_speed_mps: 0.60
+  max_xy_accel_mps2: 0.80
+  error_deadband_m: 0.02
+  filter_alpha: 0.35
+
+safety:
+  require_camera_info: true
+  image_timeout_sec: 0.30
+  pose_timeout_sec: 0.30
+  state_timeout_sec: 1.50
+  # Reject zero stamps and stamps over 0.05 s in the future. Small positive
+  # skew accommodates normal ROS callback scheduling and synchronized clocks.
+  max_header_future_sec: 0.05
+  target_loss_timeout_sec: 0.50
+  # Target search and reacquisition continue while positioning, camera,
+  # MAVROS and OFFBOARD remain healthy. total_timeout_sec only controls the
+  # long-search warning; reacquire_timeout_sec is retained for compatibility.
+  reacquire_timeout_sec: 5.0
+  total_timeout_sec: 30.0
+stages:
+  high: {min_height_m: 1.50, error_m: 0.25, descent_mps: 0.25}
+  auto_land: {height_m: 1.50, error_m: 0.08, stable_sec: 0.50}
+  fixed_xy_descent:
+    descent_mps: 0.10
+    cutoff_height_m: 0.30
+    ground_target_offset_m: 0.03
+
+camera_to_body:
+  rotation:
+    - [0.0, -1.0, 0.0]
+    - [-1.0, 0.0, 0.0]
+    - [0.0,  0.0, -1.0]
+  translation_m: [0.07, 0.0, 0.0]
