@@ -8,6 +8,7 @@
   <arg name="enable_color_tag" default="true" />
   <arg name="enable_qr" default="true" />
   <arg name="enable_thermal" default="true" />
+  <arg name="enable_camera_body_tf" default="true" />
   <arg name="enable_target_reporting" default="true" />
   <arg name="enable_target_rviz" default="false" />
   <arg name="target_rviz_open_rviz" default="true" />
@@ -17,6 +18,9 @@
   <arg name="realsense_align_depth" default="true" />
   <arg name="realsense_enable_color" default="true" />
   <arg name="realsense_enable_depth" default="true" />
+  <arg name="camera_body_tf_odom_topic" default="/Odometry" />
+  <arg name="camera_body_tf_calibration_file"
+       default="/home/oem/handeye_calibration/body_camera_03.yaml" />
   <arg name="down_camera_device"
        default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0" />
   <arg name="down_camera_info_url"
@@ -41,6 +45,13 @@
   <!-- thermal_d435_system 同时启动 UVC 热源检测和 D435 深度融合。 -->
   <include if="$(arg enable_thermal)"
            file="$(find uvc_ubuntu)/launch/thermal_d435_system.launch" />
+
+  <!-- FAST-LIO 位姿与相机外参 TF；target_reporting 依赖这棵 TF 树完成坐标转换。 -->
+  <include if="$(arg enable_camera_body_tf)"
+           file="$(find target_reporting)/launch/camera_body_tf.launch">
+    <arg name="odom_topic" value="$(arg camera_body_tf_odom_topic)" />
+    <arg name="calibration_file" value="$(arg camera_body_tf_calibration_file)" />
+  </include>
 
   <include if="$(arg enable_target_reporting)"
            file="$(find target_reporting)/launch/target_reporting.launch" />

@@ -1,7 +1,7 @@
 # UAV0 比赛统一启动包
 
 `uav0_detection_landing_stack.launch` 把 `match_ws/src` 中的 RealSense D435、
-颜色标签、二维码、热成像融合、目标远程上报和精确降落包集中到一个入口。
+颜色标签、二维码、热成像融合、相机外参 TF、目标远程上报和精确降落包集中到一个入口。
 默认启动 D435、三类检测和 `target_reporting`，不默认打开下视相机、精确降落
 或独立 RViz。
 
@@ -27,7 +27,15 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=true
 ```
 
-脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
+入口还会自动启动 `camera_body_tf.launch`，读取：
+
+```text
+/home/oem/handeye_calibration/body_camera_03.yaml
+```
+
+如果 FAST-LIO 实际发布的里程计话题不是 `/Odometry`，可在启动时覆盖
+`camera_body_tf_odom_topic`。脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用
+ROS 默认日志目录：
 
 ```text
 ~/.ros/log/<本次运行ID>/

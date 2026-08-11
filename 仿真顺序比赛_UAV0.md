@@ -136,8 +136,8 @@ rostopic hz /UAV0/thermal/debug_image
 ### 当前实际的数据传输流程（match_ws 机载端）
 
 下面是当前使用的两端启动方式。Windows 接收端仍使用现有目录，机载端统一切换
-到 `match_ws`。统一入口已经包含 `target_reporting`，不要再单独启动第二个
-`target_reporter` 节点。
+到 `match_ws`。一键入口会同时启动相机外参 TF、检测节点和 `target_reporting`，
+不要再单独启动 `camera_body_tf.launch` 或第二个 `target_reporter` 节点。
 
 #### 远程 Windows 端
 
@@ -162,16 +162,14 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20
 
 #### 机载端（192.168.31.163）
 
-先按前面的步骤启动 FAST-LIO 和位姿回传，再启动坐标转换 TF：
+先按前面的步骤启动 FAST-LIO 和位姿回传。相机外参 TF 已由下面的一键入口自动
+启动，使用标定文件：
 
-```bash
-source /opt/ros/noetic/setup.bash
-source /home/oem/match_ws/devel/setup.bash
-roslaunch target_reporting camera_body_tf.launch \
-  calibration_file:=/home/oem/handeye_calibration/body_camera_03.yaml
+```text
+/home/oem/handeye_calibration/body_camera_03.yaml
 ```
 
-然后新开终端启动 UAV0 检测、上报统一入口（热成像按设备情况二选一）：
+然后新开终端启动 UAV0 检测、TF 和上报统一入口（热成像按设备情况二选一）：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -184,8 +182,19 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 
 接入并确认热成像相机正常后，将上面的 `enable_thermal:=false` 改为
 `enable_thermal:=true`。机载端配置文件为
-`/home/oem/match_ws/src/target_reporting/config/target_reporting.yaml`，
-应保持以下关键参数：
+`/home/oem/match_ws/src/target_reporting/config/target_reporting.yaml`。
+
+如果 match_ws 中 FAST-LIO 发布的里程计话题是
+`/UAV0/fast_lio/Odometry`，使用下面的启动命令：
+
+```bash
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=false \
+  camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
+```
+
+配置文件应保持以下关键参数：
 
 ```yaml
 remote_host: "192.168.31.147"  # Windows 远程端 IP
