@@ -174,8 +174,8 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20
 
 #### 机载端（192.168.31.163）
 
-先按前面的步骤启动 FAST-LIO 和位姿回传。相机外参 TF 已由下面的一键入口自动
-启动，使用标定文件：
+先按前面的步骤启动 FAST-LIO 和位姿回传。下面的一键命令会同时启动相机外参 TF
+和目标上报，使用标定文件：
 
 ```text
 /home/oem/handeye_calibration/body_camera_03.yaml
@@ -183,6 +183,8 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20
 
 然后新开终端只执行一次 UAV0 检测、TF 和上报统一入口。当前 match_ws 的
 FAST-LIO 里程计话题为 `/UAV0/fast_lio/Odometry`，因此直接使用下面的命令：
+
+不要再单独启动 `camera_body_tf.launch` 或 `target_reporting.launch`。
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -200,8 +202,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 `enable_thermal:=true`。机载端配置文件为
 `/home/oem/match_ws/src/target_reporting/config/target_reporting.yaml`。
 
-上面的命令已经包含相机外参 TF 和目标上报，不要再重复启动
-`camera_body_tf.launch` 或 `target_reporting.launch`。如果实际里程计话题仍为
+如果实际里程计话题仍为
 `/Odometry`，只需把命令最后一行改为
 `camera_body_tf_odom_topic:=/Odometry`，同样只执行一次。
 
