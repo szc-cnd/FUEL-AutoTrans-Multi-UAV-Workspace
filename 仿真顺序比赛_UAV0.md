@@ -183,7 +183,8 @@ source /home/oem/match_ws/devel/setup.bash
 # 未接热成像时
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
-  enable_thermal:=false
+  enable_thermal:=false \
+  enable_camera_body_tf:=true
 ```
 
 接入并确认热成像相机正常后，将上面的 `enable_thermal:=false` 改为
@@ -197,6 +198,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
+  enable_camera_body_tf:=true \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
 ```
 
@@ -222,6 +224,7 @@ mission_id: "onboard_test_20260806"
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
+  enable_camera_body_tf:=true \
   enable_down_camera:=true \
   enable_precision_landing:=true
 ```
