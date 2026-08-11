@@ -27,13 +27,17 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=true
 ```
 
-脚本会自动创建：
+脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
 
 ```text
-~/match_ws/logs/uav0/YYYYMMDD_HHMMSS_NNNNNNNNN/
+~/.ros/log/<本次运行ID>/
 ```
 
-并将本次 ROS 节点日志写入该目录。也可以通过 `UAV0_LOG_ROOT` 指定日志根目录。
+最近一次运行也可以通过以下路径查看：
+
+```text
+~/.ros/log/latest/
+```
 
 颜色标签和二维码共用这一套 D435，不能重复启动第二个 RealSense 节点。
 如果 D435 已经由其他终端启动，才使用：

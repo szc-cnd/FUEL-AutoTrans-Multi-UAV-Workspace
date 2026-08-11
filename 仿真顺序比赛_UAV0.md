@@ -95,13 +95,13 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=true
 ```
 
-该脚本每次运行会自动创建独立日志目录：
+该脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
 
 ```text
-~/match_ws/logs/uav0/YYYYMMDD_HHMMSS_NNNNNNNNN/
+~/.ros/log/<本次运行ID>/
 ```
 
-并将本次 ROS 节点日志写入其中，不需要手动创建目录。未接热成像相机时使用
+最近一次运行也可以通过 `~/.ros/log/latest/` 查看。未接热成像相机时使用
 方案 A，避免热成像设备打开失败；接入并确认设备正常后再使用方案 B。
 
 颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
