@@ -1,5 +1,6 @@
 drone_id: "uav0"
-mission_id: "onboard_test_20260806"
+# auto 生成当天的 onboard_test_YYYYMMDD；正式任务也可以显式覆盖这个参数。
+mission_id: "auto"
 localization_frame: "UAV0/camera_init"
 report_frame: "channel"
 use_detector_candidates: true
@@ -19,3 +20,4 @@ confirm_hits: 3
 dedup_distance_m: 0.30
 image_tolerance_s: 0.50
 image_cache_items: 40
+send_candidate_observations: false

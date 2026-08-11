@@ -1,6 +1,9 @@
 <launch>
   <arg name="config" default="$(find target_reporting)/config/target_reporting.yaml" />
+  <!-- 留空时使用配置中的 auto；填写后覆盖 mission_id，机载端和远程端必须一致。 -->
+  <arg name="mission_id" default="" />
   <node pkg="target_reporting" type="target_reporter_node.py" name="target_reporter" output="screen">
     <rosparam command="load" file="$(arg config)" />
+    <param if="$(eval arg('mission_id') != '')" name="mission_id" value="$(arg mission_id)" />
   </node>
 </launch>

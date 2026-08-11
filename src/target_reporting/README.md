@@ -1,6 +1,6 @@
 # 目标坐标与证据图远程上报
 
-该包统一接收颜色标签、二维码和热源检测结果，通过 ROS TF 转换到 FAST-LIO 的 `camera_init` 世界坐标系，并将其作为比赛语义上的 `channel` 坐标。检测包的首个有效候选会立即生成实时观测并发送到远程端；候选在空间上连续命中 `confirm_hits`（默认 3）次后才生成最终确认记录和带标注的 JPEG。当前阶段候选结果只用于远程上报和 RViz 显示，不接入规划器。
+该包统一接收颜色标签、二维码和热源检测结果，通过 ROS TF 转换到 FAST-LIO 的 `camera_init` 世界坐标系，并将其作为比赛语义上的 `channel` 坐标。检测包的首个有效候选会立即生成机载端实时观测并显示在 RViz；候选在空间上连续命中 `confirm_hits`（默认 3）次后才生成最终确认记录和带标注的 JPEG，默认只有确认结果发送到远程端。当前阶段候选和确认结果都不接入规划器。
 
 ## 数据流
 
@@ -8,9 +8,9 @@
 三个检测包的原始候选/相机坐标/检测图
   -> target_reporter_node.py
   -> camera optical frame -> body -> camera_init
-  -> 首帧候选实时观测、空间确认、JSONL和JPEG
+  -> 首帧候选机载观测、空间确认、确认JSONL和JPEG
   -> /UAV0/target_reporting/markers（RViz显示）
-  -> TCP 5000(实时观测、最终JSON/ACK) + TCP 5001(JPEG/图片ACK)
+  -> TCP 5000(确认观测、最终JSON/ACK) + TCP 5001(JPEG/图片ACK)
   -> target_report_server.py
 ```
 
@@ -104,6 +104,16 @@ rosrun target_reporting target_report_server.py \
   --output ~/received_target_reports
 ```
 
+Windows PowerShell 运行源码脚本时，先设置模块路径，并让 `--mission-id` 与机载端当天编号一致：
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path ".\target_reporting\src").Path
+$missionId = "onboard_test_{0:yyyyMMdd}" -f (Get-Date)
+python .\target_reporting\scripts\target_report_server.py `
+  --host 0.0.0.0 --port 5000 --image-port 5001 `
+  --output .\received_target_reports --mission-id $missionId
+```
+
 机载端在三个检测节点和 FAST-LIO 正常后启动：
 
 ```bash
@@ -134,9 +144,16 @@ roslaunch target_reporting remote_server.launch
   images/annotated/*.jpg
 ```
 
-远程端默认写入指定的 `--output` 目录，结构相同。候选观测和确认观测都会发布到 `/UAV0/target_reporting/observation` 并通过 TCP 5000 实时发送到远程端，但候选不写入最终 JSONL，也不要求 ACK。只有确认目标生成最终记录和证据图片；确认目标不会再产生飞行目标。
+远程端默认写入指定的 `--output` 目录，结构相同。候选观测和确认观测都会发布到机载端的
+`/UAV0/target_reporting/observation`，因此规划器 RViz 仍能看到候选；默认只有确认观测
+通过 TCP 5000 发往远程端，候选不会传到 Windows，也不会生成远程记录或图片。只有确认目标
+生成最终 JSON 和带检测框的证据图片；确认目标不会再产生飞行目标。若确实需要兼容旧流程，
+将 `send_candidate_observations` 设为 `true` 才会重新发送候选实时观测。
 
-`mission_id` 默认是 `competition_current`。同一场任务中机载端和远程端应保持该值不变；节点或电脑重启后会重新打开同一目录，根据 `event_acks.jsonl` 和 `image_acks.jsonl` 只补发尚未确认的最终JSON和图片。开始新一场正式任务前，将机载端配置和远程端 `--mission-id` 同时改成新的唯一名称，例如 `final_20260729_01`，避免把不同场次混在一起。
+`mission_id: auto` 会按当天自动生成 `onboard_test_YYYYMMDD`。Windows 端也要使用同一个日期编号；
+同一场任务中机载端和远程端必须保持该值不变。节点或电脑重启后会重新打开同一目录，根据
+`event_acks.jsonl` 和 `image_acks.jsonl` 只补发尚未确认的最终 JSON 和图片。若需要手动指定编号，
+可在机载端启动时传入 `mission_id:=final_20260811_01`，Windows 端的 `--mission-id` 使用完全相同的值。
 
 同一目标类型可以存在多个空间候选。相距超过 `dedup_distance_m` 的后续真目标会获得新的 `target_id`，不会被先前稳定误检阻挡。ACK重传保持相同 `seq`，远程端只保存一次。
 

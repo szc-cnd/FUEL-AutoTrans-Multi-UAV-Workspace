@@ -21,7 +21,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=false \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
-  enable_target_reporting:=true
+  enable_target_reporting:=true \
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d)
 ```
 
 ```bash
@@ -31,7 +32,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=true \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
-  enable_target_reporting:=true
+  enable_target_reporting:=true \
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d)
 ```
 
 入口还会自动启动 `camera_body_tf.launch`，读取：
@@ -110,7 +112,9 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 三个检测包发布 `/UAV0/...` 候选和调试话题；`target_reporting` 完成坐标转换、
 候选/确认跟踪、TCP 远程上报，并发布 `/UAV0/target_reporting/observation`。
 规划器 RViz 的标记适配器再将观测转成 `/UAV0/target_reporting/markers`。
-候选结果目前只用于上报和 RViz 显示，不参与规划决策。
+候选结果目前只用于机载端 RViz 显示，不通过 TCP 发送到 Windows；Windows 端只接收确认目标
+及其最终证据图片，候选和确认结果都不参与规划决策。
+任务编号默认按当天生成，也可以通过 `target_reporting_mission_id` 显式指定。
 
 D435 原始点云 `/camera/depth/color/points` 只作为显示过滤器输入；RViz 实际显示
 `/UAV0/target_reporting/detected_object_cloud`，只包含当前候选/确认目标附近的点，

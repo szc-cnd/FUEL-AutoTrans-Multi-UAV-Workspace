@@ -94,6 +94,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d) \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
 ```
 
@@ -105,6 +106,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d) \
   camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
 ```
 
@@ -181,19 +183,21 @@ Windows 端不需要 ROS。在 PowerShell 中执行：
 
 ```powershell
 cd "C:\Users\Jayus\Documents\飞行器比赛"
+$env:PYTHONPATH = (Resolve-Path ".\target_reporting\src").Path
+$missionId = "onboard_test_{0:yyyyMMdd}" -f (Get-Date)
 
 python .\target_reporting\scripts\target_report_server.py `
   --host 0.0.0.0 `
   --port 5000 `
   --image-port 5001 `
   --output .\received_target_reports `
-  --mission-id onboard_test_20260806
+  --mission-id $missionId
 ```
 
 接收文件会保存到：
 
 ```text
-C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20260806\
+C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\$missionId\
 ```
 
 #### 机载端（192.168.31.163）
@@ -215,11 +219,13 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20
 remote_host: "192.168.31.147"  # Windows 远程端 IP
 remote_port: 5000
 image_port: 5001
-mission_id: "onboard_test_20260806"
+mission_id: "auto"  # 自动使用当天的 onboard_test_YYYYMMDD
+send_candidate_observations: false
 ```
 
 `192.168.31.163` 是机载端地址，不能填到 `remote_host`；Windows 接收服务器
-未启动时，检测、规划和 RViz 仍可运行，上报客户端会自动重试。
+未启动时，检测、规划和 RViz 仍可运行，上报客户端会自动重试。候选结果只在机载端
+用于 RViz，不发送到 Windows；Windows 只接收确认目标和带框证据图片。
 
 ### 精确降落（当前暂不纳入流程）
 

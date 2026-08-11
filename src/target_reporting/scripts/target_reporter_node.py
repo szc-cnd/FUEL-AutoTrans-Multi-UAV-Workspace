@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+import time
 
 import rospy
 import tf2_geometry_msgs  # noqa: F401
@@ -31,7 +32,15 @@ class TargetReporterNode:
             rospy.get_param("~use_detector_candidates", True)
         )
         self.image_tolerance = float(rospy.get_param("~image_tolerance_s", 0.5))
-        self.mission_id = rospy.get_param("~mission_id", "competition_current")
+        configured_mission_id = str(rospy.get_param("~mission_id", "")).strip()
+        if not configured_mission_id or configured_mission_id.lower() == "auto":
+            configured_mission_id = "onboard_test_{}".format(
+                time.strftime("%Y%m%d")
+            )
+        self.mission_id = configured_mission_id
+        self.send_candidate_observations = bool(
+            rospy.get_param("~send_candidate_observations", False)
+        )
         self.store = MissionStore(
             rospy.get_param("~record_root", "~/target_reports"), self.drone_id,
             mission_id=self.mission_id,
@@ -53,6 +62,11 @@ class TargetReporterNode:
         self.json_client.start()
         self.image_client.start()
         self.realtime_client.start()
+        rospy.loginfo(
+            "target_reporter: mission_id=%s send_candidate_observations=%s",
+            self.mission_id,
+            self.send_candidate_observations,
+        )
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(15.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.observation_pub = rospy.Publisher("/UAV0/target_reporting/observation", String, queue_size=10)
@@ -222,7 +236,12 @@ class TargetReporterNode:
             "confirmed": confirmed,
         }
         self.observation_pub.publish(String(data=json.dumps(observation, ensure_ascii=False)))
-        self.realtime_client.publish(observation)
+        # Candidates remain available on the local ROS observation topic for
+        # RViz, but are not sent to Windows by default.  Only a confirmed
+        # target (which also creates the final JSON/image record below) is
+        # sent remotely unless the compatibility switch is explicitly true.
+        if confirmed or self.send_candidate_observations:
+            self.realtime_client.publish(observation)
         if not confirmed:
             return
         target_id = observation["target_id"]
