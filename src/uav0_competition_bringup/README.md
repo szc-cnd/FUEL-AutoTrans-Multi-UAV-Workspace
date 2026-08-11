@@ -7,14 +7,24 @@
 
 ## 仿真/检测显示
 
-默认由统一入口启动 D435：
+根据热成像相机是否接入，选择下面一种启动方式。方案 A 适用于当前未接热成像
+相机的电脑；方案 B 适用于 D435 和热成像相机都已接入的电脑。
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
+# 方案 A：启动 D435，关闭热成像
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
   enable_thermal:=false
+```
+
+```bash
+# 方案 B：D435 和热成像都启动
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=true
 ```
 
 脚本会自动创建：

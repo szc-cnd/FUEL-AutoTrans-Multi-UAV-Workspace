@@ -75,14 +75,24 @@ python3 laser_mid360.py iris 0 fastlio off
 ~/match_ws/src/uav0_competition_bringup
 ```
 
-统一入口会同时启动 D435、三个检测节点和目标上报：
+根据热成像相机是否接入，选择以下一种统一启动方式。两种方式都会启动 D435、
+颜色标签、二维码和目标上报；方案 B 另外启动热成像检测：
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
+# 方案 A：启动 D435，关闭热成像（当前电脑使用此方案）
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
   enable_thermal:=false
+```
+
+```bash
+# 方案 B：D435 和热成像都启动（已接入热成像相机时使用）
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=true
 ```
 
 该脚本每次运行会自动创建独立日志目录：
@@ -91,8 +101,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 ~/match_ws/logs/uav0/YYYYMMDD_HHMMSS_NNNNNNNNN/
 ```
 
-并将本次 ROS 节点日志写入其中，不需要手动创建目录。本机未接热成像相机，
-因此流程显式关闭热成像节点，避免其设备打开失败影响统一入口中的其他节点。
+并将本次 ROS 节点日志写入其中，不需要手动创建目录。未接热成像相机时使用
+方案 A，避免热成像设备打开失败；接入并确认设备正常后再使用方案 B。
 
 颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
 RealSense 节点。如果 D435 已经在其他终端运行，才改用：
