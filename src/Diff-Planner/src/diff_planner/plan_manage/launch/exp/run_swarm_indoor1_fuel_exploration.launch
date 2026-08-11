@@ -561,7 +561,8 @@
     </node>
 
     <!-- target_reporting 已完成检测坐标转换；此节点只为本启动流程使用的 traj.rviz 提供
-         检测标记和目标附近过滤点云，不发布任何 /mission/detection 或规划目标话题。 -->
+         检测标记、目标附近过滤点云和三维线框包围盒，不发布任何 /mission/detection
+         或规划目标话题。 -->
     <node if="$(arg enable_detection_rviz)"
           pkg="target_reporting" type="target_rviz_marker_node.py"
           name="target_rviz_marker" output="screen">
@@ -570,6 +571,7 @@
         <param name="marker_frame" value="world"/>
         <param name="cloud_topic" value="/camera/depth/color/points"/>
         <param name="object_cloud_topic" value="/UAV0/target_reporting/detected_object_cloud"/>
+        <param name="object_box_topic" value="/UAV0/target_reporting/detected_object_boxes"/>
         <param name="object_cloud_radius" value="0.25"/>
     </node>
 </launch>

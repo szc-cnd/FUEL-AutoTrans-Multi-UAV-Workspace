@@ -4,7 +4,7 @@
 The planner does not subscribe to this topic.  It is deliberately a display
 adapter only: target_reporting has already transformed detector points into
 the configured report frame, and this node renders those coordinates plus a
-small filtered PointCloud2 around the reported targets.
+small filtered PointCloud2 and 3D wire boxes around the reported targets.
 """
 
 import json
@@ -14,7 +14,7 @@ import threading
 import rospy
 import tf2_geometry_msgs  # noqa: F401  (register PointStamped TF support)
 import tf2_ros
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import Point, PointStamped
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
@@ -52,6 +52,10 @@ class TargetRvizMarkerNode:
             "~object_cloud_topic",
             "/UAV0/target_reporting/detected_object_cloud",
         )
+        self.object_box_topic = rospy.get_param(
+            "~object_box_topic",
+            "/UAV0/target_reporting/detected_object_boxes",
+        )
         self.object_cloud_radius = max(
             0.03, float(rospy.get_param("~object_cloud_radius", 0.25))
         )
@@ -64,10 +68,25 @@ class TargetRvizMarkerNode:
         self.object_cloud_max_points = max(
             0, int(rospy.get_param("~object_cloud_max_points", 12000))
         )
+        self.object_box_min_points = max(
+            1, int(rospy.get_param("~object_box_min_points", 5))
+        )
+        self.object_box_min_size = max(
+            0.03, float(rospy.get_param("~object_box_min_size", 0.10))
+        )
+        self.object_box_padding = max(
+            0.0, float(rospy.get_param("~object_box_padding", 0.02))
+        )
+        self.object_box_line_width = max(
+            0.005, float(rospy.get_param("~object_box_line_width", 0.025))
+        )
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.cloud_publisher = rospy.Publisher(
             self.object_cloud_topic, PointCloud2, queue_size=1
+        )
+        self.box_publisher = rospy.Publisher(
+            self.object_box_topic, MarkerArray, queue_size=1
         )
         self.cloud_subscription = rospy.Subscriber(
             self.cloud_topic, PointCloud2, self.cloud_callback, queue_size=1
@@ -85,12 +104,13 @@ class TargetRvizMarkerNode:
         self.visible_ids = set()
         rospy.loginfo(
             "target_rviz_marker_node: observation=%s marker=%s frame=%s "
-            "cloud=%s filtered_cloud=%s radius=%.2fm",
+            "cloud=%s filtered_cloud=%s boxes=%s radius=%.2fm",
             self.observation_topic,
             self.marker_topic,
             self.marker_frame,
             self.cloud_topic,
             self.object_cloud_topic,
+            self.object_box_topic,
             self.object_cloud_radius,
         )
 
@@ -149,7 +169,7 @@ class TargetRvizMarkerNode:
     def _frame_name(frame):
         return str(frame or "").lstrip("/")
 
-    def _target_points_in_cloud_frame(self, cloud):
+    def _target_entries_in_cloud_frame(self, cloud):
         now = rospy.Time.now().to_sec()
         cloud_frame = self._frame_name(cloud.header.frame_id)
         if not cloud_frame:
@@ -165,14 +185,14 @@ class TargetRvizMarkerNode:
                 # A confirmed target remains registered like its marker.  A
                 # candidate is temporary and must disappear if frames stop.
                 if confirmed is not None:
-                    states.append(confirmed)
+                    states.append((target_type, confirmed))
                 elif candidate is not None:
                     age = now - float(candidate.get("timestamp", now))
                     if age <= self.object_cloud_timeout:
-                        states.append(candidate)
+                        states.append((target_type, candidate))
 
-        points = []
-        for state in states:
+        entries = []
+        for target_type, state in states:
             source = PointStamped()
             source.header.frame_id = self._frame_name(self.marker_frame)
             source.header.stamp = cloud.header.stamp
@@ -186,12 +206,16 @@ class TargetRvizMarkerNode:
                     transformed = self.tf_buffer.transform(
                         source, cloud_frame, rospy.Duration(0.08)
                     )
-                points.append(
-                    (
-                        float(transformed.point.x),
-                        float(transformed.point.y),
-                        float(transformed.point.z),
-                    )
+                entries.append(
+                    {
+                        "target_type": target_type,
+                        "state": state,
+                        "point": (
+                            float(transformed.point.x),
+                            float(transformed.point.y),
+                            float(transformed.point.z),
+                        ),
+                    }
                 )
             except Exception as exc:
                 rospy.logwarn_throttle(
@@ -202,7 +226,7 @@ class TargetRvizMarkerNode:
                     cloud_frame,
                     exc,
                 )
-        return points
+        return entries
 
     def cloud_callback(self, cloud):
         now = rospy.Time.now()
@@ -213,22 +237,28 @@ class TargetRvizMarkerNode:
             return
         self._last_cloud_process = now
 
-        target_points = self._target_points_in_cloud_frame(cloud)
+        target_entries = self._target_entries_in_cloud_frame(cloud)
         selected = []
-        if target_points:
+        points_by_target = [[] for _ in target_entries]
+        if target_entries:
             radius_sq = self.object_cloud_radius * self.object_cloud_radius
             try:
                 for point in point_cloud2.read_points(
                     cloud, field_names=("x", "y", "z"), skip_nans=True
                 ):
                     x, y, z = (float(point[0]), float(point[1]), float(point[2]))
-                    if any(
-                        (x - target[0]) ** 2
-                        + (y - target[1]) ** 2
-                        + (z - target[2]) ** 2
-                        <= radius_sq
-                        for target in target_points
-                    ):
+                    matched = False
+                    for index, entry in enumerate(target_entries):
+                        target = entry["point"]
+                        if (
+                            (x - target[0]) ** 2
+                            + (y - target[1]) ** 2
+                            + (z - target[2]) ** 2
+                            <= radius_sq
+                        ):
+                            points_by_target[index].append((x, y, z))
+                            matched = True
+                    if matched:
                         selected.append((x, y, z))
                         if (
                             self.object_cloud_max_points > 0
@@ -241,6 +271,75 @@ class TargetRvizMarkerNode:
 
         output = point_cloud2.create_cloud_xyz32(cloud.header, selected)
         self.cloud_publisher.publish(output)
+        self.publish_object_boxes(cloud, target_entries, points_by_target)
+
+    def _box_bounds(self, target_point, points):
+        if len(points) >= self.object_box_min_points:
+            minimum = [min(point[index] for point in points) for index in range(3)]
+            maximum = [max(point[index] for point in points) for index in range(3)]
+            for index in range(3):
+                if maximum[index] - minimum[index] < self.object_box_min_size:
+                    center = 0.5 * (minimum[index] + maximum[index])
+                    half = 0.5 * self.object_box_min_size
+                    minimum[index] = center - half
+                    maximum[index] = center + half
+        else:
+            half = 0.5 * self.object_box_min_size
+            minimum = [value - half for value in target_point]
+            maximum = [value + half for value in target_point]
+        padding = self.object_box_padding
+        return (
+            (minimum[0] - padding, minimum[1] - padding, minimum[2] - padding),
+            (maximum[0] + padding, maximum[1] + padding, maximum[2] + padding),
+        )
+
+    @staticmethod
+    def _box_color(target_type):
+        return {
+            "color_tag": (1.0, 0.35, 0.05, 1.0),
+            "qr_code": (0.1, 1.0, 0.25, 1.0),
+            "thermal_source": (1.0, 0.1, 0.9, 1.0),
+        }.get(target_type, (1.0, 1.0, 1.0, 1.0))
+
+    def publish_object_boxes(self, cloud, target_entries, points_by_target):
+        array = MarkerArray()
+        clear = Marker()
+        clear.header = cloud.header
+        clear.action = Marker.DELETEALL
+        array.markers.append(clear)
+
+        edges = (
+            (0, 1), (1, 2), (2, 3), (3, 0),
+            (4, 5), (5, 6), (6, 7), (7, 4),
+            (0, 4), (1, 5), (2, 6), (3, 7),
+        )
+        for index, (entry, points) in enumerate(zip(target_entries, points_by_target)):
+            minimum, maximum = self._box_bounds(entry["point"], points)
+            x0, y0, z0 = minimum
+            x1, y1, z1 = maximum
+            corners = (
+                (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+                (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1),
+            )
+            marker = Marker()
+            marker.header = cloud.header
+            marker.ns = "target_reporting/detected_object_box"
+            marker.id = index
+            marker.action = Marker.ADD
+            marker.type = Marker.LINE_LIST
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = self.object_box_line_width
+            marker.color.r, marker.color.g, marker.color.b, marker.color.a = self._box_color(
+                entry["target_type"]
+            )
+            for start, end in edges:
+                start_point = Point()
+                start_point.x, start_point.y, start_point.z = corners[start]
+                end_point = Point()
+                end_point.x, end_point.y, end_point.z = corners[end]
+                marker.points.extend((start_point, end_point))
+            array.markers.append(marker)
+        self.box_publisher.publish(array)
 
     def _label(self, target_type, state, confirmed):
         _, display_name = self.TARGETS[target_type]

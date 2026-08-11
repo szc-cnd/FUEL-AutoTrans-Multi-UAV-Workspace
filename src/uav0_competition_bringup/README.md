@@ -4,6 +4,7 @@
 颜色标签、二维码、热成像融合、相机外参 TF、目标远程上报和精确降落包集中到一个入口。
 默认启动 D435、三类检测和 `target_reporting`，不默认打开下视相机、精确降落
 或独立 RViz。D435 原始点云默认同步发布，但 RViz 只显示检测目标附近的过滤点云。
+RViz 同时显示由过滤点云计算出的检测目标三维线框包围盒。
 
 ## 仿真/检测显示
 
@@ -60,6 +61,7 @@ ROS 默认日志目录：
 颜色标签和二维码共用这一套 D435，不能重复启动第二个 RealSense 节点。
 `/camera/depth/color/points` 是 D435 原始点云输入，
 `/UAV0/target_reporting/detected_object_cloud` 是只保留检测目标附近点的 RViz 输出。
+`/UAV0/target_reporting/detected_object_boxes` 是按目标类型着色的三维线框包围盒输出。
 若需降低 D435 负载，
 可传入 `realsense_enable_pointcloud:=false` 关闭点云输出。
 过滤半径默认是目标中心周围 0.25 m。
@@ -113,3 +115,4 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 D435 原始点云 `/camera/depth/color/points` 只作为显示过滤器输入；RViz 实际显示
 `/UAV0/target_reporting/detected_object_cloud`，只包含当前候选/确认目标附近的点，
 不参与检测判定、避障或规划决策。若 D435 已在其他终端启动，需确保原始点云话题已发布。
+包围盒话题为 `/UAV0/target_reporting/detected_object_boxes`，同样只用于 RViz 显示。

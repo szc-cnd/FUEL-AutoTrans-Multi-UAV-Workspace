@@ -126,6 +126,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 D435 原始点云话题为 `/camera/depth/color/points`，RViz 实际只显示过滤后的
 `/UAV0/target_reporting/detected_object_cloud`。如需降低相机负载，可在统一启动
 命令中将 `realsense_enable_pointcloud:=true` 改为 `false`。
+检测目标还会以三维线框包围盒显示在 `/UAV0/target_reporting/detected_object_boxes`；
+包围盒只用于 RViz 显示，不参与避障和规划。
 
 颜色标签和二维码共用统一入口启动的这一套 D435，不要再单独启动第二个
 RealSense 节点。如果 D435 已经在其他终端运行，才改用：
@@ -145,6 +147,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 - `uvc_ubuntu`：热成像检测和 D435 深度融合；
 - D435 PointCloud2：原始输入 `/camera/depth/color/points`，过滤输出
   `/UAV0/target_reporting/detected_object_cloud`，只显示检测目标附近点云；
+- 检测目标三维线框包围盒：`/UAV0/target_reporting/detected_object_boxes`，颜色标签、二维码、热源分别使用橙色、绿色、品红色；
 - `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
 - `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
 
@@ -160,6 +163,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 rostopic echo /UAV0/target_reporting/observation
 rostopic echo /UAV0/target_reporting/markers
 rostopic hz /UAV0/target_reporting/detected_object_cloud
+rostopic echo /UAV0/target_reporting/detected_object_boxes
 rostopic hz /UAV0/color_tag_detector/debug_image
 rostopic hz /UAV0/vision/qr_debug_image
 rostopic hz /UAV0/thermal/debug_image
@@ -250,6 +254,8 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
 `/UAV0/target_reporting/markers`，黄色为候选、绿色为确认；颜色、二维码和热成像
 调试图像以及只包含检测目标附近点的
 `/UAV0/target_reporting/detected_object_cloud` 也已配置在同一个 RViz 中。
+三维线框包围盒话题 `/UAV0/target_reporting/detected_object_boxes` 也已配置在
+`Detection Results` 分组中；包围盒由目标附近点云估计，只用于可视化。
 这里启动的 `target_rviz_marker` 只负责显示，不会给 FUEL 发布检测目标或观察位姿。
 
 如果只想运行规划而不启动检测显示，可加：

@@ -58,6 +58,8 @@ UAV0/camera_init -> UAV0/body -> camera_link -> camera_depth_optical_frame
 `camera_link` 使用手眼标定外参。D435 原始点云 `/camera/depth/color/points` 使用
 `camera_depth_optical_frame`；显示适配器再输出只包含检测目标附近点的
 `/UAV0/target_reporting/detected_object_cloud`，默认保留目标中心半径 0.25 m 内的点。
+显示适配器还根据这些目标附近点发布三维轴对齐线框包围盒；包围盒只用于 RViz，
+不参与检测判定、避障或规划决策。
 
 检查命令：
 
@@ -71,9 +73,13 @@ RViz 标记输出：
 ```text
 /UAV0/target_reporting/markers  visualization_msgs/MarkerArray
 /UAV0/target_reporting/detected_object_cloud  sensor_msgs/PointCloud2
+/UAV0/target_reporting/detected_object_boxes  visualization_msgs/MarkerArray
 ```
 
 标记使用 `world` 坐标系；当前比赛配置中 `world` 与 `channel` 的数值坐标一致。黄色球和文字表示候选，绿色球和文字表示已确认目标。
+包围盒使用 D435 点云坐标系发布并由 RViz TF 转到固定坐标系：颜色标签为橙色、二维码为绿色、热源为品红色。
+包围盒是目标附近点云的三维轴对齐包围盒；点云稀疏时使用以检测位置为中心的最小尺寸盒，
+因此它不是二维图像像素级分割轮廓。
 
 ## 局域网配置
 
