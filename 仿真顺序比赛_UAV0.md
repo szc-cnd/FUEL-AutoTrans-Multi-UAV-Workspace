@@ -133,25 +133,63 @@ rostopic hz /UAV0/vision/qr_debug_image
 rostopic hz /UAV0/thermal/debug_image
 ```
 
-### 远程 Windows 端
+### 当前实际的数据传输流程（db_ws 分离启动）
 
-Windows 端不需要 ROS，只运行 `target_reporting` 中的 TCP 服务端。先把
-`match_ws/src/target_reporting` 整个复制到 Windows 任意目录。下面以
-`D:\UAV0\target_reporting` 为例；如果你的实际目录不同，只修改第一行路径：
+下面是当前正在使用的两端启动方式。它与前面的 `match_ws` 统一入口二选一，
+不要同时启动两个 `target_reporter` 节点。
+
+#### 远程 Windows 端
+
+Windows 端不需要 ROS。在 PowerShell 中执行：
 
 ```powershell
-$targetReportingDir = "D:\UAV0\target_reporting"
-$serverScript = Join-Path $targetReportingDir "scripts\target_report_server.py"
-$env:PYTHONPATH = Join-Path $targetReportingDir "src"
-if (-not (Test-Path $serverScript)) { throw "找不到 target_report_server.py：$serverScript" }
-py -3 $serverScript `
-  --host 0.0.0.0 --port 5000 --image-port 5001 `
-  --output C:\target_reports --mission-id competition_current
+cd "C:\Users\Jayus\Documents\飞行器比赛"
+
+python .\target_reporting\scripts\target_report_server.py `
+  --host 0.0.0.0 `
+  --port 5000 `
+  --image-port 5001 `
+  --output .\received_target_reports `
+  --mission-id onboard_test_20260806
 ```
 
-机载端的 `src/target_reporting/config/target_reporting.yaml` 中将
-`remote_host` 改成 Windows 的局域网 IP。Windows 服务端未启动时，检测、规划
-和 RViz 仍可正常运行；上报客户端会重试，已确认记录会在网络恢复后补发。
+接收文件会保存到：
+
+```text
+C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\onboard_test_20260806\
+```
+
+#### 机载端（192.168.31.163）
+
+先确保 FAST-LIO、相机和三个检测节点已经启动，再启动坐标转换 TF：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/oem/db_ws/devel/setup.bash
+roslaunch target_reporting camera_body_tf.launch \
+  calibration_file:=/home/oem/handeye_calibration/body_camera_03.yaml
+```
+
+然后新开终端启动目标上报节点：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/oem/db_ws/devel/setup.bash
+roslaunch target_reporting target_reporting.launch
+```
+
+机载端配置文件为 `/home/oem/db_ws/src/target_reporting/config/target_reporting.yaml`，
+应保持以下关键参数：
+
+```yaml
+remote_host: "192.168.31.147"  # Windows 远程端 IP
+remote_port: 5000
+image_port: 5001
+mission_id: "onboard_test_20260806"
+```
+
+`192.168.31.163` 是机载端地址，不能填到 `remote_host`；Windows 接收服务器
+未启动时，检测、规划和 RViz 仍可运行，上报客户端会自动重试。
 
 ### 精确降落（当前暂不纳入流程）
 
