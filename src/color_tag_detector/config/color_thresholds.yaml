@@ -101,8 +101,9 @@ colors:
 
 area_min: 900
 area_max_ratio: 0.10
-aspect_ratio_min: 0.45
-aspect_ratio_max: 2.5
+# 只排除极端细长噪声，不假定比赛标签的具体长宽比。
+aspect_ratio_min: 0.15
+aspect_ratio_max: 6.0
 fill_ratio_min: 0.40
 
 min_extent: 0.40
@@ -129,11 +130,13 @@ max_depth_std: 0.16
 # 正式上报质量门。超过距离或外观/表面质量不足的色块仍可在本机作为候选
 # 观察，但 stable/confirmable 不会置 true，也不会进入远程正式上报。
 confirmation_depth_max: 2.5
-min_rectangularity: 0.84
+# 矩形度只参与评分，不作为正式确认硬门槛。
+preferred_rectangularity: 0.84
 min_surface_depth_valid_ratio: 0.60
 max_surface_plane_residual_std: 0.05
 surface_depth_max_samples: 2500
 
+# 实际尺寸范围只用于软评分，不会直接淘汰候选。
 min_real_width: 0.07
 min_real_height: 0.07
 max_real_width: 0.55

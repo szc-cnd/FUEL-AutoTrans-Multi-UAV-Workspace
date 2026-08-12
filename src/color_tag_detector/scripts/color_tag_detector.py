@@ -108,8 +108,8 @@ class ColorTagDetector(object):
         self.colors = self.filter_enabled_colors(self.colors)
         self.area_min = float(rospy.get_param("~area_min", 1200.0))
         self.area_max_ratio = float(rospy.get_param("~area_max_ratio", 0.12))
-        self.aspect_ratio_min = float(rospy.get_param("~aspect_ratio_min", 0.35))
-        self.aspect_ratio_max = float(rospy.get_param("~aspect_ratio_max", 3.0))
+        self.aspect_ratio_min = float(rospy.get_param("~aspect_ratio_min", 0.15))
+        self.aspect_ratio_max = float(rospy.get_param("~aspect_ratio_max", 6.0))
         self.fill_ratio_min = float(rospy.get_param("~fill_ratio_min", 0.45))
         self.min_extent = float(rospy.get_param("~min_extent", self.fill_ratio_min))
         self.min_solidity = float(rospy.get_param("~min_solidity", 0.45))
@@ -152,8 +152,11 @@ class ColorTagDetector(object):
         self.confirmation_depth_max = float(
             rospy.get_param("~confirmation_depth_max", 2.5)
         )
-        self.min_rectangularity = float(
-            rospy.get_param("~min_rectangularity", 0.84)
+        self.preferred_rectangularity = float(
+            rospy.get_param(
+                "~preferred_rectangularity",
+                rospy.get_param("~min_rectangularity", 0.84),
+            )
         )
         self.min_surface_depth_valid_ratio = float(
             rospy.get_param("~min_surface_depth_valid_ratio", 0.60)
@@ -456,8 +459,10 @@ class ColorTagDetector(object):
                 color_cfg.get("min_color_purity", self.min_color_purity)
             )
             color_purity = self.contour_color_purity(mask, contour)
-            min_rectangularity = float(
-                color_cfg.get("min_rectangularity", self.min_rectangularity)
+            preferred_rectangularity = float(
+                color_cfg.get(
+                    "preferred_rectangularity", self.preferred_rectangularity
+                )
             )
             rectangularity = self.contour_rectangularity(contour)
 
@@ -539,11 +544,6 @@ class ColorTagDetector(object):
                 reject_reasons.append("missing_camera_info")
             elif real_width is None or real_height is None:
                 reject_reasons.append("missing_real_size")
-            else:
-                if real_width <= min_real_width or real_width >= max_real_width:
-                    reject_reasons.append("real_width")
-                if real_height <= min_real_height or real_height >= max_real_height:
-                    reject_reasons.append("real_height")
 
             passed_filter = len(reject_reasons) == 0
 
@@ -565,8 +565,6 @@ class ColorTagDetector(object):
             )
             if depth is None or depth > confirmation_depth_max:
                 confirmation_reasons.append("confirmation_distance")
-            if rectangularity < min_rectangularity:
-                confirmation_reasons.append("rectangularity")
             if surface_depth["valid_ratio"] < min_surface_valid:
                 confirmation_reasons.append("surface_depth_ratio")
             if (
@@ -577,17 +575,25 @@ class ColorTagDetector(object):
             confirmation_quality = passed_filter and not confirmation_reasons
 
             purity_score = min(max(color_purity, 0.0), 1.0)
+            rectangularity_score = min(
+                max(
+                    rectangularity / max(preferred_rectangularity, 1e-6),
+                    0.0,
+                ),
+                1.0,
+            )
             # Candidate scoring is intentionally multi-factor, not "largest blob wins".
-            # Color purity has a strong weight because it distinguishes a
-            # solid tag from textured clothes/furniture without fixing shape.
+            # Physical size and rectangularity are soft preferences only;
+            # unknown competition tag dimensions/shapes cannot veto a target.
             base_score = (
-                0.10 * area_score
+                0.05 * area_score
                 + 0.25 * depth_score
                 + 0.15 * depth_consistency_score
-                + 0.10 * center_score
+                + 0.05 * center_score
                 + 0.05 * size_score
                 + 0.10 * history_score
                 + 0.25 * purity_score
+                + 0.10 * rectangularity_score
             )
             if not passed_filter:
                 base_score = min(base_score, self.score_threshold - 0.01)
