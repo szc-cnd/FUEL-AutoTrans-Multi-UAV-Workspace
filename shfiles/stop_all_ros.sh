@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 
-# 强制停止当前用户启动的全部 ROS1 节点及 ROS 启动器。
-# 使用前请确认无人机已经落地、退出 OFFBOARD、上锁；本脚本不会执行降落。
+# 强制停止当前用户启动的 ROS1 节点、启动器和 UAV0 六分屏。
+#
+# 这个脚本故意不把 rosnode kill -a 作为唯一手段：ROS master 卡住或已经退出
+# 时，rosnode 命令可能长时间等待，导致脚本看起来“没有反应”。先用一个很短
+# 的超时尝试优雅通知，然后直接按进程特征 SIGKILL，行为与 /home/oem/scripts/
+# ros_stop_all.sh 保持一致。
 
-set -o pipefail
+set -u
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-ROS_SETUP="${STOP_ALL_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
+CURRENT_USER="$(id -un)"
 DRY_RUN=false
 KEEP_TERMINATOR=false
-TARGET_PIDS=()
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+PROTECTED_PIDS=()
 
 usage() {
   cat <<'EOF'
@@ -18,19 +22,13 @@ usage() {
   bash shfiles/stop_all_ros.sh [选项]
 
 作用：
-  先通过 rosnode kill -a 请求当前 ROS master 中的全部节点退出，
-  再清理当前用户残留的 roslaunch、roscore、rosmaster、rosrun、RViz、
-  laser_mid360.py 视觉位姿脚本等 ROS 启动进程；等待后仍存在的进程默认直接发送 SIGKILL。
-  默认也会关闭本仓库六分屏入口打开的 Terminator 窗口。
+  立即强制停止当前用户的 ROS 主节点、ROS 节点、RViz、视觉位姿脚本和
+  UAV0 前六步 Terminator。不会自动降落、上锁或切换飞行模式。
 
 选项：
-  --dry-run           只显示将要处理的进程，不发送任何信号
-  --keep-terminator   不关闭 start_uav0_first_six_terminator.sh 打开的窗口
+  --dry-run           只显示将清理的进程，不发送信号
+  --keep-terminator   保留 UAV0 前六步 Terminator 窗口
   -h, --help          显示帮助
-
-安全提示：
-  本脚本不会自动降落、上锁或切换飞行模式。执行前必须确认飞行器处于安全状态。
-  默认只处理当前用户的进程；使用 sudo 启动的其他用户进程不会被本脚本清理。
 EOF
 }
 
@@ -38,109 +36,69 @@ log() {
   printf '[stop_all_ros] %s\n' "$*"
 }
 
-source_ros_environment() {
-  if [[ ! -f "${ROS_SETUP}" ]]; then
-    log "找不到 ROS 环境文件：${ROS_SETUP}，跳过 rosnode kill"
-    return 1
-  fi
-
-  set +u
-  # shellcheck disable=SC1090
-  source "${ROS_SETUP}"
-  if [[ -f "${MATCH_WS}/devel/setup.bash" ]]; then
-    # shellcheck disable=SC1091
-    source "${MATCH_WS}/devel/setup.bash"
-  fi
-  set -u
-  return 0
-}
-
-add_pid() {
-  local pid="$1" existing
-  [[ "${pid}" =~ ^[0-9]+$ ]] || return 0
-  [[ "${pid}" -gt 1 && "${pid}" -ne "$$" ]] || return 0
-  for existing in "${TARGET_PIDS[@]}"; do
-    [[ "${existing}" == "${pid}" ]] && return 0
-  done
-  TARGET_PIDS+=("${pid}")
-}
-
-collect_node_pids() {
-  local node pid
-  if ! command -v rosnode >/dev/null 2>&1; then
-    log '找不到 rosnode，无法读取 ROS 节点 PID'
-    return 0
-  fi
-  if ! rosnode list >/dev/null 2>&1; then
-    log 'ROS master 当前不可访问，跳过节点 PID 查询'
-    return 0
-  fi
-
-  while IFS= read -r node; do
-    [[ -n "${node}" ]] || continue
-    pid="$(timeout 5s rosnode info "${node}" 2>/dev/null | awk '/^[[:space:]]*Pid:[[:space:]]*[0-9]+/{print $2; exit}')"
-    add_pid "${pid}"
-  done < <(rosnode list 2>/dev/null)
-}
-
-collect_ros_launcher_pids() {
-  local pid
-  # 节点已经由 rosnode kill -a 请求退出；这里清理可能仍在等待子进程的启动器。
-  while IFS= read -r pid; do
-    add_pid "${pid}"
-  done < <(
-    ps -eo pid=,user=,args= | awk -v current_user="$(id -un)" -v self_pid="$$" '
-      $1 != self_pid && $2 == current_user {
-        command = $0
-        sub(/^[[:space:]]*[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", command)
-        if (command ~ /(^|[[:space:]\/])ros(launch|core|run|node|topic|service|param|bag)([[:space:]]|$)/ ||
-            command ~ /\/opt\/ros\/noetic\/bin\/ros(launch|core|run|node|topic|service|param|bag)([[:space:]]|$)/ ||
-            command ~ /\/opt\/ros\/noetic\/(lib|share)\/(rosmaster|roslaunch|rosout)(\/|[[:space:]]|$)/ ||
-            command ~ /\/opt\/ros\/noetic\/lib\/(rviz|rqt|gazebo_ros)(\/|[[:space:]]|$)/ ||
-            command ~ /(^|[[:space:]\/])laser_mid360\.py([[:space:]]|$)/ ||
-            command ~ /(^|[[:space:]\/])(rosmaster\.master|roslaunch\.parent)([[:space:]]|$)/)
-          print $1
-      }
-    '
-  )
-}
-
-describe_pid() {
-  local pid="$1"
-  ps -p "${pid}" -o pid=,user=,args= 2>/dev/null | sed 's/^[[:space:]]*//'
-}
-
-remove_exited_pids() {
-  local kept=() pid
-  for pid in "${TARGET_PIDS[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      kept+=("${pid}")
-    fi
-  done
-  TARGET_PIDS=("${kept[@]}")
-}
-
-signal_targets() {
-  local signal="$1" pid
-  remove_exited_pids
-  [[ "${#TARGET_PIDS[@]}" -gt 0 ]] || return 0
-  log "发送 ${signal} 到 ${#TARGET_PIDS[@]} 个残留进程"
-  for pid in "${TARGET_PIDS[@]}"; do
-    if kill "-${signal}" "${pid}" 2>/dev/null; then
-      log "${signal}: $(describe_pid "${pid}")"
-    fi
-  done
-}
-
 close_uav0_terminator() {
-  if [[ "${KEEP_TERMINATOR}" == true ]]; then
-    return 0
-  fi
+  [[ "${KEEP_TERMINATOR}" == true ]] && return 0
   local launcher="${MATCH_WS}/shfiles/start_uav0_first_six_terminator.sh"
   if [[ -x "${launcher}" ]]; then
-    log '关闭 UAV0 前六步 Terminator 窗口（不代替 ROS 节点清理）'
+    log '关闭 UAV0 前六步 Terminator 窗口'
+    # stop 分支只处理窗口 PID 文件，不依赖 ROS master，也不会等待节点退出。
     "${launcher}" stop >/dev/null 2>&1 || true
   fi
+}
+
+add_protected_pid() {
+  local pid="$1" existing
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 0
+  for existing in "${PROTECTED_PIDS[@]}"; do
+    [[ "${existing}" == "${pid}" ]] && return 0
+  done
+  PROTECTED_PIDS+=("${pid}")
+}
+
+collect_protected_pids() {
+  local pid parent
+  # 不允许脚本误杀当前终端及其祖先进程。直接 pkill -f 在调用命令本身
+  # 包含 roslaunch 字样时会把父 shell 一并杀掉，这是停止脚本最容易出现的假死原因。
+  add_protected_pid "$$"
+  parent="${PPID}"
+  while [[ "${parent}" =~ ^[0-9]+$ ]] && [[ "${parent}" -gt 1 ]]; do
+    add_protected_pid "${parent}"
+    parent="$(ps -o ppid= -p "${parent}" 2>/dev/null | tr -d '[:space:]')"
+  done
+}
+
+is_protected_pid() {
+  local pid="$1" protected
+  for protected in "${PROTECTED_PIDS[@]}"; do
+    [[ "${protected}" == "${pid}" ]] && return 0
+  done
+  return 1
+}
+
+matching_pids() {
+  local pattern="$1"
+  pgrep -u "${CURRENT_USER}" -f "${pattern}" 2>/dev/null || true
+}
+
+kill_pattern() {
+  local description="$1"
+  local pattern="$2"
+  local pid command found=false
+
+  while IFS= read -r pid; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    if is_protected_pid "${pid}"; then
+      continue
+    fi
+    found=true
+    command="$(ps -p "${pid}" -o args= 2>/dev/null | sed 's/^[[:space:]]*//')"
+    log "${description}：${pid} ${command}"
+    if [[ "${DRY_RUN}" == false ]]; then
+      kill -KILL "${pid}" 2>/dev/null || true
+    fi
+  done < <(matching_pids "${pattern}")
+
+  [[ "${found}" == true ]] || return 0
 }
 
 while (($# > 0)); do
@@ -165,46 +123,35 @@ while (($# > 0)); do
   esac
 done
 
-if ! source_ros_environment; then
-  # 没有 ROS setup 时仍继续清理可识别的启动器进程。
-  log '继续执行残留进程扫描'
+collect_protected_pids
+
+if [[ "${DRY_RUN}" == false ]]; then
+  close_uav0_terminator
+
+  # ROS master 正常时先通知节点退出；最多等待 2 秒，绝不让停止脚本卡住。
+  if command -v rosnode >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    log '尝试通知 ROS 节点退出（最多等待 2 秒）'
+    timeout 2s rosnode kill -a >/dev/null 2>&1 || true
+  fi
 fi
 
-collect_node_pids
+# 参考 /home/oem/scripts/ros_stop_all.sh 的直接强制清理方式。第一组覆盖
+# ROS 启动器和 master；第二组覆盖 ROS 二进制、RViz 以及本工程的 Python 节点。
+kill_pattern 'ROS 启动器和 master' \
+  '(^|[[:space:]\/])(roslaunch|rosrun|roscore|rosmaster)([[:space:]]|$)|roslaunch\.parent|rosmaster\.master'
+kill_pattern '系统 ROS 节点与 RViz' \
+  '/opt/ros/noetic/(lib|bin)/'
+kill_pattern '视觉位姿回传' \
+  '(^|[[:space:]\/])laser_mid360\.py([[:space:]]|$)'
+kill_pattern 'match_ws ROS 节点' \
+  '/home/oem/match_ws/(devel|build)/lib/|/home/oem/match_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
+kill_pattern 'db_ws ROS 节点' \
+  '/home/oem/db_ws/(devel|build)/lib/|/home/oem/db_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
+kill_pattern 'rh_ws ROS 节点' \
+  '/home/oem/rh_ws/(devel|build)/lib/|/home/oem/rh_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
 
 if [[ "${DRY_RUN}" == true ]]; then
-  collect_ros_launcher_pids
-  remove_exited_pids
-  if [[ "${#TARGET_PIDS[@]}" -eq 0 ]]; then
-    log '未发现可清理的 ROS 进程'
-  else
-    log "dry-run：发现 ${#TARGET_PIDS[@]} 个 ROS 相关进程（不会发送信号）"
-    for pid in "${TARGET_PIDS[@]}"; do
-      log "候选：$(describe_pid "${pid}")"
-    done
-  fi
-  exit 0
-fi
-
-if command -v rosnode >/dev/null 2>&1 && rosnode list >/dev/null 2>&1; then
-  log '请求 ROS master 关闭全部节点'
-  rosnode kill -a >/dev/null 2>&1 || log 'rosnode kill -a 返回非零，继续清理残留进程'
+  log 'dry-run 完成，未发送任何信号'
 else
-  log '未检测到可访问的 ROS master，直接清理启动器和已发现进程'
-fi
-
-close_uav0_terminator
-sleep 2
-collect_ros_launcher_pids
-signal_targets INT
-sleep 3
-signal_targets TERM
-sleep 2
-signal_targets KILL
-
-remove_exited_pids
-if [[ "${#TARGET_PIDS[@]}" -eq 0 ]]; then
-  log 'ROS 节点和可识别的 ROS 启动进程已停止'
-else
-  log "清理结束，仍存活进程数：${#TARGET_PIDS[@]}"
+  log '所有可识别的 ROS 进程已强制终止'
 fi
