@@ -266,7 +266,6 @@ remote_host: "192.168.31.147"  # Windows 远程端 IP
 remote_port: 5000
 image_port: 5001
 mission_id: "auto"  # 自动使用当天的 onboard_test_YYYYMMDD
-send_candidate_observations: false
 ```
 
 `192.168.31.163` 是机载端地址，不能填到 `remote_host`；Windows 接收服务器

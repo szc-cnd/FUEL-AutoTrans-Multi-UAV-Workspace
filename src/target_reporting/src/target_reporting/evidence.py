@@ -15,6 +15,17 @@ class TimestampedImageCache:
             self._items[source].append((float(stamp), image))
 
     def nearest(self, source, stamp, tolerance_s):
+        """Return the nearest image within tolerance (legacy convenience API)."""
+        match = self.nearest_with_stamp(source, stamp, tolerance_s)
+        return None if match is None else match[1]
+
+    def nearest_with_stamp(self, source, stamp, tolerance_s):
+        """Return ``(image_stamp, image)`` only for a matching frame.
+
+        Evidence images must correspond to the detector status/point frame.
+        Keeping the selected timestamp lets the reporter reject an older raw
+        candidate instead of silently using it as a confirmed evidence image.
+        """
         with self._lock:
             items = list(self._items.get(source, ()))
         if not items:
@@ -22,7 +33,7 @@ class TimestampedImageCache:
         best_stamp, best_image = min(items, key=lambda item: abs(item[0] - float(stamp)))
         if abs(best_stamp - float(stamp)) > float(tolerance_s):
             return None
-        return best_image.copy()
+        return best_stamp, best_image.copy()
 
 
 def evidence_overlay_layout(image_shape, line_count, margin=12, line_height=22):

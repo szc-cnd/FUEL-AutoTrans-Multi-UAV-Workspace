@@ -1,4 +1,17 @@
 import json
+import math
+
+
+def _copy_source_stamp(data, result):
+    """Keep the detector frame timestamp for point/status pairing."""
+    stamp = data.get("stamp", data.get("timestamp"))
+    try:
+        stamp = float(stamp)
+    except (TypeError, ValueError):
+        return result
+    if math.isfinite(stamp):
+        result["_source_stamp"] = stamp
+    return result
 
 
 def _copy_geometry(data, result):
@@ -45,6 +58,7 @@ def parse_color_status(text):
         detector_confirmable = True
     result["_detector_stable"] = detector_stable
     result["_detector_confirmable"] = detector_confirmable
+    result = _copy_source_stamp(data, result)
     return _copy_geometry(data, result), data.get("score")
 
 
@@ -71,6 +85,7 @@ def parse_qr_status(text):
         # Old /vision/qr_detected messages represented only a stable result.
         result["_detector_stable"] = True
         result["_detector_confirmable"] = True
+    result = _copy_source_stamp(data, result)
     return result, None
 
 
@@ -95,6 +110,7 @@ def parse_thermal_status(detected):
             detector_confirmable = True
         result["_detector_stable"] = detector_stable
         result["_detector_confirmable"] = detector_confirmable
+        result = _copy_source_stamp(data, result)
         return _copy_geometry(data, result), None
 
     if not detected:

@@ -93,12 +93,14 @@ class CoreTests(unittest.TestCase):
     def test_detector_status_adapters_accept_explicit_candidates(self):
         self.assertIsNone(parse_color_status('{"detected":true,"stable":false,"color":"red"}'))
         color_candidate, confidence = parse_color_status(
-            '{"detected":true,"candidate":true,"stable":false,"color":"red","score":0.7}'
+            '{"detected":true,"candidate":true,"stable":false,"color":"red",'
+            '"score":0.7,"stamp":12.5}'
         )
         self.assertEqual(0.7, confidence)
         self.assertEqual("red", color_candidate["color"])
         self.assertFalse(color_candidate["_detector_stable"])
         self.assertFalse(color_candidate["_detector_confirmable"])
+        self.assertEqual(12.5, color_candidate["_source_stamp"])
         color_result, confidence = parse_color_status(
             '{"detected":true,"stable":true,"color":"red","score":0.9}'
         )
@@ -106,10 +108,11 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(color_result["_detector_stable"])
         self.assertTrue(color_result["_detector_confirmable"])
         qr_result, _ = parse_qr_status(
-            '{"detected":true,"data":"A123"}'
+            '{"detected":true,"data":"A123","stamp":20.0}'
         )
         self.assertEqual("A123", qr_result["content"])
         self.assertTrue(qr_result["_detector_confirmable"])
+        self.assertEqual(20.0, qr_result["_source_stamp"])
         qr_empty, _ = parse_qr_status(
             '{"detected":true,"held":false,"data":""}'
         )
@@ -117,7 +120,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             False,
             parse_thermal_status(
-                '{"detected":true,"candidate":true,"stable":false,"cx":12,"cy":8,"bbox":[2,3,20,16]}'
+                '{"detected":true,"candidate":true,"stable":false,"stamp":30.0,'
+                '"cx":12,"cy":8,"bbox":[2,3,20,16]}'
             )[0]["_detector_confirmable"],
         )
 

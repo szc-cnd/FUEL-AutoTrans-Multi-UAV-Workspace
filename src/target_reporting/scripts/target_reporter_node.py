@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+from collections import defaultdict, deque
 
 import rospy
 import tf2_geometry_msgs  # noqa: F401
@@ -31,16 +32,32 @@ class TargetReporterNode:
         self.use_detector_candidates = bool(
             rospy.get_param("~use_detector_candidates", True)
         )
-        self.image_tolerance = float(rospy.get_param("~image_tolerance_s", 0.5))
+        # A confirmed event may only use the detector debug image carrying the
+        # same source timestamp.  The old broad 0.5 s lookup could select a
+        # preceding raw-candidate frame while the stable frame was in flight.
+        self.image_tolerance = float(
+            rospy.get_param(
+                "~image_match_tolerance_s",
+                rospy.get_param("~image_tolerance_s", 0.03),
+            )
+        )
+        self.image_wait_timeout = max(
+            0.0, float(rospy.get_param("~image_wait_timeout_s", 0.50))
+        )
+        self.source_match_tolerance = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    "~source_match_tolerance_s", self.image_tolerance
+                )
+            ),
+        )
         configured_mission_id = str(rospy.get_param("~mission_id", "")).strip()
         if not configured_mission_id or configured_mission_id.lower() == "auto":
             configured_mission_id = "onboard_test_{}".format(
                 time.strftime("%Y%m%d")
             )
         self.mission_id = configured_mission_id
-        self.send_candidate_observations = bool(
-            rospy.get_param("~send_candidate_observations", False)
-        )
         self.store = MissionStore(
             rospy.get_param("~record_root", "~/target_reports"), self.drone_id,
             mission_id=self.mission_id,
@@ -63,15 +80,15 @@ class TargetReporterNode:
         self.image_client.start()
         self.realtime_client.start()
         rospy.loginfo(
-            "target_reporter: mission_id=%s send_candidate_observations=%s",
+            "target_reporter: mission_id=%s confirmed-only-remote-upload=true",
             self.mission_id,
-            self.send_candidate_observations,
         )
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(15.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.observation_pub = rospy.Publisher("/UAV0/target_reporting/observation", String, queue_size=10)
         self.retry_timer = None
         self.latest_point = {}
+        self.point_history = defaultdict(lambda: deque(maxlen=30))
         self.latest_status = {}
         self.point_version = {}
         self.status_version = {}
@@ -159,6 +176,7 @@ class TargetReporterNode:
             point.point = msg.pose.position
         with self.lock:
             self.latest_point[source] = point
+            self.point_history[source].append(point)
             self.point_version[source] = self.point_version.get(source, 0) + 1
         self._try_process(source)
 
@@ -189,18 +207,73 @@ class TargetReporterNode:
         for source in ("color", "qr", "thermal"):
             self._try_process(source)
 
+    def _wait_for_matching_image(self, source, stamp):
+        """Wait briefly for the debug image from the confirmed source frame.
+
+        Detector callbacks publish the candidate/status and debug image on
+        separate ROS topics.  The status can therefore reach this node first.
+        Waiting here is bounded; if no same-frame image arrives, the caller
+        records the confirmed JSON without attaching an unrelated image.
+        """
+        deadline = time.monotonic() + self.image_wait_timeout
+        while not rospy.is_shutdown():
+            match = self.images.nearest_with_stamp(
+                source, stamp, self.image_tolerance
+            )
+            if match is not None:
+                image_stamp, image = match
+                rospy.logdebug(
+                    "Matched %s evidence image: event=%.6f image=%.6f delta=%.6f",
+                    source,
+                    stamp,
+                    image_stamp,
+                    abs(float(image_stamp) - float(stamp)),
+                )
+                return image
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+        return None
+
     def _try_process(self, source):
         with self.lock:
-            point = self.latest_point.get(source)
+            latest_point = self.latest_point.get(source)
+            points = list(self.point_history.get(source, ()))
             status = self.latest_status.get(source)
             pair = (self.point_version.get(source, 0), self.status_version.get(source, 0))
-        if point is None or status is None or not point.header.frame_id:
+        if latest_point is None or status is None:
+            return
+        result, confidence = status
+        source_stamp = result.get("_source_stamp")
+        point = latest_point
+        event_stamp = point.header.stamp.to_sec()
+        if source_stamp is not None:
+            try:
+                source_stamp = float(source_stamp)
+            except (TypeError, ValueError):
+                source_stamp = None
+        if source_stamp is not None:
+            matching_points = [
+                item for item in points
+                if abs(item.header.stamp.to_sec() - source_stamp)
+                <= self.source_match_tolerance
+            ]
+            if not matching_points:
+                # Do not pair a stable status with the newest point from a
+                # different detector frame. The retry timer will process it
+                # after the matching PointStamped callback arrives.
+                return
+            point = min(
+                matching_points,
+                key=lambda item: abs(item.header.stamp.to_sec() - source_stamp),
+            )
+            event_stamp = source_stamp
+        if not point.header.frame_id:
             return
         with self.lock:
             previous = self.last_processed_pair.get(source, (0, 0))
             if pair[0] <= previous[0] or pair[1] <= previous[1]:
                 return
-        result, confidence = status
         try:
             world = self.tf_buffer.transform(point, self.localization_frame, rospy.Duration(0.10))
         except Exception as exc:
@@ -221,6 +294,7 @@ class TargetReporterNode:
         # reporting layer must honor that gate uniformly; it must not turn a
         # repeated raw candidate into a confirmed target by adding another
         # unrelated frame counter.
+        result.pop("_source_stamp", None)
         detector_stable = bool(result.pop("_detector_stable", True))
         detector_confirmable = bool(
             result.pop("_detector_confirmable", detector_stable)
@@ -243,7 +317,8 @@ class TargetReporterNode:
                 event_seq = None
         observation = {
             "version": 1, "message_type": "observation", "target_type": target_type,
-            "timestamp": point.header.stamp.to_sec(), "drone_id": self.drone_id,
+            "timestamp": event_stamp, "drone_id": self.drone_id,
+            "source_timestamp": event_stamp,
             "target_id": "{}-{}-{:03d}".format(self.drone_id, target_type, candidate_number),
             "result": result,
             "position": {"frame_id": self.report_frame, "unit": "m", **position},
@@ -255,18 +330,16 @@ class TargetReporterNode:
         }
         self.observation_pub.publish(String(data=json.dumps(observation, ensure_ascii=False)))
         # Candidates remain available on the local ROS observation topic for
-        # RViz, but are not sent to Windows by default.  Only a confirmed
-        # target (which also creates the final JSON/image record below) is
-        # sent remotely unless the compatibility switch is explicitly true.
-        if confirmed or self.send_candidate_observations:
-            self.realtime_client.publish(observation)
+        # RViz, but are never sent to Windows.  Confirmed remote data is
+        # published below, after the same-frame stable image has been matched,
+        # so JSON and evidence cannot get out of sync.
         if not confirmed:
             return
         target_id = observation["target_id"]
-        image = self.images.nearest(source, point.header.stamp.to_sec(), self.image_tolerance)
+        image = self._wait_for_matching_image(source, event_stamp)
         image_id = "{}_seq{:06d}_{}.jpg".format(self.drone_id, event_seq, target_type)
         event = TargetEvent(
-            seq=event_seq, timestamp=point.header.stamp.to_sec(), drone_id=self.drone_id,
+            seq=event_seq, timestamp=event_stamp, drone_id=self.drone_id,
             message_type="confirmed_target", target_id=target_id, target_type=target_type,
             result=result, position=Position(self.report_frame, world.point.x, world.point.y, world.point.z),
             confidence=confidence,
@@ -277,6 +350,16 @@ class TargetReporterNode:
                                        (point.point.x, point.point.y, point.point.z))
             event["image"] = image_metadata(image_id, jpeg)
             self.store.save_image(image_id, jpeg)
+        else:
+            rospy.logwarn(
+                "Confirmed %s %s has no same-frame debug image; "
+                "skip image upload instead of using an unstable frame",
+                target_type,
+                target_id,
+            )
+        # Only confirmed detector output is sent remotely.  This happens
+        # after same-frame image matching, never before it.
+        self.realtime_client.publish(observation)
         if self.store.append_event(event):
             self.json_client.enqueue(event)
             if jpeg is not None:

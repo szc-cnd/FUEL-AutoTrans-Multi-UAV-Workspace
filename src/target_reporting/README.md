@@ -32,7 +32,8 @@ FAST-LIO 在整场任务中不得重启或重置。UAV0 统一启动配置使用
 ```
 
 候选状态 JSON 统一包含 `candidate`、`stable`、`confirmable`、
-`stable_count`、`stable_window` 和 `reason`。`candidate=true, stable=false`
+`stable_count`、`stable_window`、`stamp` 和 `reason`。`stamp` 必须与候选点的
+ROS 时间戳一致，`target_reporting` 会用它配对点和调试图。`candidate=true, stable=false`
 只用于 RViz 观察；`confirmable=true` 才允许 target_reporting 登记并远程发送。
 颜色标签的稳定条件为 12 帧窗口内至少 8 次匹配，二维码为内部真实性/深度校验连续
 5 帧，热源为 3 帧窗口内至少 2 次且像素跳变不超过配置阈值。
@@ -154,8 +155,12 @@ roslaunch target_reporting remote_server.launch
 `/UAV0/target_reporting/observation`，因此规划器 RViz 仍能看到候选；默认只有确认观测
 通过 TCP 5000 发往远程端，候选不会传到 Windows，也不会生成远程记录或图片。只有确认目标
 生成最终 JSON 和保留检测器原始框选的证据图片；颜色标签、二维码和热源检测器各自负责绘制
-目标框，target_reporting 只添加底部信息面板，不再用统一橙色框进行二次覆盖。确认目标不会再产生飞行目标。若确实需要兼容旧流程，
-将 `send_candidate_observations` 设为 `true` 才会重新发送候选实时观测。
+目标框，target_reporting 只添加底部信息面板，不再用统一橙色框进行二次覆盖。确认目标不会再产生飞行目标。
+候选观测只发布在机载 ROS 话题供 RViz 使用，远程端始终只接收确认结果。
+
+确认事件的证据图必须与检测点使用同一源时间戳（默认允许误差 0.03 秒）。上报节点会等待
+`image_wait_timeout_s`（默认 0.50 秒）让同帧调试图进入缓存；超时只发送确认 JSON，绝不使用
+前后时刻的未稳定候选图替代。
 
 `mission_id: auto` 会按当天自动生成 `onboard_test_YYYYMMDD`。Windows 端也要使用同一个日期编号；
 同一场任务中机载端和远程端必须保持该值不变。节点或电脑重启后会重新打开同一目录，根据

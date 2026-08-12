@@ -212,6 +212,7 @@ class ThermalDetectorNode:
             "confirmable": bool(stable_detected),
             "stable_count": int(stable_count),
             "stable_window": int(self.stable_max_len),
+            "stamp": stamp.to_sec(),
             "cx": int(detection["cx"]) if candidate_detected else None,
             "cy": int(detection["cy"]) if candidate_detected else None,
             "bbox": list(detection["bbox"]) if candidate_detected else None,

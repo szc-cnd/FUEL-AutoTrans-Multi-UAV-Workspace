@@ -996,6 +996,7 @@ class ColorTagDetector(object):
             "score": round(float(best["final_score"]), 3),
             "stable_count": int(color_info.get("count", 0)),
             "stable_window": int(self.stable_window),
+            "stamp": header.stamp.to_sec() if header.stamp else None,
             "reason": "stable_candidate" if stable else "raw_candidate",
         }
         self.candidate_text_pub.publish(

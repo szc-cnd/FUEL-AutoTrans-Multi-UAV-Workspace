@@ -9,10 +9,25 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from target_reporting import evidence
-from target_reporting.evidence import draw_detection_overlay, evidence_overlay_layout
+from target_reporting.evidence import (
+    TimestampedImageCache,
+    draw_detection_overlay,
+    evidence_overlay_layout,
+)
 
 
 class EvidenceLayoutTests(unittest.TestCase):
+    def test_image_cache_returns_only_same_frame_match(self):
+        cache = TimestampedImageCache(max_items=4)
+        image = np.zeros((8, 8, 3), dtype=np.uint8)
+        cache.add("color", 10.0, image)
+
+        self.assertIsNone(cache.nearest_with_stamp("color", 10.20, 0.03))
+        match = cache.nearest_with_stamp("color", 10.01, 0.03)
+        self.assertIsNotNone(match)
+        self.assertAlmostEqual(10.0, match[0])
+        self.assertEqual(image.shape, match[1].shape)
+
     def test_overlay_is_reserved_at_bottom_of_image(self):
         y0, panel_height = evidence_overlay_layout((480, 640, 3), line_count=5)
 

@@ -250,7 +250,7 @@ class QRDetectorNode(object):
         )
         if self.publish_debug_image:
             self.publish_debug(debug_image, image_msg.header)
-        self.publish_status(publish_result, publish_detected, reason)
+        self.publish_status(publish_result, publish_detected, reason, image_msg.header)
 
         if publish_detected and publish_result.get("z") is not None:
             self.publish_pose(publish_result, image_msg.header)
@@ -773,6 +773,7 @@ class QRDetectorNode(object):
             "confirmable": confirmable,
             "stable_count": int(self.consecutive_valid_count),
             "stable_window": int(self.confirm_frames),
+            "stamp": header.stamp.to_sec() if header.stamp else None,
             "held": False,
             "data": result.get("data", ""),
             "points": result.get("points", []),
@@ -801,7 +802,7 @@ class QRDetectorNode(object):
             String(data=json.dumps(status, ensure_ascii=False))
         )
 
-    def publish_status(self, result, detected, reason):
+    def publish_status(self, result, detected, reason, header=None):
         status = {
             "detected": bool(detected),
             "candidate": bool(detected),
@@ -822,6 +823,11 @@ class QRDetectorNode(object):
             "confirmable": bool(result.get("confirmable", False)),
             "stable_count": int(self.consecutive_valid_count if detected else 0),
             "stable_window": int(self.confirm_frames),
+            "stamp": (
+                header.stamp.to_sec()
+                if header is not None and header.stamp
+                else None
+            ),
             "depth_validated": bool(result.get("depth_validated", False)),
             "reason": reason,
         }
@@ -829,7 +835,7 @@ class QRDetectorNode(object):
 
     def publish_failure(self, header, color_bgr, reason):
         result = self.empty_result()
-        self.publish_status(result, False, reason)
+        self.publish_status(result, False, reason, header)
         if color_bgr is not None:
             debug_image = self.draw_debug_image(color_bgr.copy(), None, result, False, reason)
             self.publish_debug(debug_image, header)
