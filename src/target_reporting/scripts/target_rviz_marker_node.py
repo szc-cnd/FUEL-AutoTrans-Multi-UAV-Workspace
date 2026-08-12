@@ -381,10 +381,10 @@ class TargetRvizMarkerNode:
         if confirmed:
             status = "已确认"
         else:
-            if target_type == "qr_code" and result.get("validated") is False:
-                status = "候选(待验证) %d/3" % max(0, int(state.get("hits", 0)))
+            if not bool(result.get("detector_confirmable", False)):
+                status = "候选(待检测器确认)"
             else:
-                status = "候选 %d/3" % max(0, int(state.get("hits", 0)))
+                status = "候选"
         return "%s  %s" % (display_name, status)
 
     def _marker(self, marker_id, namespace, marker_type, state, color, text=""):

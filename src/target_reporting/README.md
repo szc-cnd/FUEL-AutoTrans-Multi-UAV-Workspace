@@ -1,6 +1,6 @@
 # 目标坐标与证据图远程上报
 
-该包统一接收颜色标签、二维码和热源检测结果，通过 ROS TF 转换到 FAST-LIO 的 `camera_init` 世界坐标系，并将其作为比赛语义上的 `channel` 坐标。检测包的首个有效候选会立即生成机载端实时观测并显示在 RViz；候选在空间上连续命中 `confirm_hits`（默认 3）次后才生成最终确认记录和带标注的 JPEG，默认只有确认结果发送到远程端。二维码候选还必须带有检测器的真实性和深度校验标志，未经校验的角点只能显示，不能累计确认。当前阶段候选和确认结果都不接入规划器。
+该包统一接收颜色标签、二维码和热源检测结果，通过 ROS TF 转换到 FAST-LIO 的 `camera_init` 世界坐标系，并将其作为比赛语义上的 `channel` 坐标。三个检测器都会先发布原始候选，随后由各自的时间稳定/真实性校验产生 `stable`、`confirmable` 状态；候选立即生成机载端实时观测并显示在 RViz，但只有检测器自己确认后才登记、保存证据图并发送远程端。上报层的 `confirm_hits` 固定为 1，只做空间去重，不再把原始候选重复累计成确认目标。当前阶段候选和确认结果都不接入规划器。
 
 ## 数据流
 
@@ -8,7 +8,7 @@
 三个检测包的原始候选/相机坐标/检测图
   -> target_reporter_node.py
   -> camera optical frame -> body -> camera_init
-  -> 首帧候选机载观测、检测器校验、空间确认、确认JSONL和JPEG
+  -> 首帧候选机载观测、检测器稳定门控、空间去重、确认JSONL和JPEG
   -> /UAV0/target_reporting/markers（RViz显示）
   -> TCP 5000(确认观测、最终JSON/ACK) + TCP 5001(JPEG/图片ACK)
   -> target_report_server.py
@@ -30,6 +30,12 @@ FAST-LIO 在整场任务中不得重启或重置。UAV0 统一启动配置使用
 /UAV0/thermal/target_candidate_camera_point      geometry_msgs/PointStamped
 /UAV0/thermal/target_candidate_status            std_msgs/String(JSON)
 ```
+
+候选状态 JSON 统一包含 `candidate`、`stable`、`confirmable`、
+`stable_count`、`stable_window` 和 `reason`。`candidate=true, stable=false`
+只用于 RViz 观察；`confirmable=true` 才允许 target_reporting 登记并远程发送。
+颜色标签的稳定条件为 12 帧窗口内至少 8 次匹配，二维码为内部真实性/深度校验连续
+5 帧，热源为 3 帧窗口内至少 2 次且像素跳变不超过配置阈值。
 
 旧版检测节点可将 `use_detector_candidates` 设为 `false`，回退到下面的稳定结果话题：
 
@@ -76,7 +82,7 @@ RViz 标记输出：
 /UAV0/target_reporting/detected_object_boxes  visualization_msgs/MarkerArray
 ```
 
-标记使用 `world` 坐标系；当前比赛配置中 `world` 与 `channel` 的数值坐标一致。候选球和文字使用半透明颜色，已确认目标使用不透明颜色；二维码未经真实性校验时文字会显示“候选(待验证)”，并在约 0.8 秒没有新观测后自动消失。
+标记使用 `world` 坐标系；当前比赛配置中 `world` 与 `channel` 的数值坐标一致。候选球和文字使用半透明颜色，已确认目标使用不透明颜色；三个检测器尚未稳定时文字统一显示“候选(待检测器确认)”，约 0.8 秒没有新观测后自动消失。
 包围盒使用 D435 点云坐标系发布并由 RViz TF 转到固定坐标系：颜色标签为橙色、二维码为绿色、热源为品红色。
 包围盒是目标附近点云的三维轴对齐包围盒；点云稀疏时使用以检测位置为中心的最小尺寸盒，
 因此它不是二维图像像素级分割轮廓。

@@ -771,6 +771,8 @@ class QRDetectorNode(object):
             "stable": bool(source_confirmed),
             "validated": bool(result.get("validated", False)),
             "confirmable": confirmable,
+            "stable_count": int(self.consecutive_valid_count),
+            "stable_window": int(self.confirm_frames),
             "held": False,
             "data": result.get("data", ""),
             "points": result.get("points", []),
@@ -802,6 +804,8 @@ class QRDetectorNode(object):
     def publish_status(self, result, detected, reason):
         status = {
             "detected": bool(detected),
+            "candidate": bool(detected),
+            "stable": bool(detected),
             "held": bool(result.get("held", False)),
             "data": result.get("data", ""),
             "points": result.get("points", []),
@@ -816,6 +820,8 @@ class QRDetectorNode(object):
             "preprocess": result.get("preprocess"),
             "validated": bool(result.get("validated", False)),
             "confirmable": bool(result.get("confirmable", False)),
+            "stable_count": int(self.consecutive_valid_count if detected else 0),
+            "stable_window": int(self.confirm_frames),
             "depth_validated": bool(result.get("depth_validated", False)),
             "reason": reason,
         }
@@ -869,7 +875,14 @@ class QRDetectorNode(object):
                     )
                     cv2.circle(image, center, 5, (0, 0, 255), -1)
 
-        lines = ["detected: {}".format(str(bool(detected)).lower())]
+        candidate = raw_detection is not None
+        stable = bool(detected and result.get("confirmable", False))
+        lines = [
+            "candidate: {}  stable: {}".format(
+                str(candidate).lower(), str(stable).lower()
+            ),
+            "detected: {}".format(str(bool(detected)).lower()),
+        ]
         lines.append("reason: {}".format(reason))
 
         data = result.get("data", "") if detected else ""

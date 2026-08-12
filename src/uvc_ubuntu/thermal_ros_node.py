@@ -39,6 +39,10 @@ class StableTargetFilter:
         self.max_pixel_jump = float(max_pixel_jump)
         self.history = deque(maxlen=self.max_len)
 
+    def detected_count(self):
+        """Number of detected samples currently in the stability window."""
+        return sum(1 for item in self.history if item["detected"])
+
     def update(self, detection):
         sample = {
             "detected": bool(detection["detected"]),
@@ -167,6 +171,16 @@ class ThermalDetectorNode:
     def publish_detection(self, gray, debug, detection):
         stamp = rospy.Time.now()
         stable_detected, stable_cx, stable_cy = self.stable_filter.update(detection)
+        # Render the same detector-level candidate/stable state that is sent
+        # in candidate_status.  The caller's legacy debug argument is kept
+        # for API compatibility with older launch wrappers.
+        debug = draw_debug(
+            gray,
+            detection,
+            stable_detected=stable_detected,
+            stable_count=self.stable_filter.detected_count(),
+            stable_window=self.stable_max_len,
+        )
 
         image_msg = numpy_to_image_msg(gray, "mono8", stamp, "thermal_camera")
         debug_msg = numpy_to_image_msg(debug, "bgr8", stamp, "thermal_camera")
@@ -189,14 +203,20 @@ class ThermalDetectorNode:
         # The candidate stream exposes the current valid hotspot immediately,
         # before the rolling 2/3-frame filter confirms it.
         candidate_detected = bool(detection["detected"])
+        stable_count = self.stable_filter.detected_count()
         self.candidate_detected_pub.publish(Bool(data=candidate_detected))
         candidate_status = {
             "detected": candidate_detected,
             "candidate": candidate_detected,
+            "stable": bool(stable_detected),
+            "confirmable": bool(stable_detected),
+            "stable_count": int(stable_count),
+            "stable_window": int(self.stable_max_len),
             "cx": int(detection["cx"]) if candidate_detected else None,
             "cy": int(detection["cy"]) if candidate_detected else None,
             "bbox": list(detection["bbox"]) if candidate_detected else None,
             "area": float(detection["area"]) if candidate_detected else 0.0,
+            "reason": "stable_candidate" if stable_detected else "raw_candidate",
         }
         self.candidate_status_pub.publish(
             String(data=json.dumps(candidate_status, ensure_ascii=False))

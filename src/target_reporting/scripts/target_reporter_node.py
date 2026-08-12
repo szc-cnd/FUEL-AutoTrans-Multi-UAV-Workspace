@@ -46,7 +46,7 @@ class TargetReporterNode:
             mission_id=self.mission_id,
         )
         self.tracker = CandidateTracker(
-            rospy.get_param("~dedup_distance_m", 0.30), rospy.get_param("~confirm_hits", 3)
+            rospy.get_param("~dedup_distance_m", 0.30), rospy.get_param("~confirm_hits", 1)
         )
         self.images = TimestampedImageCache(rospy.get_param("~image_cache_items", 40))
         host = rospy.get_param("~remote_host", "192.168.10.100")
@@ -216,24 +216,23 @@ class TargetReporterNode:
             self.last_processed_pair[source] = pair
         position = {"x": world.point.x, "y": world.point.y, "z": world.point.z}
         target_type = {"color": "color_tag", "qr": "qr_code", "thermal": "thermal_source"}[source]
-        # Raw QR corners are intentionally observable in RViz, but only a
-        # detector-validated QR may advance the confirmation counter.  This
-        # prevents repeated background quadrilaterals from becoming remote
-        # confirmed targets while preserving the local candidate workflow.
-        allow_confirmation = True
-        if source == "qr":
-            qr_validated = bool(result.pop("_qr_validated", False))
-            allow_confirmation = bool(result.pop("_qr_confirmable", True))
-            # Keep these two display fields in the local observation so RViz
-            # can distinguish a raw corner candidate from a validated one.
-            result["validated"] = qr_validated
-            result["confirmable"] = allow_confirmation
+        # All three detectors publish raw candidates immediately, but each
+        # detector also publishes its own stable/validated gate.  The
+        # reporting layer must honor that gate uniformly; it must not turn a
+        # repeated raw candidate into a confirmed target by adding another
+        # unrelated frame counter.
+        detector_stable = bool(result.pop("_detector_stable", True))
+        detector_confirmable = bool(
+            result.pop("_detector_confirmable", detector_stable)
+        )
+        result["detector_stable"] = detector_stable
+        result["detector_confirmable"] = detector_confirmable
         with self.candidate_lock:
             candidate, confirmed = self.tracker.update(
                 target_type,
                 result,
                 position,
-                allow_confirmation=allow_confirmation,
+                allow_confirmation=detector_confirmable,
             )
             candidate_number = candidate["local_number"]
             candidate_hits = candidate["hits"]
@@ -251,6 +250,8 @@ class TargetReporterNode:
             "hits": candidate_hits,
             "candidate": not confirmed,
             "confirmed": confirmed,
+            "detector_stable": detector_stable,
+            "detector_confirmable": detector_confirmable,
         }
         self.observation_pub.publish(String(data=json.dumps(observation, ensure_ascii=False)))
         # Candidates remain available on the local ROS observation topic for

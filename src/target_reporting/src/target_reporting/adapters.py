@@ -31,6 +31,20 @@ def parse_color_status(text):
     if not data.get("stable") and not data.get("candidate"):
         return None
     result = {"color": str(data.get("color", "unknown"))}
+    # The detector owns temporal confirmation.  Keep raw candidates visible,
+    # but expose the detector gate to target_reporter instead of making the
+    # reporting layer guess from repeated spatial observations.
+    has_detector_gate = any(
+        field in data for field in ("candidate", "stable", "confirmable")
+    )
+    if has_detector_gate:
+        detector_stable = bool(data.get("stable", False))
+        detector_confirmable = bool(data.get("confirmable", detector_stable))
+    else:
+        detector_stable = True
+        detector_confirmable = True
+    result["_detector_stable"] = detector_stable
+    result["_detector_confirmable"] = detector_confirmable
     return _copy_geometry(data, result), data.get("score")
 
 
@@ -47,10 +61,16 @@ def parse_qr_status(text):
     if any(
         field in data for field in ("candidate", "stable", "validated", "confirmable")
     ):
-        result["_qr_validated"] = bool(data.get("validated", False))
-        result["_qr_confirmable"] = bool(
+        result["validated"] = bool(data.get("validated", False))
+        result["confirmable"] = bool(
             data.get("confirmable", data.get("stable", False))
         )
+        result["_detector_stable"] = bool(data.get("stable", False))
+        result["_detector_confirmable"] = bool(result["confirmable"])
+    else:
+        # Old /vision/qr_detected messages represented only a stable result.
+        result["_detector_stable"] = True
+        result["_detector_confirmable"] = True
     return result, None
 
 
@@ -64,8 +84,24 @@ def parse_thermal_status(detected):
         if not data.get("detected"):
             return None
         result = {"detected": True}
+        has_detector_gate = any(
+            field in data for field in ("candidate", "stable", "confirmable")
+        )
+        if has_detector_gate:
+            detector_stable = bool(data.get("stable", False))
+            detector_confirmable = bool(data.get("confirmable", detector_stable))
+        else:
+            detector_stable = True
+            detector_confirmable = True
+        result["_detector_stable"] = detector_stable
+        result["_detector_confirmable"] = detector_confirmable
         return _copy_geometry(data, result), None
 
     if not detected:
         return None
-    return {"detected": True}, None
+    # The legacy Bool topic is published only by the stable detector stream.
+    return {
+        "detected": True,
+        "_detector_stable": True,
+        "_detector_confirmable": True,
+    }, None

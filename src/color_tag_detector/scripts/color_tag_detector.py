@@ -877,10 +877,10 @@ class ColorTagDetector(object):
             )
 
         lines = []
-        if best is not None and stable:
+        if best is not None:
             info = stable_info.get(best["color"], {"stable": False, "count": 0})
             lines.append(
-                "{} score:{:.2f} stable:{} {}/{}".format(
+                "{} score:{:.2f} candidate:true stable:{} {}/{}".format(
                     best["color"],
                     best["final_score"],
                     stable,
@@ -888,29 +888,32 @@ class ColorTagDetector(object):
                     self.stable_window,
                 )
             )
-            lines.append(
-                "u:{} v:{} Z:{:.2f}m valid:{:.0f}% std:{:.2f}".format(
-                    best["u"],
-                    best["v"],
-                    best["depth"] if best["depth"] is not None else -1.0,
-                    best["valid_depth_ratio"] * 100.0,
-                    best["depth_std"] if best["depth_std"] is not None else -1.0,
-                )
-            )
-            if best["real_width"] is not None and best["real_height"] is not None:
+            if stable:
                 lines.append(
-                    "real W:{:.2f}m H:{:.2f}m".format(
-                        best["real_width"], best["real_height"]
+                    "u:{} v:{} Z:{:.2f}m valid:{:.0f}% std:{:.2f}".format(
+                        best["u"],
+                        best["v"],
+                        best["depth"] if best["depth"] is not None else -1.0,
+                        best["valid_depth_ratio"] * 100.0,
+                        best["depth_std"] if best["depth_std"] is not None else -1.0,
                     )
                 )
-            if best["point_camera"] is not None:
-                p = best["point_camera"]
-                lines.append("P:[{:.2f}, {:.2f}, {:.2f}]m".format(p[0], p[1], p[2]))
-            elif not self.has_camera_info():
-                lines.append("waiting camera_info")
+                if best["real_width"] is not None and best["real_height"] is not None:
+                    lines.append(
+                        "real W:{:.2f}m H:{:.2f}m".format(
+                            best["real_width"], best["real_height"]
+                        )
+                    )
+                if best["point_camera"] is not None:
+                    p = best["point_camera"]
+                    lines.append("P:[{:.2f}, {:.2f}, {:.2f}]m".format(p[0], p[1], p[2]))
+                elif not self.has_camera_info():
+                    lines.append("waiting camera_info")
+            else:
+                lines.append("waiting for detector confirmation")
         else:
-            lines.append("detected:false stable:false")
-            lines.append("waiting for confirmed target")
+            lines.append("candidate:false stable:false")
+            lines.append("waiting for candidate")
 
         if self.debug_draw_mode > 0:
             lines.append(
@@ -982,6 +985,7 @@ class ColorTagDetector(object):
             "detected": True,
             "candidate": True,
             "stable": bool(stable),
+            "confirmable": bool(stable),
             "held": False,
             "color": best["color"],
             "u": int(round(best["u"])),
@@ -991,6 +995,7 @@ class ColorTagDetector(object):
             "point_camera": [round(float(value), 4) for value in point_out],
             "score": round(float(best["final_score"]), 3),
             "stable_count": int(color_info.get("count", 0)),
+            "stable_window": int(self.stable_window),
             "reason": "stable_candidate" if stable else "raw_candidate",
         }
         self.candidate_text_pub.publish(
@@ -1045,6 +1050,7 @@ class ColorTagDetector(object):
         result = {
             "detected": True,
             "stable": True,
+            "confirmable": True,
             "color": best["color"],
             "u": int(round(u_out)),
             "v": int(round(v_out)),
@@ -1068,6 +1074,7 @@ class ColorTagDetector(object):
             "pixel_area": round(float(best["pixel_area"]), 1),
             "fill_ratio": round(float(best["fill_ratio"]), 3),
             "stable_count": int(color_info["count"]),
+            "stable_window": int(self.stable_window),
         }
 
         point_msg = PointStamped()

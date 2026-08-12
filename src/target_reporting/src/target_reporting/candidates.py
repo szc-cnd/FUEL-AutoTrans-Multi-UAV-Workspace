@@ -10,9 +10,10 @@ class CandidateTracker:
         "point_camera", "real_width", "real_height", "valid_depth_ratio",
         "depth_std", "pixel_area", "fill_ratio", "method", "preprocess",
         "validated", "confirmable",
+        "detector_stable", "detector_confirmable",
     }
 
-    def __init__(self, distance_m=0.30, confirm_hits=3):
+    def __init__(self, distance_m=0.30, confirm_hits=1):
         self.distance_m = float(distance_m)
         self.confirm_hits = max(1, int(confirm_hits))
         self._items = []

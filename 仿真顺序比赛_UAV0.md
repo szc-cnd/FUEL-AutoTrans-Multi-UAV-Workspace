@@ -196,7 +196,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   `/UAV0/target_reporting/detected_object_cloud`，只显示检测目标附近点云；
 - 检测目标三维线框包围盒：`/UAV0/target_reporting/detected_object_boxes`，颜色标签、二维码、热源分别使用橙色、绿色、品红色；
 - `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
-- `target_reporting`：候选/确认跟踪、坐标转换、远程 TCP 上报。
+- `target_reporting`：候选显示、检测器稳定门控、坐标转换、空间去重和远程 TCP 上报；
+  上报层不再额外累计 3 帧，只有检测器自身 `confirmable=true` 才登记确认目标。
 
 `enable_target_reporting:=true` 是远程数据传输开关，必须保持为 `true`；Windows
 接收服务器仍需按下面的远程端步骤单独启动。
@@ -270,7 +271,12 @@ send_candidate_observations: false
 
 `192.168.31.163` 是机载端地址，不能填到 `remote_host`；Windows 接收服务器
 未启动时，检测、规划和 RViz 仍可运行，上报客户端会自动重试。候选结果只在机载端
-用于 RViz，不发送到 Windows；Windows 只接收确认目标和带框证据图片。
+用于 RViz，不发送到 Windows；Windows 只接收检测器确认目标和带框证据图片。
+
+三个检测器的状态字段统一为 `candidate`、`stable`、`confirmable`、
+`stable_count`、`stable_window` 和 `reason`。原始候选可以立即在 RViz 中看到，
+但不会因此远程上报；颜色标签需在 12 帧窗口内至少 8 次匹配，二维码需通过
+真实性/深度校验并连续 5 帧稳定，热源需在 3 帧窗口内至少 2 次且像素跳变合格。
 
 ### 精确降落（当前暂不纳入流程）
 
@@ -302,7 +308,8 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
 ```
 
 该入口启动 UAV0 的 FUEL 规划器和 RViz。RViz 的 `Detection Results` 分组会显示
-`/UAV0/target_reporting/markers`，黄色为候选、绿色为确认；颜色、二维码和热成像
+`/UAV0/target_reporting/markers`，候选使用半透明、确认使用不透明，但颜色按目标类型保持一致：
+颜色标签橙色、二维码绿色、热源品红色；颜色、二维码和热成像
 调试图像以及只包含检测目标附近点的
 `/UAV0/target_reporting/detected_object_cloud` 也已配置在同一个 RViz 中。
 三维线框包围盒话题 `/UAV0/target_reporting/detected_object_boxes` 也已配置在

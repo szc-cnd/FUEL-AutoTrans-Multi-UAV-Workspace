@@ -16,7 +16,8 @@ remote_port: 5000
 image_port: 5001
 
 record_root: "~/target_reports"
-confirm_hits: 3
+# 检测器自身负责时间稳定/真实性确认；上报层只做空间去重，不再额外累计帧数。
+confirm_hits: 1
 dedup_distance_m: 0.30
 image_tolerance_s: 0.50
 image_cache_items: 40

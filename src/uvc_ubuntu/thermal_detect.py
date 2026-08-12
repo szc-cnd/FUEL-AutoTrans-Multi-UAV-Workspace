@@ -287,8 +287,18 @@ def detect_hotspot(
     return result
 
 
-def draw_debug(gray, detection):
+def draw_debug(gray, detection, stable_detected=None, stable_count=None, stable_window=None):
     debug = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    # When called by thermal_ros_node, stable_detected is the same detector
+    # gate published in target_candidate_status.  The standalone detector
+    # keeps the historical behavior by treating a raw detection as stable.
+    if stable_detected is None:
+        stable_detected = bool(detection["detected"])
+    if stable_count is None:
+        stable_count = 1 if detection["detected"] else 0
+    if stable_window is None:
+        stable_window = 1
 
     rx, ry, rw, rh = detection["roi_rect"]
     cv2.rectangle(debug, (rx, ry), (rx + rw - 1, ry + rh - 1), (255, 160, 0), 1)
@@ -305,9 +315,12 @@ def draw_debug(gray, detection):
             markerSize=12,
             thickness=2,
         )
-        status = f"detected=True  pixel=({cx},{cy})"
+        status = (
+            f"candidate=True stable={bool(stable_detected)} "
+            f"{int(stable_count)}/{int(stable_window)} pixel=({cx},{cy})"
+        )
     else:
-        status = "detected=False  pixel=(-1,-1)"
+        status = "candidate=False stable=False pixel=(-1,-1)"
 
     cv2.putText(debug, status, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
     cv2.putText(

@@ -92,23 +92,33 @@ class CoreTests(unittest.TestCase):
 
     def test_detector_status_adapters_accept_explicit_candidates(self):
         self.assertIsNone(parse_color_status('{"detected":true,"stable":false,"color":"red"}'))
-        self.assertEqual(({"color": "red"}, 0.7), parse_color_status(
+        color_candidate, confidence = parse_color_status(
             '{"detected":true,"candidate":true,"stable":false,"color":"red","score":0.7}'
-        ))
-        self.assertEqual(({"color": "red"}, 0.9), parse_color_status(
+        )
+        self.assertEqual(0.7, confidence)
+        self.assertEqual("red", color_candidate["color"])
+        self.assertFalse(color_candidate["_detector_stable"])
+        self.assertFalse(color_candidate["_detector_confirmable"])
+        color_result, confidence = parse_color_status(
             '{"detected":true,"stable":true,"color":"red","score":0.9}'
-        ))
-        self.assertEqual(({"content": "A123"}, None), parse_qr_status(
+        )
+        self.assertEqual(0.9, confidence)
+        self.assertTrue(color_result["_detector_stable"])
+        self.assertTrue(color_result["_detector_confirmable"])
+        qr_result, _ = parse_qr_status(
             '{"detected":true,"data":"A123"}'
-        ))
-        self.assertEqual(({"content": ""}, None), parse_qr_status(
+        )
+        self.assertEqual("A123", qr_result["content"])
+        self.assertTrue(qr_result["_detector_confirmable"])
+        qr_empty, _ = parse_qr_status(
             '{"detected":true,"held":false,"data":""}'
-        ))
+        )
+        self.assertEqual("", qr_empty["content"])
         self.assertEqual(
-            ({"detected": True, "bbox": [2, 3, 20, 16], "center_u": 12, "center_v": 8}, None),
+            False,
             parse_thermal_status(
-                '{"detected":true,"candidate":true,"cx":12,"cy":8,"bbox":[2,3,20,16]}'
-            ),
+                '{"detected":true,"candidate":true,"stable":false,"cx":12,"cy":8,"bbox":[2,3,20,16]}'
+            )[0]["_detector_confirmable"],
         )
 
     def test_geometry_does_not_split_one_logical_candidate(self):
@@ -134,8 +144,10 @@ class CoreTests(unittest.TestCase):
             '"validated":false,"confirmable":false,"data":"",'
             '"center_u":100,"center_v":80}'
         )
-        self.assertFalse(result["_qr_validated"])
-        self.assertFalse(result["_qr_confirmable"])
+        self.assertFalse(result["validated"])
+        self.assertFalse(result["confirmable"])
+        self.assertFalse(result["_detector_stable"])
+        self.assertFalse(result["_detector_confirmable"])
 
         tracker = CandidateTracker(distance_m=0.3, confirm_hits=3)
         position = {"x": 1.0, "y": 0.0, "z": 2.0}
@@ -152,6 +164,23 @@ class CoreTests(unittest.TestCase):
             )
             self.assertEqual(index + 1, candidate["hits"])
         self.assertTrue(confirmed)
+
+    def test_detector_gate_is_the_only_confirmation_gate(self):
+        tracker = CandidateTracker(distance_m=0.3, confirm_hits=1)
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        candidate, confirmed = tracker.update(
+            "thermal_source", {"detected": True}, position,
+            allow_confirmation=False,
+        )
+        self.assertFalse(confirmed)
+        self.assertEqual(0, candidate["hits"])
+
+        candidate, confirmed = tracker.update(
+            "thermal_source", {"detected": True}, position,
+            allow_confirmation=True,
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(1, candidate["hits"])
 
 
 if __name__ == "__main__":
