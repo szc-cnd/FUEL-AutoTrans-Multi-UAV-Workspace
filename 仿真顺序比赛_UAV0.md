@@ -127,6 +127,8 @@ D435 原始点云、颜色标签、二维码、相机外参 TF 和目标上报�
 统一入口默认将该外参发布为 `UAV0/body -> camera_link`，与当前 FAST-LIO 的
 `UAV0/body` 坐标系对齐；若实际 FAST-LIO 使用无前缀 `body`，可追加
 `camera_body_tf_parent_frame:=body`。
+当前 FAST-LIO 已自行发布 `UAV0/camera_init -> UAV0/body`，统一入口默认关闭
+`fastlio_odometry_tf`，避免两个节点重复广播同一条 TF。
 
 ```bash
 cd ~/match_ws
@@ -139,8 +141,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
-  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d) \
-  camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d)
 ```
 
 ```bash
@@ -151,12 +152,12 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
-  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d) \
-  camera_body_tf_odom_topic:=/UAV0/fast_lio/Odometry
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d)
 ```
 
-如果实际里程计话题仍为 `/Odometry`，将命令最后一行改为
-`camera_body_tf_odom_topic:=/Odometry`，不要再执行第二次。
+只有以后更换为“不发布 TF、仅发布 Odometry”的定位源时，才在命令中追加
+`enable_camera_body_odom_tf:=true` 和对应的
+`camera_body_tf_odom_topic:=<里程计话题>`；当前 FAST-LIO 不要打开该开关。
 
 该脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
 
@@ -195,7 +196,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 - D435 PointCloud2：原始输入 `/camera/depth/color/points`，过滤输出
   `/UAV0/target_reporting/detected_object_cloud`，只显示检测目标附近点云；
 - 检测目标三维线框包围盒：`/UAV0/target_reporting/detected_object_boxes`，颜色标签、二维码、热源分别使用橙色、绿色、品红色；
-- `camera_body_tf`：FAST-LIO 位姿与相机外参 TF；
+- `camera_body_tf`：默认只发布 `UAV0/body -> camera_link` 相机静态外参，
+  不重复发布 FAST-LIO 已提供的世界到机体 TF；
 - `target_reporting`：候选显示、检测器稳定门控、坐标转换、空间去重和远程 TCP 上报；
   上报层不再额外累计 3 帧，只有检测器自身 `confirmable=true` 才登记确认目标。
 

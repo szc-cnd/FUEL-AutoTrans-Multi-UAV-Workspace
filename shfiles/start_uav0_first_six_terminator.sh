@@ -245,9 +245,9 @@ run_detection_pane() {
     enable_thermal:="${THERMAL}" \
     realsense_enable_pointcloud:=true \
     enable_camera_body_tf:=true \
+    enable_camera_body_odom_tf:=false \
     enable_target_reporting:=true \
-    target_reporting_mission_id:="${mission_id}" \
-    camera_body_tf_odom_topic:="${ODOM_TOPIC}"
+    target_reporting_mission_id:="${mission_id}"
   printf '[退出] 检测与上报分屏，返回码=%s\n' "$?"
   keep_pane_open
 }

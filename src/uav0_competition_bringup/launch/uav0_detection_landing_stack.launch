@@ -22,6 +22,8 @@
   <arg name="realsense_enable_depth" default="true" />
   <!-- D435 点云只用于 RViz 可视化，不参与检测或规划决策。 -->
   <arg name="realsense_enable_pointcloud" default="true" />
+  <!-- 当前 FAST-LIO 已发布 UAV0/camera_init -> UAV0/body，默认不重复桥接里程计 TF。 -->
+  <arg name="enable_camera_body_odom_tf" default="false" />
   <arg name="camera_body_tf_odom_topic" default="/Odometry" />
   <!-- 当前 FAST-LIO/UAV0 使用 UAV0/body；相机驱动仍发布 camera_link。 -->
   <arg name="camera_body_tf_parent_frame" default="UAV0/body" />
@@ -54,9 +56,10 @@
   <include if="$(arg enable_thermal)"
            file="$(find uvc_ubuntu)/launch/thermal_d435_system.launch" />
 
-  <!-- FAST-LIO 位姿与相机外参 TF；target_reporting 依赖这棵 TF 树完成坐标转换。 -->
+  <!-- 默认只发布机体到相机的静态外参；FAST-LIO 自行提供世界到机体的 TF。 -->
   <include if="$(arg enable_camera_body_tf)"
            file="$(find target_reporting)/launch/camera_body_tf.launch">
+    <arg name="enable_odom_tf" value="$(arg enable_camera_body_odom_tf)" />
     <arg name="odom_topic" value="$(arg camera_body_tf_odom_topic)" />
     <arg name="calibration_file" value="$(arg camera_body_tf_calibration_file)" />
     <arg name="parent_frame" value="$(arg camera_body_tf_parent_frame)" />

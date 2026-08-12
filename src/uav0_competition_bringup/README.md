@@ -36,7 +36,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   target_reporting_mission_id:=onboard_test_$(date +%Y%m%d)
 ```
 
-入口还会自动启动 `camera_body_tf.launch`，读取：
+入口还会自动启动 `camera_body_tf.launch` 中的相机静态外参发布节点，读取：
 
 ```text
 /home/oem/handeye_calibration/body_camera_03.yaml
@@ -46,9 +46,12 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 坐标系对齐。若实际 FAST-LIO 仍发布无前缀的 `body`，可追加
 `camera_body_tf_parent_frame:=body`。
 
-如果 FAST-LIO 实际发布的里程计话题不是 `/Odometry`，可在启动时覆盖
-`camera_body_tf_odom_topic`。脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用
-ROS 默认日志目录：
+当前 FAST-LIO 已自行广播 `UAV0/camera_init -> UAV0/body`，因此统一入口默认设置
+`enable_camera_body_odom_tf:=false`，不会再启动 `fastlio_odometry_tf` 重复发布同一
+变换。只有更换为“不发布 TF、仅发布 Odometry”的定位源时，才设置
+`enable_camera_body_odom_tf:=true`，并用 `camera_body_tf_odom_topic` 指定其里程计话题。
+
+脚本不修改 `ROS_LOG_DIR`，因此和规划器一样使用 ROS 默认日志目录：
 
 ```text
 ~/.ros/log/<本次运行ID>/

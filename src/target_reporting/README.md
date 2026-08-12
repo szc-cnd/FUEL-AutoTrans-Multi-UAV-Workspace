@@ -225,12 +225,15 @@ After a valid YAML is produced, publish both transforms:
 
 ```bash
 roslaunch target_reporting camera_body_tf.launch \
-  calibration_file:=/home/asus/handeye_calibration/body_camera.yaml
+  calibration_file:=/home/asus/handeye_calibration/body_camera.yaml \
+  enable_odom_tf:=false
 rosrun tf tf_echo camera_init body
 rosrun tf tf_echo camera_init camera_color_optical_frame
 ```
 
 Do not start `camera_body_tf.launch` before a real calibration YAML exists;
 there is deliberately no identity-transform fallback.
+Set `enable_odom_tf:=false` when the localization node already broadcasts the
+world-to-body TF. Enable it only for an odometry source that does not publish TF.
 
 OpenCV图像标注和ROS TF需要在安装了ROS Noetic、`python3-opencv` 与相机驱动的Ubuntu机载环境中实测。
