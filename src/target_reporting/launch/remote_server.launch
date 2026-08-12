@@ -1,0 +1,9 @@
+<launch>
+  <arg name="host" default="0.0.0.0" />
+  <arg name="port" default="5000" />
+  <arg name="image_port" default="5001" />
+  <arg name="output" default="$(env HOME)/received_target_reports" />
+  <arg name="mission_id" default="competition_current" />
+  <node pkg="target_reporting" type="target_report_server.py" name="target_report_server"
+        output="screen" args="--host $(arg host) --port $(arg port) --image-port $(arg image_port) --output $(arg output) --mission-id $(arg mission_id)" />
+</launch>

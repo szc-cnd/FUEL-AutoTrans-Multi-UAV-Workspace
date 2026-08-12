@@ -1,0 +1,16 @@
+<launch>
+  <arg
+    name="detector_config_file"
+    default="$(find uvc_ubuntu)/config/thermal_detector.yaml" />
+  <arg
+    name="fusion_config_file"
+    default="$(find uvc_ubuntu)/config/thermal_d435_fusion.yaml" />
+
+  <include file="$(find uvc_ubuntu)/launch/thermal_detector.launch">
+    <arg name="config_file" value="$(arg detector_config_file)" />
+  </include>
+
+  <include file="$(find uvc_ubuntu)/launch/thermal_d435_fusion.launch">
+    <arg name="config_file" value="$(arg fusion_config_file)" />
+  </include>
+</launch>

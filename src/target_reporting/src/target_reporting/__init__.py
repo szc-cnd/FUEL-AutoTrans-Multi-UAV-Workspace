@@ -1,0 +1,2 @@
+"""Shared target reporting components."""
+

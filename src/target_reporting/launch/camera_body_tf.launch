@@ -1,0 +1,20 @@
+<launch>
+  <arg name="odom_topic" default="/Odometry" />
+  <!-- FAST-LIO 已自行广播里程计 TF 时必须关闭，避免同一变换被两个节点重复发布。 -->
+  <arg name="enable_odom_tf" default="true" />
+  <arg name="calibration_file" default="$(env HOME)/handeye_calibration/body_camera.yaml" />
+  <!-- 留空时沿用标定文件中的 frame；UAV0 实机可覆盖为 UAV0/body。 -->
+  <arg name="parent_frame" default="" />
+  <arg name="child_frame" default="" />
+
+  <node if="$(arg enable_odom_tf)"
+        pkg="target_reporting" type="odometry_to_tf.py" name="fastlio_odometry_tf" output="screen">
+    <param name="odom_topic" value="$(arg odom_topic)" />
+  </node>
+
+  <node pkg="target_reporting" type="publish_camera_extrinsic_tf.py" name="body_camera_static_tf" output="screen">
+    <param name="calibration_file" value="$(arg calibration_file)" />
+    <param name="parent_frame" value="$(arg parent_frame)" />
+    <param name="child_frame" value="$(arg child_frame)" />
+  </node>
+</launch>

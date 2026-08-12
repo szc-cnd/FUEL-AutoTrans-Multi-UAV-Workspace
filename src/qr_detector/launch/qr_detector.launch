@@ -1,0 +1,8 @@
+<launch>
+  <node pkg="qr_detector"
+        type="qr_detector_node.py"
+        name="qr_detector_node"
+        output="screen">
+    <rosparam command="load" file="$(find qr_detector)/config/qr_detector.yaml" />
+  </node>
+</launch>
