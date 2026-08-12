@@ -19,8 +19,8 @@ usage() {
 
 作用：
   先通过 rosnode kill -a 请求当前 ROS master 中的全部节点退出，
-  再清理当前用户残留的 roslaunch、roscore、rosmaster、rosrun、RViz
-  等 ROS 启动进程；等待后仍存在的进程默认直接发送 SIGKILL。
+  再清理当前用户残留的 roslaunch、roscore、rosmaster、rosrun、RViz、
+  laser_mid360.py 视觉位姿脚本等 ROS 启动进程；等待后仍存在的进程默认直接发送 SIGKILL。
   默认也会关闭本仓库六分屏入口打开的 Terminator 窗口。
 
 选项：
@@ -97,6 +97,7 @@ collect_ros_launcher_pids() {
             command ~ /\/opt\/ros\/noetic\/bin\/ros(launch|core|run|node|topic|service|param|bag)([[:space:]]|$)/ ||
             command ~ /\/opt\/ros\/noetic\/(lib|share)\/(rosmaster|roslaunch|rosout)(\/|[[:space:]]|$)/ ||
             command ~ /\/opt\/ros\/noetic\/lib\/(rviz|rqt|gazebo_ros)(\/|[[:space:]]|$)/ ||
+            command ~ /(^|[[:space:]\/])laser_mid360\.py([[:space:]]|$)/ ||
             command ~ /(^|[[:space:]\/])(rosmaster\.master|roslaunch\.parent)([[:space:]]|$)/)
           print $1
       }
