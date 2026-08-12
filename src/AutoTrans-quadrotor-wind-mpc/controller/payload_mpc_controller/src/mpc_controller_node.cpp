@@ -2,55 +2,7 @@
 #include "mpc_fsm.h"
 #include "mpc_controller.h"
 #include <clocale>
-#include <cmath>
-#include <mavros_msgs/ParamGet.h>
 #include <ros/ros.h>
-
-namespace
-{
-bool readPx4Parameter(ros::ServiceClient &client, const std::string &name,
-                      mavros_msgs::ParamValue &value)
-{
-    mavros_msgs::ParamGet request;
-    request.request.param_id = name;
-    if (!client.call(request) || !request.response.success)
-    {
-        ROS_FATAL("[启动] 无法读取 PX4 参数 %s。", name.c_str());
-        return false;
-    }
-    value = request.response.value;
-    return true;
-}
-
-bool validatePx4OffboardFailsafe(ros::NodeHandle &nh)
-{
-    ros::ServiceClient client = nh.serviceClient<mavros_msgs::ParamGet>("/mavros/param/get");
-    if (!client.waitForExistence(ros::Duration(5.0)))
-    {
-        ROS_FATAL("[启动] /mavros/param/get 服务不可用，禁止开始 AutoTrans 自动控制。");
-        return false;
-    }
-
-    mavros_msgs::ParamValue action;
-    mavros_msgs::ParamValue timeout;
-    if (!readPx4Parameter(client, "COM_OBL_RC_ACT", action) ||
-        !readPx4Parameter(client, "COM_OF_LOSS_T", timeout))
-        return false;
-
-    const bool action_ok = action.integer == 4;
-    const double timeout_value = std::abs(timeout.real) > 1.0e-9
-        ? timeout.real : static_cast<double>(timeout.integer);
-    const bool timeout_ok = std::abs(timeout_value - 0.3) <= 0.02;
-    if (!action_ok || !timeout_ok)
-    {
-        ROS_FATAL("[启动] PX4 OFFBOARD 失联保护参数不符合要求：COM_OBL_RC_ACT=%lld（要求 4=Land），COM_OF_LOSS_T=%.3f s（要求 0.3 s）。",
-                  static_cast<long long>(action.integer), timeout_value);
-        return false;
-    }
-    ROS_INFO("[启动] PX4 OFFBOARD 失联保护已确认：COM_OBL_RC_ACT=4，COM_OF_LOSS_T=0.3 s。");
-    return true;
-}
-}
 
 std::unique_ptr<PayloadMPC::MPCFSM> fsm_ptr;
 void MPC_controller_main(const ros::TimerEvent &)
@@ -182,7 +134,7 @@ int main(int argc, char **argv)
             if (trials++ > 5)
                 ROS_ERROR("[启动] 无法连接 PX4。");
         }
-        if (!ros::ok() || !validatePx4OffboardFailsafe(nh))
+        if (!ros::ok())
             return 1;
     }
     else

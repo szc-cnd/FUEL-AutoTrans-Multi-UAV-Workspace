@@ -12,7 +12,6 @@
   <arg name="setpoint_topic" default="/UAV0/mavros/setpoint_raw/attitude"/>
   <arg name="reboot_service" default="/UAV0/mavros/cmd/command"/>
   <arg name="set_mode_service" default="/UAV0/mavros/set_mode"/>
-  <arg name="param_get_service" default="/UAV0/mavros/param/get"/>
   <arg name="cmd_trigger_topic" default="/UAV0/hummingbird/goal"/>
   <!-- bridge 输出的完整 FUEL/规划器多项式轨迹，保持与雷达 Odometry 同一世界坐标语义。 -->
   <arg name="trajectory_topic" default="/UAV0/planning/autotrans_trajectory"/>
@@ -62,7 +61,6 @@
     <remap from="/mavros/setpoint_raw/attitude" to="$(arg setpoint_topic)"/>
     <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
     <remap from="/mavros/set_mode" to="$(arg set_mode_service)"/>
-    <remap from="/mavros/param/get" to="$(arg param_get_service)"/>
 
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>

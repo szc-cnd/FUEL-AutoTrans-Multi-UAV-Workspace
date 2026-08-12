@@ -44,11 +44,11 @@ class FsmSimplificationStaticTest(unittest.TestCase):
         self.assertIn("last_safe_setpoint_", self.fsm_header)
         self.assertNotIn("state_before_offboard", self.input_header)
 
-    def test_px4_offboard_failsafe_parameters_are_checked(self):
-        self.assertIn("mavros_msgs/ParamGet", self.node_source)
-        self.assertIn("COM_OBL_RC_ACT", self.node_source)
-        self.assertIn("COM_OF_LOSS_T", self.node_source)
-        self.assertIn("param_get_service", self.launch)
+    def test_px4_offboard_failsafe_parameters_are_not_read(self):
+        self.assertNotIn("mavros_msgs/ParamGet", self.node_source)
+        self.assertNotIn("COM_OBL_RC_ACT", self.node_source)
+        self.assertNotIn("COM_OF_LOSS_T", self.node_source)
+        self.assertNotIn("param_get_service", self.launch)
 
     def test_auto_land_waits_for_actual_px4_mode(self):
         land_case = self.fsm_source.split("case AUTO_LAND:", 1)[1]
