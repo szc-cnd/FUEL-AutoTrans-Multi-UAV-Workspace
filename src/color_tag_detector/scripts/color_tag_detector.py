@@ -101,6 +101,10 @@ class ColorTagDetector(object):
         self.fill_ratio_min = float(rospy.get_param("~fill_ratio_min", 0.45))
         self.min_extent = float(rospy.get_param("~min_extent", self.fill_ratio_min))
         self.min_solidity = float(rospy.get_param("~min_solidity", 0.45))
+        # Measure how much of the filled outer contour is still inside the
+        # configured HSV mask. This rejects textured clothes/cabinets with
+        # holes and reflections without assuming a rectangle or fixed size.
+        self.min_color_purity = float(rospy.get_param("~min_color_purity", 0.78))
         self.max_bbox_width_ratio = float(rospy.get_param("~max_bbox_width_ratio", 0.55))
         self.max_bbox_height_ratio = float(rospy.get_param("~max_bbox_height_ratio", 0.55))
         self.use_center_roi = bool(rospy.get_param("~use_center_roi", False))
@@ -419,6 +423,10 @@ class ColorTagDetector(object):
             hull_area = float(cv2.contourArea(hull))
             solidity = area / hull_area if hull_area > 1e-6 else 0.0
             min_solidity = float(color_cfg.get("min_solidity", self.min_solidity))
+            min_color_purity = float(
+                color_cfg.get("min_color_purity", self.min_color_purity)
+            )
+            color_purity = self.contour_color_purity(mask, contour)
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
             min_mean_h = color_cfg.get("min_mean_hue", None)
@@ -470,6 +478,8 @@ class ColorTagDetector(object):
                 reject_reasons.append("fill_ratio")
             if solidity < min_solidity:
                 reject_reasons.append("solidity")
+            if color_purity < min_color_purity:
+                reject_reasons.append("color_purity")
             if min_mean_h is not None and hsv_stats["mean_h"] < float(min_mean_h):
                 reject_reasons.append("mean_hue_low")
             if max_mean_h is not None and hsv_stats["mean_h"] > float(max_mean_h):
@@ -501,15 +511,18 @@ class ColorTagDetector(object):
 
             passed_filter = len(reject_reasons) == 0
 
+            purity_score = min(max(color_purity, 0.0), 1.0)
             # Candidate scoring is intentionally multi-factor, not "largest blob wins".
-            # It favors real tag-like size, clean depth, central position, and history.
+            # Color purity has a strong weight because it distinguishes a
+            # solid tag from textured clothes/furniture without fixing shape.
             base_score = (
-                0.15 * area_score
-                + 0.30 * depth_score
+                0.10 * area_score
+                + 0.25 * depth_score
                 + 0.15 * depth_consistency_score
-                + 0.20 * center_score
-                + 0.10 * size_score
+                + 0.10 * center_score
+                + 0.05 * size_score
                 + 0.10 * history_score
+                + 0.25 * purity_score
             )
             if not passed_filter:
                 base_score = min(base_score, self.score_threshold - 0.01)
@@ -544,6 +557,7 @@ class ColorTagDetector(object):
                     "fill_ratio": fill_ratio,
                     "extent": fill_ratio,
                     "solidity": solidity,
+                    "color_purity": color_purity,
                     "real_width": real_width,
                     "real_height": real_height,
                     "center_distance_to_image_center": center_dist,
@@ -559,6 +573,22 @@ class ColorTagDetector(object):
             )
 
         return candidates
+
+    @staticmethod
+    def contour_color_purity(mask, contour):
+        """Return HSV-mask occupancy inside a contour, including its holes."""
+        x, y, w, h = cv2.boundingRect(contour)
+        if w <= 0 or h <= 0:
+            return 0.0
+        local_contour = contour - np.array([[[x, y]]], dtype=contour.dtype)
+        filled = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(filled, [local_contour], -1, 255, thickness=-1)
+        inside = filled > 0
+        inside_count = int(np.count_nonzero(inside))
+        if inside_count <= 0:
+            return 0.0
+        color_roi = mask[y : y + h, x : x + w] > 0
+        return float(np.count_nonzero(color_roi & inside)) / float(inside_count)
 
     def is_inside_detection_roi(self, u, v, image_w, image_h):
         x0 = image_w * max(0.0, min(self.roi_x_min_ratio, 1.0))
@@ -938,9 +968,10 @@ class ColorTagDetector(object):
         cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
     def format_candidate_label(self, candidate):
-        return "{} s:{:.2f} z:{:.2f} w:{:.2f} h:{:.2f} std:{:.2f}".format(
+        return "{} s:{:.2f} p:{:.2f} z:{:.2f} w:{:.2f} h:{:.2f} std:{:.2f}".format(
             candidate["color"],
             candidate["final_score"],
+            candidate["color_purity"],
             candidate["depth"] if candidate["depth"] is not None else -1.0,
             candidate["real_width"] if candidate["real_width"] is not None else -1.0,
             candidate["real_height"] if candidate["real_height"] is not None else -1.0,
@@ -994,6 +1025,7 @@ class ColorTagDetector(object):
             "depth": round(float(best["depth"]), 4),
             "point_camera": [round(float(value), 4) for value in point_out],
             "score": round(float(best["final_score"]), 3),
+            "color_purity": round(float(best["color_purity"]), 3),
             "stable_count": int(color_info.get("count", 0)),
             "stable_window": int(self.stable_window),
             "stamp": header.stamp.to_sec() if header.stamp else None,
@@ -1074,6 +1106,7 @@ class ColorTagDetector(object):
             "area": round(float(best["area"]), 1),
             "pixel_area": round(float(best["pixel_area"]), 1),
             "fill_ratio": round(float(best["fill_ratio"]), 3),
+            "color_purity": round(float(best["color_purity"]), 3),
             "stable_count": int(color_info["count"]),
             "stable_window": int(self.stable_window),
         }

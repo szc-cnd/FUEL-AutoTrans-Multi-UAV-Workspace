@@ -90,6 +90,9 @@ fill_ratio_min: 0.40
 min_extent: 0.40
 # 颜色标签应是紧凑目标，排除网格、树叶等凹凸碎片。
 min_solidity: 0.65
+# 标签形状和尺寸未知，因此不要求矩形；只要求外轮廓内部大部分像素仍属于
+# 同一 HSV 色域。可排除衣服褶皱、柜门反光和镂空区域。
+min_color_purity: 0.78
 
 max_bbox_width_ratio: 0.80
 max_bbox_height_ratio: 0.80
