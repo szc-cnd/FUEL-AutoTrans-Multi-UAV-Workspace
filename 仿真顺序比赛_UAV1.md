@@ -1,6 +1,6 @@
 # UAV1 比赛启动流程（精简版）
 
-本流程对应 `~/match_ws` 的 UAV1 实机。保留原有启动顺序：MAVROS、MID360、FAST-LIO、位姿回传、Diff-Planner、轨迹桥接和 AutoTrans 控制器分开启动。
+本流程对应 `~/match_ws` 的 UAV1 实机。保留原有启动顺序：MAVROS、MID360、FAST-LIO、位姿回传、精确降落、Diff-Planner、轨迹桥接和 AutoTrans 控制器分开启动。
 
 传感器、规划器和控制器不会自动解锁，也不会自动切换 `OFFBOARD`。确认数据链路正常后，再按现场飞行流程操作。
 
@@ -65,7 +65,28 @@ python3 laser_mid360.py iris 1 fastlio off
 
 输出：`/UAV1/mavros/vision_pose/pose`。
 
-## 5. 单独启动 UAV1 Diff-Planner 和 RViz
+## 5. 启动 UAV1 下视相机和精确降落
+
+新开终端执行：
+
+```bash
+cd ~/match_ws
+sh shfiles/run_uav1_sensor_stack.sh landing
+```
+
+脚本自动查找 Generic USB 下视相机，启动 `/UAV1/down_camera` 和
+`/UAV1/precision_landing_node`。它只监听 `/UAV1/need_to_land`，启动时不会自动
+解锁、切换 `OFFBOARD` 或触发降落。状态和调试话题位于 `/UAV1/landing/...`，
+飞控输入输出只连接 `/UAV1/mavros/...`，不会连接 UAV0。
+
+检查：
+
+```bash
+rostopic hz /UAV1/down_camera/image_raw
+rostopic echo /UAV1/landing/state
+```
+
+## 6. 单独启动 UAV1 Diff-Planner 和 RViz
 
 终端 5：
 
@@ -84,7 +105,7 @@ roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
 /UAV1/planning/goal
 ```
 
-## 6. 单独启动 UAV1 桥接和 AutoTrans 控制器
+## 7. 单独启动 UAV1 桥接和 AutoTrans 控制器
 
 终端 6：
 
@@ -109,7 +130,7 @@ roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
 
 不要再同时运行旧的 `run_uav1_autotrans.sh`，避免重复启动桥接节点或控制器。
 
-## 7. 启动后检查
+## 8. 启动后检查
 
 ```bash
 rostopic echo /UAV1/mavros/state

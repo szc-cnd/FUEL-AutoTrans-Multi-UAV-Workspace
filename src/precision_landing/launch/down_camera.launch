@@ -1,10 +1,12 @@
 <launch>
+  <arg name="vehicle_ns" default="UAV0"/>
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0"/>
   <arg name="camera_info_url"
-       default="file:///home/oem/.ros/camera_info/down_camera.yaml"/>
+       default="file://$(env HOME)/.ros/camera_info/down_camera.yaml"/>
 
-  <node name="usb_cam"
+  <node name="down_camera"
+        ns="$(arg vehicle_ns)"
         pkg="usb_cam"
         type="usb_cam_node"
         output="screen">
@@ -17,7 +19,7 @@
     <param name="io_method" value="mmap"/>
 
     <param name="camera_name" value="down_camera"/>
-    <param name="camera_frame_id" value="down_camera_optical_frame"/>
+    <param name="camera_frame_id" value="$(arg vehicle_ns)/down_camera_optical_frame"/>
     <param name="camera_info_url"
            value="$(arg camera_info_url)"/>
   </node>

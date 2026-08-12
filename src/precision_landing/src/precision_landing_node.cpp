@@ -472,6 +472,7 @@ class PrecisionLandingNode {
     loadParameter(private_node_, "topics/target_id", target_id_topic);
     loadParameter(private_node_, "topics/setpoint", setpoint_topic);
     loadParameter(private_node_, "topics/landing_state", landing_state_topic);
+    loadParameter(private_node_, "topics/operator_status", operator_status_topic);
     loadParameter(private_node_, "topics/locked_id", locked_id_topic);
     loadParameter(private_node_, "topics/target_pose", target_pose_topic);
     loadParameter(private_node_, "topics/error_xy", error_xy_topic);

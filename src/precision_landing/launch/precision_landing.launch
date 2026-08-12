@@ -1,14 +1,35 @@
 <launch>
-  <arg name="image_topic" default="/usb_cam/image_raw"/>
-  <arg name="camera_info_topic" default="/usb_cam/camera_info"/>
+  <arg name="vehicle_ns" default="UAV0"/>
+  <arg name="topic_prefix" default="$(eval '/' + arg('vehicle_ns').strip('/'))"/>
+  <arg name="image_topic" default="$(arg topic_prefix)/down_camera/image_raw"/>
+  <arg name="camera_info_topic" default="$(arg topic_prefix)/down_camera/camera_info"/>
+  <arg name="local_pose_topic" default="$(arg topic_prefix)/mavros/local_position/pose"/>
+  <arg name="mavros_state_topic" default="$(arg topic_prefix)/mavros/state"/>
+  <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
+  <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
+  <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
+  <arg name="set_mode_service" default="$(arg topic_prefix)/mavros/set_mode"/>
 
   <node pkg="precision_landing" type="precision_landing_node"
-        name="precision_landing_node" output="screen">
+        name="precision_landing_node" ns="$(arg vehicle_ns)" output="screen">
     <rosparam command="load"
               file="$(find precision_landing)/config/precision_landing.yaml"/>
 
     <!-- These arguments intentionally override the corresponding YAML defaults. -->
     <param name="topics/image" value="$(arg image_topic)"/>
     <param name="topics/camera_info" value="$(arg camera_info_topic)"/>
+    <param name="topics/local_pose" value="$(arg local_pose_topic)"/>
+    <param name="topics/mavros_state" value="$(arg mavros_state_topic)"/>
+    <param name="topics/trigger" value="$(arg trigger_topic)"/>
+    <param name="topics/target_id" value="$(arg target_id_topic)"/>
+    <param name="topics/setpoint" value="$(arg setpoint_topic)"/>
+    <param name="topics/set_mode_service" value="$(arg set_mode_service)"/>
+    <param name="topics/landing_state" value="$(arg topic_prefix)/landing/state"/>
+    <param name="topics/operator_status" value="$(arg topic_prefix)/landing/status"/>
+    <param name="topics/locked_id" value="$(arg topic_prefix)/landing/locked_id"/>
+    <param name="topics/target_pose" value="$(arg topic_prefix)/landing/target_pose"/>
+    <param name="topics/error_xy" value="$(arg topic_prefix)/landing/error_xy"/>
+    <param name="topics/debug_image" value="$(arg topic_prefix)/landing/debug_image"/>
+    <param name="topics/success" value="$(arg topic_prefix)/landing/success"/>
   </node>
 </launch>
