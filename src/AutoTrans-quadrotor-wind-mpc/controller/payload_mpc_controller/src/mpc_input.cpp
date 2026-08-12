@@ -29,7 +29,7 @@ RC_Data_t::RC_Data_t()
     last_land = -1.0;
 
     // Parameter initilation is very important in RC-Free usage!
-    is_manual_mode = true;
+    mode_input_valid = false;
     is_hover_mode = false;
     enter_hover_mode = false;
     is_command_mode = false;
@@ -65,11 +65,8 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (msg.channels.size() < 4)
     {
-        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：RC 通道数量不足。");
-        is_manual_mode = true;
-        is_command_mode = false;
-        is_hover_mode = false;
-        is_takeoff_mode = false;
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效：RC 通道数量不足，保持上一条有效模式请求。");
+        mode_input_valid = false;
         return;
     }
 
@@ -86,12 +83,8 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (mode_channel < 0 || msg.channels.size() <= static_cast<size_t>(mode_channel))
     {
-        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：未收到模式通道 CH%d。", mode_channel + 1);
-        // 模式通道缺失时按手动请求处理，避免通道异常时沿用上一帧 AUTO_HOVER/CMD_CTRL 状态。
-        is_manual_mode = true;
-        is_command_mode = false;
-        is_hover_mode = false;
-        is_takeoff_mode = false;
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效：未收到模式通道 CH%d，保持上一条有效模式请求。", mode_channel + 1);
+        mode_input_valid = false;
         return;
     }
 
@@ -111,12 +104,8 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     const bool mode_valid = mode >= 800.0 && mode <= 2200.0;
     if (!mode_valid)
     {
-        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：PWM=%.0f us。", mode);
-        // 异常 PWM 不能触发起飞或自动控制，交给状态机执行安全退出。
-        is_manual_mode = true;
-        is_takeoff_mode = false;
-        is_hover_mode = false;
-        is_command_mode = false;
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效：PWM=%.0f us，保持上一条有效模式请求。", mode);
+        mode_input_valid = false;
         last_mode = mode;
         return;
     }
@@ -124,7 +113,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     const bool last_command_mode = last_mode > high_threshold;
     const bool last_hover_mode = last_mode >= mid_low_threshold && last_mode <= mid_high_threshold;
 
-    is_manual_mode = false;
+    mode_input_valid = true;
     is_takeoff_mode = mode < low_threshold;
     is_hover_mode = mode >= mid_low_threshold && mode <= mid_high_threshold;
     is_command_mode = mode > high_threshold;

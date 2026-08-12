@@ -67,7 +67,7 @@ namespace PayloadMPC
 
 		enum State_t
 		{
-			MANUAL_CTRL = 1, // 手动模式：不求解自动控制；发布低值占位 setpoint，避免残留上一帧命令。
+			MANUAL_CTRL = 1, // 手动状态：不求解 NMPC，正常情况下不发布 MAVROS attitude setpoint。
 			AUTO_HOVER,		 // 自动悬停：发布 body_rate(rad/s) + MAVROS 归一化 thrust。
 			CMD_CTRL,		 // 指令/轨迹控制：跟踪轨迹或悬停参考，并持续发布 MAVROS setpoint。
 			AUTO_TAKEOFF,	 // 自动起飞：等待 PX4 已进入 OFFBOARD 后平滑爬升，不自动解锁或切 OFFBOARD。
@@ -89,7 +89,6 @@ namespace PayloadMPC
 		bool rc_is_received(const ros::Time &now_time) const;
 		bool odom_is_received(const ros::Time &now_time) const;
 		bool imu_is_received(const ros::Time &now_time) const;
-		bool bat_is_received(const ros::Time &now_time) const;
 		bool recv_new_odom();
 		void addNewForceObseverState();
 
@@ -110,6 +109,8 @@ namespace PayloadMPC
 		ForceAttitudeAligner force_attitude_aligner_;
 		ros::Time land_start_time_;
 		bool auto_land_lockout_{false};
+		bool auto_land_request_sent_{false};
+		ros::Time last_auto_land_request_time_{0};
 		bool takeoff_requested_{false};
 		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
@@ -117,6 +118,12 @@ namespace PayloadMPC
 		std::string last_takeoff_precondition_reason_;
 		bool hover_offboard_wait_reported_{false};
 		bool cmd_offboard_wait_reported_{false};
+		ros::Time takeoff_prestream_start_{0};
+		bool odom_failsafe_active_{false};
+		ros::Time odom_failsafe_start_{0};
+		// 最近一次经过有限值检查和限幅的 MAVROS/PX4 控制量；里程计失效后最多保持 0.3 s。
+		mavros_msgs::AttitudeTarget last_safe_setpoint_;
+		bool have_last_safe_setpoint_{false};
 		// 最后一条有效入口 PositionCommand 持续作为 NMPC 世界系参考，直到新命令或完整轨迹接管。
 		Command_Data_t latched_entry_command_;
 		ros::Time last_entry_command_stamp_{0};
@@ -208,6 +215,11 @@ namespace PayloadMPC
 		DisturbanceGateReason disturbanceCompensationGate(const ros::Time &now) const;
 		void reportDisturbanceGate(DisturbanceGateReason reason);
 		void clearAppliedDisturbance();
+		void clearAutonomousState();
+		bool odomControlStateValid(const ros::Time &now) const;
+		void startOdomFailsafe(const ros::Time &now);
+		void publishFailsafeHold(const ros::Time &now);
+		void publishTakeoffPrestream(const ros::Time &now);
 		// PX4 退出 OFFBOARD 后清除旧轨迹和外力补偿，防止重新进入自动模式时恢复旧控制目标。
 		void handleOffboardLoss();
 		ThrustModelGateReason thrustModelGate(const ros::Time &now) const;
@@ -219,7 +231,6 @@ namespace PayloadMPC
 
 		void publish_bodyrate_ctrl(const Eigen::Ref<const Eigen::Matrix<real_t, kInputSize, 1>> predicted_input,
 								   const ros::Time &stamp);
-		void publish_manual_ctrl(const ros::Time &stamp);
 
 		// ---- tools ----
 		void printandresetRMSE();
@@ -228,9 +239,7 @@ namespace PayloadMPC
 		void update_mode_hover_pose();
 		void update_hover_with_rc();
 		bool takeoffPreconditions(const ros::Time &now, const char *&reason) const;
-		bool takeoffRunningSafe(const ros::Time &now, const char *&reason) const;
 		void startAutoTakeoff(const ros::Time &now);
-		void abortAutoTakeoff(const char *reason);
 		void publish_trigger(const nav_msgs::Odometry &odom_msg);
 		bool request_px4_auto_land();
 		void reboot_FCU();

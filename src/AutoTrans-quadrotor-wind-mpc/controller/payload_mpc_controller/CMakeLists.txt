@@ -117,6 +117,7 @@ catkin_add_nosetests(test/test_velocity_hard_constraint_static.py)
   catkin_add_nosetests(test/test_chinese_log_locale_static.py)
   catkin_add_nosetests(test/test_log_rate_policy_static.py)
   catkin_add_nosetests(test/test_takeoff_timeout_hover_static.py)
+  catkin_add_nosetests(test/test_fsm_simplification_static.py)
   catkin_add_gtest(test_entry_command_reference_limiter
     test/test_position_command_limiter.cpp
   )

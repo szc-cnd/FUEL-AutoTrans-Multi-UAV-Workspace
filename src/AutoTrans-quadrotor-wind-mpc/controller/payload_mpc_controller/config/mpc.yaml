@@ -74,7 +74,8 @@ entry_command:
 
 max_angle: 30  # Attitude angle limit in degree. A negative value means no limit.
 # 源码值 -0.1 等价于基本关闭低电压保护；实飞前应按你的电池节数和最低安全电压设置。
-low_voltage: -0.1 # 4S battery
+# 兼容旧配置保留；当前关闭电池异常检测，电压仅用于日志和推力映射。
+low_voltage: -0.1
 
 filter:
     # /mavros/imu/data 实测为 200 Hz；加速度单位 m/s^2、角速度单位 rad/s，均为机体系数据。
@@ -203,7 +204,7 @@ msg_timeout:
     rc:   0.5
     cmd:  0.5
     imu:  0.5
-    # /mavros/battery 实测约 0.5 Hz，允许最长 4 s 未更新，避免 AUTO_TAKEOFF 误判电池超时。
+    # /mavros/battery 实测约 0.5 Hz；当前不参与状态机阻断，仅供日志和推力映射使用。
     bat:  4.0
     # /mavros/esc_status 超过该时间未更新时，外力估计无效且 NMPC 补偿立即清零，单位 s。
     rpm:  0.1

@@ -25,7 +25,7 @@ class ChineseLogLocaleStaticTest(unittest.TestCase):
 
         expected_reasons = {
             "OFFBOARD": "PX4 尚未进入 OFFBOARD",
-            "SENSOR_STALE": "定位、IMU、电池或 RPM 数据超时",
+            "SENSOR_STALE": "定位、IMU 或 RPM 数据超时",
             "SENSOR_INVALID": "传感器数据无效",
             "DISARMED": "飞控尚未解锁",
             "NOT_ON_GROUND": "PX4 尚未确认在地面",

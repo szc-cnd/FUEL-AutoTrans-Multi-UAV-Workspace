@@ -39,7 +39,8 @@ public:
   mavros_msgs::RCIn msg;
   ros::Time rcv_stamp;
 
-  bool is_manual_mode;
+  // CH8 输入是否有效；无效时保留上一条有效模式请求，不把信号异常解释为手动模式。
+  bool mode_input_valid;
   bool is_command_mode;
   bool enter_command_mode;
   bool is_hover_mode;
@@ -124,7 +125,6 @@ class State_Data_t
 {
 public:
   mavros_msgs::State current_state;
-  mavros_msgs::State state_before_offboard;
   ros::Time rcv_stamp{0};
 
   State_Data_t();
