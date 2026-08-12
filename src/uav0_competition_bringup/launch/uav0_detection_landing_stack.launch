@@ -2,7 +2,7 @@
   <!--
     UAV0 统一启动入口。
     默认启动 D435、三类检测和 target_reporting；下视相机、精确降落和独立 RViz
-    显示均需要显式打开，避免仿真或未接硬件时误启动飞行相关节点。
+    显示可由调用入口选择。精确降落节点启动后仍等待 /UAV0/need_to_land。
   -->
   <arg name="enable_realsense" default="true" />
   <arg name="enable_color_tag" default="true" />
@@ -16,6 +16,7 @@
   <arg name="target_rviz_open_rviz" default="true" />
   <arg name="enable_down_camera" default="false" />
   <arg name="enable_precision_landing" default="false" />
+  <arg name="landing_vehicle_ns" default="UAV0" />
 
   <arg name="realsense_align_depth" default="true" />
   <arg name="realsense_enable_color" default="true" />
@@ -34,8 +35,8 @@
        default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0" />
   <arg name="down_camera_info_url"
        default="file://$(env HOME)/.ros/camera_info/down_camera.yaml" />
-  <arg name="landing_image_topic" default="/usb_cam/image_raw" />
-  <arg name="landing_camera_info_topic" default="/usb_cam/camera_info" />
+  <arg name="landing_image_topic" default="/UAV0/down_camera/image_raw" />
+  <arg name="landing_camera_info_topic" default="/UAV0/down_camera/camera_info" />
 
   <!-- D435 只启动一次；颜色和二维码检测共用它的图像/深度话题。 -->
   <include if="$(arg enable_realsense)"
@@ -77,16 +78,18 @@
     <arg name="open_rviz" value="$(arg target_rviz_open_rviz)" />
   </include>
 
-  <!-- 下视相机和降落控制默认关闭；打开后仍需外部发布 /need_to_land=true 才会进入降落控制。 -->
+  <!-- 打开后仍需外部发布 /UAV0/need_to_land=true 才会进入降落控制。 -->
   <include if="$(arg enable_down_camera)"
            file="$(find precision_landing)/launch/down_camera.launch">
     <arg name="video_device" value="$(arg down_camera_device)" />
     <arg name="camera_info_url" value="$(arg down_camera_info_url)" />
+    <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
   </include>
 
   <include if="$(arg enable_precision_landing)"
            file="$(find precision_landing)/launch/precision_landing.launch">
     <arg name="image_topic" value="$(arg landing_image_topic)" />
     <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
+    <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
   </include>
 </launch>

@@ -279,11 +279,10 @@ mission_id: "auto"  # 自动使用当天的 onboard_test_YYYYMMDD
 但不会因此远程上报；颜色标签需在 12 帧窗口内至少 8 次匹配，二维码需通过
 真实性/深度校验并连续 5 帧稳定，热源需在 3 帧窗口内至少 2 次且像素跳变合格。
 
-### 精确降落（当前暂不纳入流程）
+### UAV0 精确降落（已纳入第 5 屏）
 
-当前比赛流程不启动下视相机和精确降落，`enable_down_camera` 与
-`enable_precision_landing` 均保持默认值 `false`。以后确认下视相机设备路径和
-标定文件有效后，再在统一入口中追加以下参数：
+六分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0 精确
+降落节点。手动执行统一入口时使用：
 
 ```bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
@@ -291,11 +290,13 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_thermal:=false \
   enable_camera_body_tf:=true \
   enable_down_camera:=true \
-  enable_precision_landing:=true
+  enable_precision_landing:=true \
+  landing_vehicle_ns:=UAV0
 ```
 
 该配置会启动下视相机和降落控制节点，但不会自动解锁、切换 `OFFBOARD` 或发布
-降落触发；仍需按现场安全流程发布上升沿 `/need_to_land`。不要在统一入口已经
+降落触发；仍需按现场安全流程发布上升沿 `/UAV0/need_to_land`。相关话题均为
+`/UAV0/down_camera/...`、`/UAV0/landing/...` 和 `/UAV0/mavros/...`。不要在统一入口已经
 运行后再次单独启动同名的 `precision_landing` 节点。
 
 ## 6. 启动 UAV0 规划器

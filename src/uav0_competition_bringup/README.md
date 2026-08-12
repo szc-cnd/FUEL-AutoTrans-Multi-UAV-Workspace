@@ -91,11 +91,10 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_target_rviz:=true
 ```
 
-## 精确降落（当前暂不纳入流程）
+## UAV0 精确降落
 
-当前比赛流程不启动下视相机和精确降落，`enable_down_camera` 与
-`enable_precision_landing` 均保持默认值 `false`。以后确认下视相机设备路径和
-标定文件有效后，再在统一入口中追加以下参数：
+比赛六分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0
+精确降落节点。手动使用统一入口时追加以下参数：
 
 ```bash
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
@@ -104,11 +103,13 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
   enable_down_camera:=true \
-  enable_precision_landing:=true
+  enable_precision_landing:=true \
+  landing_vehicle_ns:=UAV0
 ```
 
 该入口不会自动解锁、切换 `OFFBOARD` 或触发降落；仍需按现场安全流程发布
-上升沿 `/need_to_land`。
+上升沿 `/UAV0/need_to_land`。下视相机、状态、调试图和 MAVROS 接口也分别使用
+`/UAV0/down_camera/...`、`/UAV0/landing/...` 与 `/UAV0/mavros/...`。
 
 ## 话题关系
 

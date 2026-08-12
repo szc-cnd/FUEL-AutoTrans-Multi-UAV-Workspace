@@ -1,0 +1,36 @@
+<launch>
+  <node pkg="precision_landing" type="precision_landing_node"
+        name="precision_landing_node" output="screen">
+    <param name="topics/image" value="/test/image"/>
+    <param name="topics/camera_info" value="/test/camera_info"/>
+    <param name="topics/pose" value="/test/pose"/>
+    <param name="topics/mavros_state" value="/test/mavros_state"/>
+    <param name="topics/trigger" value="/test/trigger"/>
+    <param name="topics/target_id" value="/test/target_id"/>
+    <param name="topics/setpoint" value="/test/setpoint"/>
+    <param name="topics/landing_state" value="/test/landing_state"/>
+    <param name="topics/locked_id" value="/test/locked_id"/>
+    <param name="topics/target_pose" value="/test/target_pose"/>
+    <param name="topics/error_xy" value="/test/error_xy"/>
+    <param name="topics/debug_image" value="/test/debug_image"/>
+    <param name="topics/success" value="/test/success"/>
+    <param name="services/set_mode" value="/test/set_mode"/>
+    <param name="auto_land/authorization_delay_sec" value="0.5"/>
+
+    <param name="timeouts/image_sec" value="2.0"/>
+    <param name="timeouts/camera_info_sec" value="2.0"/>
+    <param name="timeouts/pose_sec" value="2.0"/>
+    <param name="timeouts/state_sec" value="2.0"/>
+    <param name="state_machine/acquire_stable_sec" value="0.05"/>
+    <param name="state_machine/align_stable_sec" value="0.05"/>
+    <param name="state_machine/high_height_m" value="3.0"/>
+    <param name="state_machine/final_height_m" value="2.5"/>
+    <param name="state_machine/mid_align_error_m" value="0.20"/>
+    <param name="state_machine/final_align_error_m" value="0.20"/>
+    <param name="state_machine/auto_land_height_m" value="2.0"/>
+    <param name="state_machine/near_ground_loss_height_m" value="2.25"/>
+  </node>
+
+  <test test-name="precision_landing_node_test" pkg="precision_landing"
+        type="test_precision_landing_node.py" time-limit="45.0"/>
+</launch>

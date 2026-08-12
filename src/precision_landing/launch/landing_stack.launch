@@ -1,0 +1,22 @@
+<launch>
+  <!-- UAV0/UAV1 共用入口；仅启动节点，不会自行发布降落触发。 -->
+  <arg name="vehicle_ns" default="UAV0"/>
+  <arg name="video_device"
+       default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0"/>
+  <arg name="camera_info_url"
+       default="file://$(env HOME)/.ros/camera_info/down_camera.yaml"/>
+  <arg name="enable_down_camera" default="true"/>
+  <arg name="enable_precision_landing" default="true"/>
+
+  <include if="$(arg enable_down_camera)"
+           file="$(find precision_landing)/launch/down_camera.launch">
+    <arg name="vehicle_ns" value="$(arg vehicle_ns)"/>
+    <arg name="video_device" value="$(arg video_device)"/>
+    <arg name="camera_info_url" value="$(arg camera_info_url)"/>
+  </include>
+
+  <include if="$(arg enable_precision_landing)"
+           file="$(find precision_landing)/launch/precision_landing.launch">
+    <arg name="vehicle_ns" value="$(arg vehicle_ns)"/>
+  </include>
+</launch>

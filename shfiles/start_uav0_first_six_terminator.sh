@@ -179,6 +179,17 @@ wait_for_topic() {
   return 1
 }
 
+find_down_camera() {
+  local device
+  device="$(find /dev/v4l/by-id -maxdepth 1 -type l \
+    -name 'usb-Generic_USB_Camera_*-video-index0' 2>/dev/null | sort | head -n 1)"
+  if [[ -z "${device}" ]]; then
+    printf '[错误] 未发现下视相机：/dev/v4l/by-id/usb-Generic_USB_Camera_*-video-index0\n' >&2
+    return 1
+  fi
+  printf '%s\n' "${device}"
+}
+
 pane_init() {
   local pane_name="$1"
   printf '\n========== UAV0 第 %s 步 =========\n' "${pane_name}"
@@ -237,9 +248,12 @@ run_pose_pane() {
 run_detection_pane() {
   pane_init 5
   wait_for_topic "${ODOM_TOPIC}" 180 || keep_pane_open
-  local mission_id="onboard_test_$(date +%Y%m%d)"
-  printf '[启动] UAV0 D435/检测/TF/远程上报\n'
-  printf '[参数] thermal=%s, odom=%s, mission_id=%s\n' "${THERMAL}" "${ODOM_TOPIC}" "${mission_id}"
+  local mission_id="onboard_test_$(date +%Y%m%d)" down_camera
+  down_camera="$(find_down_camera)" || keep_pane_open
+  printf '[启动] UAV0 D435/检测/TF/远程上报/精确降落\n'
+  printf '[参数] thermal=%s, odom=%s, mission_id=%s, down_camera=%s\n' \
+    "${THERMAL}" "${ODOM_TOPIC}" "${mission_id}" "${down_camera}"
+  printf '[安全] 降落节点只监听 /UAV0/need_to_land，不会在启动时自动触发。\n'
   rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
     enable_realsense:=true \
     enable_thermal:="${THERMAL}" \
@@ -247,7 +261,11 @@ run_detection_pane() {
     enable_camera_body_tf:=true \
     enable_camera_body_odom_tf:=false \
     enable_target_reporting:=true \
-    target_reporting_mission_id:="${mission_id}"
+    target_reporting_mission_id:="${mission_id}" \
+    enable_down_camera:=true \
+    enable_precision_landing:=true \
+    landing_vehicle_ns:=UAV0 \
+    down_camera_device:="${down_camera}"
   printf '[退出] 检测与上报分屏，返回码=%s\n' "$?"
   keep_pane_open
 }
