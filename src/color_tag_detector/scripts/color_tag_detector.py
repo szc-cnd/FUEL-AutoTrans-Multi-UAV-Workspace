@@ -158,6 +158,12 @@ class ColorTagDetector(object):
                 rospy.get_param("~min_rectangularity", 0.84),
             )
         )
+        self.min_confirmation_rectangularity = float(
+            rospy.get_param(
+                "~min_confirmation_rectangularity",
+                rospy.get_param("~min_rectangularity", 0.84),
+            )
+        )
         self.min_surface_depth_valid_ratio = float(
             rospy.get_param("~min_surface_depth_valid_ratio", 0.60)
         )
@@ -464,6 +470,12 @@ class ColorTagDetector(object):
                     "preferred_rectangularity", self.preferred_rectangularity
                 )
             )
+            min_confirmation_rectangularity = float(
+                color_cfg.get(
+                    "min_confirmation_rectangularity",
+                    self.min_confirmation_rectangularity,
+                )
+            )
             rectangularity = self.contour_rectangularity(contour)
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
@@ -565,6 +577,8 @@ class ColorTagDetector(object):
             )
             if depth is None or depth > confirmation_depth_max:
                 confirmation_reasons.append("confirmation_distance")
+            if rectangularity < min_confirmation_rectangularity:
+                confirmation_reasons.append("rectangularity")
             if surface_depth["valid_ratio"] < min_surface_valid:
                 confirmation_reasons.append("surface_depth_ratio")
             if (

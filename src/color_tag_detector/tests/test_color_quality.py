@@ -68,6 +68,17 @@ class ColorQualityTests(unittest.TestCase):
         )
         self.assertLess(ColorTagDetector.contour_rectangularity(rounded), 0.84)
 
+    def test_confirmation_rectangularity_separates_recorded_tags_from_clutter(self):
+        config_path = os.path.join(ROOT, "config", "color_thresholds.yaml")
+        with open(config_path, encoding="utf-8") as stream:
+            threshold = float(
+                yaml.safe_load(stream)["min_confirmation_rectangularity"]
+            )
+
+        # 2026-08-12 实测：真标签最低约 0.868；按钮、布料分别约 0.83、0.72。
+        self.assertTrue(all(value >= threshold for value in (0.868, 0.90, 0.942)))
+        self.assertTrue(all(value < threshold for value in (0.83, 0.72)))
+
     def test_surface_plane_residual_rejects_curved_depth(self):
         detector = ColorTagDetector.__new__(ColorTagDetector)
         detector.surface_depth_max_samples = 2500
