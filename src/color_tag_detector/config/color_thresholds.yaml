@@ -59,14 +59,8 @@ colors:
       - lower: [38, 55, 90]
         upper: [86, 255, 255]
     max_mean_hue: 82
-    # 绿色误检样本是细长的网/杆状区域；真实色标应接近实心矩形。
-    min_mean_saturation: 75
-    min_mean_value: 105
-    aspect_ratio_min: 0.50
-    aspect_ratio_max: 2.20
-    fill_ratio_min: 0.50
-    mask_fill_ratio_min: 0.48
-    min_solidity: 0.72
+    min_mean_saturation: 65
+    min_mean_value: 100
     area_min: 800
     min_real_width: 0.07
     min_real_height: 0.07
@@ -92,9 +86,6 @@ area_max_ratio: 0.10
 aspect_ratio_min: 0.45
 aspect_ratio_max: 2.5
 fill_ratio_min: 0.40
-# HSV mask occupancy inside the bounding box. This is complementary to
-# contour fill_ratio and rejects hollow/fragmented background structures.
-mask_fill_ratio_min: 0.35
 
 min_extent: 0.40
 # 颜色标签应是紧凑目标，排除网格、树叶等凹凸碎片。
