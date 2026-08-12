@@ -353,3 +353,24 @@ rostopic echo /UAV0/target_reporting/markers
 5. 最后停止 MAVROS。
 
 不要在无人机仍处于解锁或 `OFFBOARD` 状态时直接关闭控制器或 MAVROS。
+
+如果需要一次停止当前用户启动的全部 ROS1 节点、`roslaunch`、`roscore`、RViz 等
+ROS 相关进程，可在确认无人机已经落地、退出 `OFFBOARD` 并上锁后执行：
+
+```bash
+cd ~/match_ws
+bash shfiles/stop_all_ros.sh
+```
+
+该脚本先执行 `rosnode kill -a`，再清理残留启动进程；默认同时关闭本仓库六分屏入口
+打开的 Terminator 窗口，但不会执行降落或上锁。若仍有残留进程，可在确认安全后使用：
+
+```bash
+bash shfiles/stop_all_ros.sh --force
+```
+
+执行前只查看候选进程、不发送信号：
+
+```bash
+bash shfiles/stop_all_ros.sh --dry-run
+```
