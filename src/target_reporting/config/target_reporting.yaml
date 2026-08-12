@@ -19,9 +19,6 @@ record_root: "~/target_reports"
 # 检测器自身负责时间稳定/真实性确认；上报层只做空间去重，不再额外累计帧数。
 confirm_hits: 1
 dedup_distance_m: 0.30
-# 比赛仅设置一个颜色标签。一个任务中首次正式确认后，后续颜色候选仍可在
-# 本机观察，但不再登记或上传成第二个颜色目标。
-max_confirmed_color_targets: 1
 # 证据图必须与确认点使用同一检测帧；不再使用前后 0.5 秒的旧图。
 image_match_tolerance_s: 0.03
 # 候选状态 stamp 与 PointStamped 的允许配对误差。

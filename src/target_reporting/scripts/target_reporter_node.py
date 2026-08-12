@@ -65,9 +65,6 @@ class TargetReporterNode:
         self.tracker = CandidateTracker(
             rospy.get_param("~dedup_distance_m", 0.30), rospy.get_param("~confirm_hits", 1)
         )
-        self.max_confirmed_color_targets = max(
-            1, int(rospy.get_param("~max_confirmed_color_targets", 1))
-        )
         self.images = TimestampedImageCache(rospy.get_param("~image_cache_items", 40))
         host = rospy.get_param("~remote_host", "192.168.10.100")
         remote_port = rospy.get_param("~remote_port", 5000)
@@ -98,9 +95,6 @@ class TargetReporterNode:
         self.last_processed_pair = {}
         self.seq = 0
         existing = self.store.all_events()
-        self.confirmed_color_targets = sum(
-            1 for event in existing if event.get("target_type") == "color_tag"
-        )
         if existing:
             self.seq = max(int(event["seq"]) for event in existing)
         for event in self.store.pending_events():
@@ -308,21 +302,15 @@ class TargetReporterNode:
         result["detector_stable"] = detector_stable
         result["detector_confirmable"] = detector_confirmable
         with self.candidate_lock:
-            registration_available = not (
-                target_type == "color_tag"
-                and self.confirmed_color_targets >= self.max_confirmed_color_targets
-            )
             candidate, confirmed = self.tracker.update(
                 target_type,
                 result,
                 position,
-                allow_confirmation=detector_confirmable and registration_available,
+                allow_confirmation=detector_confirmable,
             )
             candidate_number = candidate["local_number"]
             candidate_hits = candidate["hits"]
             if confirmed:
-                if target_type == "color_tag":
-                    self.confirmed_color_targets += 1
                 self.seq += 1
                 event_seq = self.seq
             else:
