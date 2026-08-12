@@ -4,8 +4,7 @@
 #
 # 这个脚本故意不把 rosnode kill -a 作为唯一手段：ROS master 卡住或已经退出
 # 时，rosnode 命令可能长时间等待，导致脚本看起来“没有反应”。先用一个很短
-# 的超时尝试优雅通知，然后直接按进程特征 SIGKILL，行为与 /home/oem/scripts/
-# ros_stop_all.sh 保持一致。
+# 的超时尝试优雅通知，然后直接按进程特征 SIGKILL。
 
 set -u
 
@@ -135,8 +134,8 @@ if [[ "${DRY_RUN}" == false ]]; then
   fi
 fi
 
-# 参考 /home/oem/scripts/ros_stop_all.sh 的直接强制清理方式。第一组覆盖
-# ROS 启动器和 master；第二组覆盖 ROS 二进制、RViz 以及本工程的 Python 节点。
+# 第一组覆盖 ROS 启动器和 master；第二组覆盖 ROS 二进制、RViz 以及本工程的
+# Python 节点。工作空间路径由当前脚本位置和当前用户 HOME 自动确定。
 kill_pattern 'ROS 启动器和 master' \
   '(^|[[:space:]\/])(roslaunch|rosrun|roscore|rosmaster)([[:space:]]|$)|roslaunch\.parent|rosmaster\.master'
 kill_pattern '系统 ROS 节点与 RViz' \
@@ -144,11 +143,11 @@ kill_pattern '系统 ROS 节点与 RViz' \
 kill_pattern '视觉位姿回传' \
   '(^|[[:space:]\/])laser_mid360\.py([[:space:]]|$)'
 kill_pattern 'match_ws ROS 节点' \
-  '/home/oem/match_ws/(devel|build)/lib/|/home/oem/match_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
+  "${MATCH_WS}/(devel|build)/lib/|${MATCH_WS}/src/[^[:space:]]+\\.py([[:space:]]|$)"
 kill_pattern 'db_ws ROS 节点' \
-  '/home/oem/db_ws/(devel|build)/lib/|/home/oem/db_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
+  "${HOME}/db_ws/(devel|build)/lib/|${HOME}/db_ws/src/[^[:space:]]+\\.py([[:space:]]|$)"
 kill_pattern 'rh_ws ROS 节点' \
-  '/home/oem/rh_ws/(devel|build)/lib/|/home/oem/rh_ws/src/[^[:space:]]+\.py([[:space:]]|$)'
+  "${HOME}/rh_ws/(devel|build)/lib/|${HOME}/rh_ws/src/[^[:space:]]+\\.py([[:space:]]|$)"
 
 if [[ "${DRY_RUN}" == true ]]; then
   log 'dry-run 完成，未发送任何信号'

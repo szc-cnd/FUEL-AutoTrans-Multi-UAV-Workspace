@@ -39,7 +39,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 入口还会自动启动 `camera_body_tf.launch` 中的相机静态外参发布节点，读取：
 
 ```text
-/home/oem/handeye_calibration/body_camera_03.yaml
+$HOME/handeye_calibration/body_camera_03.yaml
 ```
 
 当前入口默认发布 `UAV0/body -> camera_link` 外参，与 FAST-LIO 的 `UAV0/body`

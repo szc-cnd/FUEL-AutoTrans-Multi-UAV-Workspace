@@ -122,7 +122,7 @@ python3 laser_mid360.py iris 0 fastlio off
 
 根据热成像相机是否接入，选择以下一种统一启动方式。两种方式都会启动 D435、
 D435 原始点云、颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
-相机外参 TF 使用 `/home/oem/handeye_calibration/body_camera_03.yaml`，不需要
+相机外参 TF 使用 `~/handeye_calibration/body_camera_03.yaml`，不需要
 再单独执行 `camera_body_tf.launch` 或 `target_reporting.launch`。
 统一入口默认将该外参发布为 `UAV0/body -> camera_link`，与当前 FAST-LIO 的
 `UAV0/body` 坐标系对齐；若实际 FAST-LIO 使用无前缀 `body`，可追加
@@ -255,11 +255,11 @@ C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\$missionId\
 使用标定文件：
 
 ```text
-/home/oem/handeye_calibration/body_camera_03.yaml
+~/handeye_calibration/body_camera_03.yaml
 ```
 
 不需要再单独启动 `camera_body_tf.launch` 或 `target_reporting.launch`。机载端
-配置文件为 `/home/oem/match_ws/src/target_reporting/config/target_reporting.yaml`。
+配置文件为 `~/match_ws/src/target_reporting/config/target_reporting.yaml`。
 
 配置文件应保持以下关键参数：
 

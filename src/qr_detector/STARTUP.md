@@ -37,19 +37,19 @@ bash ~/scripts/start_qr_detector.sh --detector
 ## 修改二维码参数
 
 ```bash
-gedit /home/oem/match_ws/src/qr_detector/config/qr_detector.yaml
+gedit ~/match_ws/src/qr_detector/config/qr_detector.yaml
 ```
 
 修改后重启 QR Detector pane：
 
 ```bash
-bash /home/oem/match_ws/src/qr_detector/scripts/start_qr_detector.sh --detector
+bash ~/match_ws/src/qr_detector/scripts/start_qr_detector.sh --detector
 ```
 
 Terminator 布局文件为：
 
 ```text
-/home/oem/match_ws/src/qr_detector/scripts/terminator_qr_detector.conf
+~/match_ws/src/qr_detector/scripts/terminator_qr_detector.conf
 ```
 
 当前参数为灰度预处理、`upscale_factor=1.5`、`qr_eps_x/y=0.15`、最短边

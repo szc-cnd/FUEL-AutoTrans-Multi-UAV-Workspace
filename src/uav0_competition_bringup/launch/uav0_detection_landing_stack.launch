@@ -29,7 +29,7 @@
   <arg name="camera_body_tf_parent_frame" default="UAV0/body" />
   <arg name="camera_body_tf_child_frame" default="camera_link" />
   <arg name="camera_body_tf_calibration_file"
-       default="/home/oem/handeye_calibration/body_camera_03.yaml" />
+       default="$(env HOME)/handeye_calibration/body_camera_03.yaml" />
   <arg name="down_camera_device"
        default="/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0" />
   <arg name="down_camera_info_url"
