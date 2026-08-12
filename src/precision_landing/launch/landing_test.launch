@@ -1,6 +1,7 @@
 <launch>
-  <arg name="allow_arming" default="true"/>
-  <arg name="auto_start" default="true"/>
+  <!-- 安全默认值：比赛流程禁止测试节点自行解锁、起飞和悬停。 -->
+  <arg name="allow_arming" default="false"/>
+  <arg name="auto_start" default="false"/>
   <arg name="auto_start_delay_sec" default="5.0"/>
   <!-- 2.05 m target with 0.05 m tolerance prevents handoff below 2.00 m. -->
   <arg name="takeoff_height_m" default="2.05"/>
