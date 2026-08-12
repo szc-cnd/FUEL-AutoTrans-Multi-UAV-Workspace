@@ -362,12 +362,8 @@ cd ~/match_ws
 bash shfiles/stop_all_ros.sh
 ```
 
-该脚本先执行 `rosnode kill -a`，再清理残留启动进程；默认同时关闭本仓库六分屏入口
-打开的 Terminator 窗口，但不会执行降落或上锁。若仍有残留进程，可在确认安全后使用：
-
-```bash
-bash shfiles/stop_all_ros.sh --force
-```
+该脚本先执行 `rosnode kill -a`，再清理残留启动进程，并自动对仍未退出的进程发送
+`SIGKILL`；默认同时关闭本仓库六分屏入口打开的 Terminator 窗口，但不会执行降落或上锁。
 
 执行前只查看候选进程、不发送信号：
 

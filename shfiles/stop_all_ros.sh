@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 停止当前用户启动的全部 ROS1 节点及 ROS 启动器。
+# 强制停止当前用户启动的全部 ROS1 节点及 ROS 启动器。
 # 使用前请确认无人机已经落地、退出 OFFBOARD、上锁；本脚本不会执行降落。
 
 set -o pipefail
@@ -8,7 +8,6 @@ set -o pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SETUP="${STOP_ALL_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
-FORCE=false
 DRY_RUN=false
 KEEP_TERMINATOR=false
 TARGET_PIDS=()
@@ -19,12 +18,12 @@ usage() {
   bash shfiles/stop_all_ros.sh [选项]
 
 作用：
-  先通过 rosnode kill -a 优雅关闭当前 ROS master 中的全部节点，
+  先通过 rosnode kill -a 请求当前 ROS master 中的全部节点退出，
   再清理当前用户残留的 roslaunch、roscore、rosmaster、rosrun、RViz
-  等 ROS 启动进程。默认也会关闭本仓库六分屏入口打开的 Terminator 窗口。
+  等 ROS 启动进程；等待后仍存在的进程默认直接发送 SIGKILL。
+  默认也会关闭本仓库六分屏入口打开的 Terminator 窗口。
 
 选项：
-  --force             等待后仍未退出的目标进程发送 SIGKILL
   --dry-run           只显示将要处理的进程，不发送任何信号
   --keep-terminator   不关闭 start_uav0_first_six_terminator.sh 打开的窗口
   -h, --help          显示帮助
@@ -145,10 +144,6 @@ close_uav0_terminator() {
 
 while (($# > 0)); do
   case "$1" in
-    --force)
-      FORCE=true
-      shift
-      ;;
     --dry-run)
       DRY_RUN=true
       shift
@@ -203,19 +198,8 @@ collect_ros_launcher_pids
 signal_targets INT
 sleep 3
 signal_targets TERM
-
-if [[ "${FORCE}" == true ]]; then
-  sleep 2
-  signal_targets KILL
-else
-  remove_exited_pids
-  if [[ "${#TARGET_PIDS[@]}" -gt 0 ]]; then
-    log '仍有进程未退出；如确认安全，可重新执行并加 --force'
-    for pid in "${TARGET_PIDS[@]}"; do
-      log "未退出：$(describe_pid "${pid}")"
-    done
-  fi
-fi
+sleep 2
+signal_targets KILL
 
 remove_exited_pids
 if [[ "${#TARGET_PIDS[@]}" -eq 0 ]]; then
