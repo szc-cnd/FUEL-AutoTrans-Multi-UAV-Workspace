@@ -55,11 +55,12 @@ colors:
   green:
     draw_bgr: [0, 255, 0]
     ranges:
-      - lower: [36, 28, 85]
-        upper: [88, 255, 255]
+      # 现场图像中的网格/墙面会落入低饱和绿区；颜色标签应更鲜艳。
+      - lower: [38, 55, 90]
+        upper: [86, 255, 255]
     max_mean_hue: 82
-    min_mean_saturation: 35
-    min_mean_value: 95
+    min_mean_saturation: 65
+    min_mean_value: 100
     area_min: 800
     min_real_width: 0.07
     min_real_height: 0.07
@@ -82,12 +83,13 @@ colors:
 
 area_min: 900
 area_max_ratio: 0.10
-aspect_ratio_min: 0.30
-aspect_ratio_max: 3.5
+aspect_ratio_min: 0.45
+aspect_ratio_max: 2.5
 fill_ratio_min: 0.40
 
 min_extent: 0.40
-min_solidity: 0.0
+# 颜色标签应是紧凑目标，排除网格、树叶等凹凸碎片。
+min_solidity: 0.65
 
 max_bbox_width_ratio: 0.80
 max_bbox_height_ratio: 0.80
@@ -108,12 +110,12 @@ min_real_height: 0.07
 max_real_width: 0.55
 max_real_height: 0.55
 
-score_threshold: 0.60
+score_threshold: 0.72
 switch_score_margin: 0.18
 lost_keep_frames: 8
 
-stable_window: 8
-stable_min_count: 5
+stable_window: 12
+stable_min_count: 8
 max_pixel_jump: 50
 max_depth_jump: 0.25
 
