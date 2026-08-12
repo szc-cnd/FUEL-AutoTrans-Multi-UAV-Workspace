@@ -85,12 +85,12 @@ def _image_bbox(value):
 
 
 def draw_detection_overlay(image, event):
-    """Draw the confirmed detector geometry on the evidence image.
+    """Legacy helper for explicit geometry overlays.
 
-    Detector debug images are intentionally allowed to show raw candidates,
-    but their own temporal filters may still be false when the reporting
-    tracker confirms a target.  Drawing from the status geometry here keeps
-    the remote evidence image tied to the exact confirmed observation.
+    The normal evidence path deliberately does not call this function.  Each
+    detector already draws its own color/shape-specific box, which is more
+    informative than a second generic confirmation box.  Keep the helper for
+    compatibility with existing callers and unit tests.
     """
     import cv2
     import numpy as np
@@ -178,9 +178,10 @@ def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
         y += 24
-    # Draw last so a target close to the bottom edge is not hidden by the
-    # evidence text panel.
-    draw_detection_overlay(canvas, event)
+    # Keep the detector's original debug image untouched: color_tag_detector,
+    # qr_detector, and uvc_ubuntu each draw their own target-specific box.
+    # target_reporting only adds the bottom evidence information panel and
+    # does not redraw a generic orange confirmation box.
     ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     if not ok:
         raise ValueError("JPEG encoding failed")

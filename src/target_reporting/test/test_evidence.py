@@ -1,12 +1,14 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from target_reporting import evidence
 from target_reporting.evidence import draw_detection_overlay, evidence_overlay_layout
 
 
@@ -47,6 +49,24 @@ class EvidenceLayoutTests(unittest.TestCase):
         # Color labels use orange in BGR.
         self.assertGreater(int(image[20, 40, 2]), 100)
         self.assertGreater(int(image[20, 40, 1]), 50)
+
+    def test_evidence_jpeg_keeps_detector_image_without_redrawing(self):
+        image = np.zeros((240, 320, 3), dtype=np.uint8)
+        event = {
+            "target_type": "color_tag",
+            "drone_id": "uav0",
+            "target_id": "uav0-color_tag-001",
+            "timestamp": 1.0,
+            "result": {"color": "blue", "bbox": [20, 20, 60, 40]},
+            "position": {"x": 1.0, "y": 2.0, "z": 3.0},
+        }
+        with mock.patch.object(
+            evidence,
+            "draw_detection_overlay",
+            side_effect=AssertionError("evidence path must not redraw a box"),
+        ):
+            jpeg = evidence.build_evidence_jpeg(image, event)
+        self.assertTrue(jpeg.startswith(b"\xff\xd8"))
 
 
 if __name__ == "__main__":
