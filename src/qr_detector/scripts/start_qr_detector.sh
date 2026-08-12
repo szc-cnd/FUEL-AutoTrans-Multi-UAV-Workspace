@@ -6,14 +6,16 @@
 set -u
 set -o pipefail
 
-DB_WS="${QR_DETECTOR_DB_WS:-/home/asus/db_ws}"
 ROS_SETUP="/opt/ros/noetic/setup.bash"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+# 默认跟随当前脚本所在的工作空间；保留旧环境变量作为兼容覆盖入口。
+DB_WS="${QR_DETECTOR_WS:-${QR_DETECTOR_DB_WS:-${WORKSPACE_ROOT}}}"
 MASTER_WAIT_SEC="${QR_MASTER_WAIT_SEC:-20}"
 CAMERA_WAIT_SEC="${QR_CAMERA_WAIT_SEC:-30}"
 DETECTOR_WAIT_SEC="${QR_DETECTOR_WAIT_SEC:-20}"
 LOCK_FILE="${QR_DETECTOR_LOCK_FILE:-/tmp/qr_detector_start.lock}"
-TERMINATOR_CONFIG_DEFAULT="${QR_DETECTOR_TERMINATOR_CONFIG:-/home/asus/scripts/terminator_qr_detector.conf}"
+TERMINATOR_CONFIG_DEFAULT="${QR_DETECTOR_TERMINATOR_CONFIG:-${SCRIPT_DIR}/terminator_qr_detector.conf}"
 
 log() {
   printf '[qr_detector_start] %s\n' "$*"
@@ -143,7 +145,7 @@ find_terminator_config() {
   for candidate in \
     "$TERMINATOR_CONFIG_DEFAULT" \
     "$SCRIPT_DIR/terminator_qr_detector.conf" \
-    "$DB_WS/src/qr_detector/config/terminator_qr_detector.conf"; do
+    "$DB_WS/src/qr_detector/scripts/terminator_qr_detector.conf"; do
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return 0

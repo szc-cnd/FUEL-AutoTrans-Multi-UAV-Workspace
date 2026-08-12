@@ -17,6 +17,7 @@ ArUco 码检测器。
 - 发布 JSON 检测状态、`PoseStamped` 位姿和调试图像。
 - 支持连续多帧确认、短时间丢失保持和 EMA 位置滤波。
 - 支持保存检测失败帧，便于后续采集数据训练 YOLO 兜底模型。
+- 原始未确认候选不再单独发布或绘制，只有连续确认后的结果才发布到稳定结果话题，减少误检进入上报链路。
 
 ## 编译
 
@@ -62,8 +63,15 @@ roslaunch qr_detector qr_detector.launch
 - `depth_topic`：对齐到彩色图的深度图话题。
 - `camera_info_topic`：彩色相机内参话题。
 - `depth_window_size`：中心点附近取深度中位数的窗口大小，默认 `11`。
-- `min_area`：二维码四边形的最小像素面积。
-- `confirm_frames`：连续检测到多少帧后确认 `detected=true`，默认 `2`。
+- `min_area`：二维码四边形的最小像素面积，当前为 `100`。
+- `min_side_length`：二维码最短边像素阈值，当前为 `12`。
+- `max_side_ratio`：最长边与最短边比例上限，当前为 `8`。
+- `max_angle_cos`：角点直角约束阈值，当前为 `0.90`。
+- `qr_eps_x`、`qr_eps_y`：OpenCV QR 角点扫描容差，当前均为 `0.25`。
+- `preprocess_mode`：预处理方式，当前为 `gray`。
+- `upscale_factor`：检测前图像放大倍数，当前为 `1.5`。
+- `confirm_frames`：连续检测到多少帧后确认 `detected=true`，当前为 `3`。
+- `draw_raw_candidates`：是否绘制未确认候选，当前为 `false`。
 - `lost_hold_time`：短时间丢失后保留上一帧结果的时间，默认 `0.3` 秒。
 - `ema_alpha`：相机坐标 `x,y,z` 的 EMA 滤波系数。
 - `save_failed_frame`：是否保存检测失败帧，默认 `false`。

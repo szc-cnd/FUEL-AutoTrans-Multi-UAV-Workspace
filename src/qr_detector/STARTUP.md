@@ -37,17 +37,22 @@ bash ~/scripts/start_qr_detector.sh --detector
 ## 修改二维码参数
 
 ```bash
-gedit ~/db_ws/src/qr_detector/config/qr_detector.yaml
+gedit /home/oem/match_ws/src/qr_detector/config/qr_detector.yaml
 ```
 
 修改后重启 QR Detector pane：
 
 ```bash
-bash ~/scripts/start_qr_detector.sh --detector
+bash /home/oem/match_ws/src/qr_detector/scripts/start_qr_detector.sh --detector
 ```
 
 Terminator 布局文件为：
 
 ```text
-/home/asus/scripts/terminator_qr_detector.conf
+/home/oem/match_ws/src/qr_detector/scripts/terminator_qr_detector.conf
 ```
+
+当前参数为灰度预处理、`upscale_factor=1.5`、`qr_eps_x/y=0.25`、最短边
+`12px`、边长比例上限 `8`、连续 `3` 帧确认，并关闭未确认候选框。未确认
+候选不会单独发布；稳定结果仍使用 `/UAV0/vision/qr_detected` 和
+`/UAV0/vision/qr_pose_camera`。

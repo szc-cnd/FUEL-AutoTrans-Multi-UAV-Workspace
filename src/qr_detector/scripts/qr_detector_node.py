@@ -42,22 +42,22 @@ class QRDetectorNode(object):
         self.opencv_num_threads = int(rospy.get_param("~opencv_num_threads", 2))
         self.publish_debug_image = bool(rospy.get_param("~publish_debug_image", True))
         self.depth_window_size = int(rospy.get_param("~depth_window_size", 11))
-        self.min_area = float(rospy.get_param("~min_area", 200.0))
-        self.min_side_length = float(rospy.get_param("~min_side_length", 18.0))
-        self.max_side_ratio = float(rospy.get_param("~max_side_ratio", 5.0))
-        self.max_angle_cos = float(rospy.get_param("~max_angle_cos", 0.75))
-        self.qr_eps_x = float(rospy.get_param("~qr_eps_x", 0.35))
-        self.qr_eps_y = float(rospy.get_param("~qr_eps_y", 0.35))
+        self.min_area = float(rospy.get_param("~min_area", 100.0))
+        self.min_side_length = float(rospy.get_param("~min_side_length", 12.0))
+        self.max_side_ratio = float(rospy.get_param("~max_side_ratio", 8.0))
+        self.max_angle_cos = float(rospy.get_param("~max_angle_cos", 0.90))
+        self.qr_eps_x = float(rospy.get_param("~qr_eps_x", 0.25))
+        self.qr_eps_y = float(rospy.get_param("~qr_eps_y", 0.25))
         self.depth_min = float(rospy.get_param("~depth_min", 0.15))
         self.depth_max = float(rospy.get_param("~depth_max", 8.0))
-        self.preprocess_mode = rospy.get_param("~preprocess_mode", "sharpen")
+        self.preprocess_mode = rospy.get_param("~preprocess_mode", "gray")
         self.upscale_factor = float(rospy.get_param("~upscale_factor", 1.5))
         self.enable_preprocess_fallbacks = bool(
             rospy.get_param("~enable_preprocess_fallbacks", False)
         )
         self.decode_qr_data = bool(rospy.get_param("~decode_qr_data", False))
         self.draw_raw_candidates = bool(rospy.get_param("~draw_raw_candidates", False))
-        self.confirm_frames = int(rospy.get_param("~confirm_frames", 2))
+        self.confirm_frames = int(rospy.get_param("~confirm_frames", 3))
         self.lost_hold_time = float(rospy.get_param("~lost_hold_time", 0.3))
         self.ema_alpha = float(rospy.get_param("~ema_alpha", 0.35))
 
@@ -95,24 +95,8 @@ class QRDetectorNode(object):
         self.pose_pub = rospy.Publisher(
             "/UAV0/vision/qr_pose_camera", PoseStamped, queue_size=1
         )
-        self.candidate_pose_pub = rospy.Publisher(
-            rospy.get_param(
-                "~candidate_pose_topic",
-                "/UAV0/vision/qr_candidate_pose_camera",
-            ),
-            PoseStamped,
-            queue_size=1,
-        )
         self.detected_pub = rospy.Publisher(
             "/UAV0/vision/qr_detected", String, queue_size=1
-        )
-        self.candidate_detected_pub = rospy.Publisher(
-            rospy.get_param(
-                "~candidate_detected_topic",
-                "/UAV0/vision/qr_candidate_detected",
-            ),
-            String,
-            queue_size=1,
         )
         self.debug_pub = rospy.Publisher(
             "/UAV0/vision/qr_debug_image", Image, queue_size=1
@@ -180,11 +164,6 @@ class QRDetectorNode(object):
 
         result = self.build_result(raw_detection, image_msg.header)
         confirmed = raw_valid and self.consecutive_detect_count >= self.confirm_frames
-
-        # Publish a fresh geometric candidate as soon as QR corners and depth
-        # are valid. The existing pose/status topics remain confirmation-only.
-        if raw_valid and result.get("z") is not None:
-            self.publish_candidate(result, image_msg.header, confirmed)
 
         if confirmed:
             self.last_confirmed_result = result
@@ -333,7 +312,17 @@ class QRDetectorNode(object):
         if points is None:
             return None
 
-        pts = np.asarray(points, dtype=np.float32)
+        # OpenCV normally returns an ndarray, while older detector adapters can
+        # return the published JSON form [{"u": ..., "v": ...}]. Normalize both
+        # forms before reshape so a dictionary-shaped corner list cannot crash
+        # the image callback.
+        try:
+            if isinstance(points, (list, tuple)) and points:
+                if isinstance(points[0], dict):
+                    points = [[point["u"], point["v"]] for point in points]
+            pts = np.asarray(points, dtype=np.float32)
+        except (KeyError, TypeError, ValueError):
+            return None
         if pts.size < 8:
             return None
 
@@ -542,40 +531,6 @@ class QRDetectorNode(object):
         pose_msg.pose.position.z = float(result["z"])
         pose_msg.pose.orientation.w = 1.0
         self.pose_pub.publish(pose_msg)
-
-    def publish_candidate(self, result, header, source_confirmed):
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = header.stamp
-        pose_msg.header.frame_id = self.camera_frame_id or header.frame_id
-        pose_msg.pose.position.x = float(result["x"])
-        pose_msg.pose.position.y = float(result["y"])
-        pose_msg.pose.position.z = float(result["z"])
-        pose_msg.pose.orientation.w = 1.0
-        self.candidate_pose_pub.publish(pose_msg)
-
-        status = {
-            "detected": True,
-            "candidate": True,
-            "stable": bool(source_confirmed),
-            "held": False,
-            "data": result.get("data", ""),
-            "points": result.get("points", []),
-            "center_u": self.round_or_none(result.get("center_u"), 2),
-            "center_v": self.round_or_none(result.get("center_v"), 2),
-            "x": self.round_or_none(result.get("x"), 4),
-            "y": self.round_or_none(result.get("y"), 4),
-            "z": self.round_or_none(result.get("z"), 4),
-            "method": result.get("method", "opencv_qrcode_detector"),
-            "area": self.round_or_none(result.get("area"), 1),
-            "side_px": self.round_or_none(result.get("side_px"), 1),
-            "preprocess": result.get("preprocess"),
-            "reason": "raw_candidate",
-        }
-        if source_confirmed:
-            status["reason"] = "stable_candidate"
-        self.candidate_detected_pub.publish(
-            String(data=json.dumps(status, ensure_ascii=False))
-        )
 
     def publish_status(self, result, detected, reason):
         status = {
