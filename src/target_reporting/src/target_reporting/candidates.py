@@ -31,13 +31,26 @@ class CandidateTracker:
 
     def update(self, target_type, result, position, allow_confirmation=True):
         key = self._result_key(result)
+        qr_content = ""
+        if target_type == "qr_code":
+            qr_content = str(result.get("content", "") or "").strip()
         best = None
         best_distance = None
         for item in self._items:
-            if item["target_type"] != target_type or item["result_key"] != key:
+            if item["target_type"] != target_type:
+                continue
+            same_decoded_qr = bool(
+                qr_content
+                and item.get("qr_content", "") == qr_content
+            )
+            if item["result_key"] != key and not same_decoded_qr:
                 continue
             distance = math.sqrt(sum((float(position[a]) - item["position"][a]) ** 2 for a in ("x", "y", "z")))
-            if distance <= self.distance_m and (best_distance is None or distance < best_distance):
+            # A non-empty decoded QR payload is a stronger identity than its
+            # drifting world coordinate.  Once registered, the same payload
+            # must not be uploaded again after a FAST-LIO/TF position jump.
+            within_identity_gate = same_decoded_qr or distance <= self.distance_m
+            if within_identity_gate and (best_distance is None or distance < best_distance):
                 best, best_distance = item, distance
         if best is None:
             number = self._next.get(target_type, 0) + 1
@@ -45,6 +58,7 @@ class CandidateTracker:
             best = {
                 "target_type": target_type,
                 "result_key": key,
+                "qr_content": qr_content,
                 "position": dict(position),
                 "hits": 0,
                 "reported": False,

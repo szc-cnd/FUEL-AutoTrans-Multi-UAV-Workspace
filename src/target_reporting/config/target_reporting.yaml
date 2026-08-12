@@ -18,6 +18,7 @@ image_port: 5001
 record_root: "~/target_reports"
 # 检测器自身负责时间稳定/真实性确认；上报层只做空间去重，不再额外累计帧数。
 confirm_hits: 1
+# 非空二维码内容优先作为目标身份；相同内容即使定位漂移超过本距离也不会重复上报。
 dedup_distance_m: 0.30
 # 证据图必须与确认点使用同一检测帧；不再使用前后 0.5 秒的旧图。
 image_match_tolerance_s: 0.03

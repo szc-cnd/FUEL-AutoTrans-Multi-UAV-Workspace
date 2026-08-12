@@ -167,7 +167,7 @@ roslaunch target_reporting remote_server.launch
 `event_acks.jsonl` 和 `image_acks.jsonl` 只补发尚未确认的最终 JSON 和图片。若需要手动指定编号，
 可在机载端启动时传入 `mission_id:=final_20260811_01`，Windows 端的 `--mission-id` 使用完全相同的值。
 
-同一目标类型可以存在多个空间候选。相距超过 `dedup_distance_m` 的后续真目标会获得新的 `target_id`，不会被先前稳定误检阻挡。ACK重传保持相同 `seq`，远程端只保存一次。
+同一目标类型可以存在多个空间候选。相距超过 `dedup_distance_m` 的后续真目标会获得新的 `target_id`，不会被先前稳定误检阻挡。对于解码内容非空的二维码，内容优先作为目标身份：相同内容即使因定位漂移超过空间阈值也只上报一次，不同内容仍分别登记。ACK重传保持相同 `seq`，远程端只保存一次。
 
 ## 真机测试清单
 

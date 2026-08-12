@@ -137,6 +137,34 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(confirmed)
         self.assertEqual(3, candidate["hits"])
 
+    def test_decoded_qr_content_prevents_duplicate_after_position_drift(self):
+        tracker = CandidateTracker(distance_m=0.3, confirm_hits=1)
+        first, first_confirmed = tracker.update(
+            "qr_code", {"content": "AR03"},
+            {"x": 1.0, "y": 0.0, "z": 1.0},
+        )
+        repeated, repeated_confirmed = tracker.update(
+            "qr_code", {"content": "AR03"},
+            {"x": 2.0, "y": 0.0, "z": 1.0},
+        )
+        self.assertTrue(first_confirmed)
+        self.assertFalse(repeated_confirmed)
+        self.assertEqual(first["local_number"], repeated["local_number"])
+
+    def test_different_qr_content_remains_a_separate_target(self):
+        tracker = CandidateTracker(distance_m=0.3, confirm_hits=1)
+        first, first_confirmed = tracker.update(
+            "qr_code", {"content": "AR03"},
+            {"x": 1.0, "y": 0.0, "z": 1.0},
+        )
+        second, second_confirmed = tracker.update(
+            "qr_code", {"content": "AR04"},
+            {"x": 1.1, "y": 0.0, "z": 1.0},
+        )
+        self.assertTrue(first_confirmed)
+        self.assertTrue(second_confirmed)
+        self.assertNotEqual(first["local_number"], second["local_number"])
+
     def test_qr_held_result_is_not_reportable(self):
         self.assertIsNone(parse_qr_status(
             '{"detected":true,"held":true,"data":""}'
