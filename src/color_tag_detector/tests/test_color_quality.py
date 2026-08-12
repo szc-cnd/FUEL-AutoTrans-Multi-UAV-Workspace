@@ -38,6 +38,46 @@ class ColorQualityTests(unittest.TestCase):
         purity = ColorTagDetector.contour_color_purity(mask, contour)
         self.assertLess(purity, 0.78)
 
+    def test_rectangle_scores_higher_than_round_object(self):
+        rectangle = np.asarray(
+            [[[10, 10]], [[80, 10]], [[80, 90]], [[10, 90]]], dtype=np.int32
+        )
+        angles = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
+        rounded = np.asarray(
+            [
+                [[int(round(50 + 30 * np.cos(a))), int(round(50 + 30 * np.sin(a)))]]
+                for a in angles
+            ],
+            dtype=np.int32,
+        )
+        self.assertGreater(
+            ColorTagDetector.contour_rectangularity(rectangle), 0.95
+        )
+        self.assertLess(ColorTagDetector.contour_rectangularity(rounded), 0.84)
+
+    def test_surface_plane_residual_rejects_curved_depth(self):
+        detector = ColorTagDetector.__new__(ColorTagDetector)
+        detector.surface_depth_max_samples = 2500
+        detector.depth_min = 0.3
+        detector.depth_max = 5.0
+        yy, xx = np.mgrid[0:100, 0:100]
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        contour = np.asarray(
+            [[[15, 15]], [[85, 15]], [[85, 85]], [[15, 85]]], dtype=np.int32
+        )
+        cv2.drawContours(mask, [contour], -1, 255, thickness=-1)
+
+        planar = (1.2 + 0.001 * xx + 0.0015 * yy).astype(np.float32)
+        curved = (planar + 0.00025 * (xx - 50.0) ** 2).astype(np.float32)
+        plane_stats = detector.surface_depth_plane_stats(
+            planar, "32FC1", mask, contour
+        )
+        curve_stats = detector.surface_depth_plane_stats(
+            curved, "32FC1", mask, contour
+        )
+        self.assertLess(plane_stats["plane_residual_std"], 0.001)
+        self.assertGreater(curve_stats["plane_residual_std"], 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

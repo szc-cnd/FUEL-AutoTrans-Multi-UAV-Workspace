@@ -135,6 +135,23 @@ class ColorTagDetector(object):
         self.stable_min_count = int(rospy.get_param("~stable_min_count", 8))
         self.max_pixel_jump = float(rospy.get_param("~max_pixel_jump", 40.0))
         self.max_depth_jump = float(rospy.get_param("~max_depth_jump", 0.20))
+        # Formal-report quality gates. Distant or non-label-like regions still
+        # remain visible as local candidates, but cannot be uploaded.
+        self.confirmation_depth_max = float(
+            rospy.get_param("~confirmation_depth_max", 2.5)
+        )
+        self.min_rectangularity = float(
+            rospy.get_param("~min_rectangularity", 0.84)
+        )
+        self.min_surface_depth_valid_ratio = float(
+            rospy.get_param("~min_surface_depth_valid_ratio", 0.60)
+        )
+        self.max_surface_plane_residual_std = float(
+            rospy.get_param("~max_surface_plane_residual_std", 0.05)
+        )
+        self.surface_depth_max_samples = max(
+            100, int(rospy.get_param("~surface_depth_max_samples", 2500))
+        )
 
         # Morphology is deliberately configurable because HSV masks often need
         # quick venue-side tuning when illumination changes.
@@ -427,6 +444,10 @@ class ColorTagDetector(object):
                 color_cfg.get("min_color_purity", self.min_color_purity)
             )
             color_purity = self.contour_color_purity(mask, contour)
+            min_rectangularity = float(
+                color_cfg.get("min_rectangularity", self.min_rectangularity)
+            )
+            rectangularity = self.contour_rectangularity(contour)
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
             min_mean_h = color_cfg.get("min_mean_hue", None)
@@ -436,6 +457,9 @@ class ColorTagDetector(object):
 
             depth, valid_ratio, depth_std, valid_count, total_count = self.depth_from_roi(
                 depth_raw, depth_encoding, u, v, mask
+            )
+            surface_depth = self.surface_depth_plane_stats(
+                depth_raw, depth_encoding, mask, contour
             )
 
             real_width = None
@@ -511,6 +535,35 @@ class ColorTagDetector(object):
 
             passed_filter = len(reject_reasons) == 0
 
+            confirmation_reasons = []
+            confirmation_depth_max = float(
+                color_cfg.get("confirmation_depth_max", self.confirmation_depth_max)
+            )
+            min_surface_valid = float(
+                color_cfg.get(
+                    "min_surface_depth_valid_ratio",
+                    self.min_surface_depth_valid_ratio,
+                )
+            )
+            max_plane_residual = float(
+                color_cfg.get(
+                    "max_surface_plane_residual_std",
+                    self.max_surface_plane_residual_std,
+                )
+            )
+            if depth is None or depth > confirmation_depth_max:
+                confirmation_reasons.append("confirmation_distance")
+            if rectangularity < min_rectangularity:
+                confirmation_reasons.append("rectangularity")
+            if surface_depth["valid_ratio"] < min_surface_valid:
+                confirmation_reasons.append("surface_depth_ratio")
+            if (
+                surface_depth["plane_residual_std"] is None
+                or surface_depth["plane_residual_std"] > max_plane_residual
+            ):
+                confirmation_reasons.append("surface_not_planar")
+            confirmation_quality = passed_filter and not confirmation_reasons
+
             purity_score = min(max(color_purity, 0.0), 1.0)
             # Candidate scoring is intentionally multi-factor, not "largest blob wins".
             # Color purity has a strong weight because it distinguishes a
@@ -558,6 +611,13 @@ class ColorTagDetector(object):
                     "extent": fill_ratio,
                     "solidity": solidity,
                     "color_purity": color_purity,
+                    "rectangularity": rectangularity,
+                    "surface_depth_valid_ratio": surface_depth["valid_ratio"],
+                    "surface_plane_residual_std": surface_depth[
+                        "plane_residual_std"
+                    ],
+                    "confirmation_quality": confirmation_quality,
+                    "confirmation_reasons": confirmation_reasons,
                     "real_width": real_width,
                     "real_height": real_height,
                     "center_distance_to_image_center": center_dist,
@@ -589,6 +649,67 @@ class ColorTagDetector(object):
             return 0.0
         color_roi = mask[y : y + h, x : x + w] > 0
         return float(np.count_nonzero(color_roi & inside)) / float(inside_count)
+
+    @staticmethod
+    def contour_rectangularity(contour):
+        """Contour occupancy of its minimum-area rectangle (rotation safe)."""
+        area = float(cv2.contourArea(contour))
+        if area <= 0.0:
+            return 0.0
+        (_center, size, _angle) = cv2.minAreaRect(contour)
+        rectangle_area = float(size[0]) * float(size[1])
+        if rectangle_area <= 1e-6:
+            return 0.0
+        return min(max(area / rectangle_area, 0.0), 1.0)
+
+    def surface_depth_plane_stats(self, depth_raw, depth_encoding, mask, contour):
+        """Fit a local depth plane to the complete colored contour surface."""
+        x, y, w, h = cv2.boundingRect(contour)
+        result = {"valid_ratio": 0.0, "plane_residual_std": None}
+        if w <= 0 or h <= 0:
+            return result
+
+        local_contour = contour - np.array([[[x, y]]], dtype=contour.dtype)
+        filled = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(filled, [local_contour], -1, 255, thickness=-1)
+        selected = (filled > 0) & (mask[y : y + h, x : x + w] > 0)
+        ys, xs = np.nonzero(selected)
+        total = int(xs.size)
+        if total < 6:
+            return result
+
+        if total > self.surface_depth_max_samples:
+            indices = np.linspace(
+                0, total - 1, self.surface_depth_max_samples, dtype=np.int32
+            )
+            xs = xs[indices]
+            ys = ys[indices]
+
+        samples = depth_raw[y + ys, x + xs]
+        depth_m = self.depth_samples_to_meters(samples, depth_encoding)
+        valid = np.isfinite(depth_m)
+        valid &= depth_m >= self.depth_min
+        valid &= depth_m <= self.depth_max
+        result["valid_ratio"] = float(np.count_nonzero(valid)) / float(len(valid))
+        if np.count_nonzero(valid) < 6:
+            return result
+
+        px = xs[valid].astype(np.float64)
+        py = ys[valid].astype(np.float64)
+        z = depth_m[valid].astype(np.float64)
+        px -= np.mean(px)
+        py -= np.mean(py)
+        design = np.column_stack((px, py, np.ones_like(px)))
+        coefficients, _residuals, _rank, _singular = np.linalg.lstsq(
+            design, z, rcond=None
+        )
+        residual = z - design.dot(coefficients)
+        residual -= np.median(residual)
+        # MAD is robust to a small number of aligned-depth holes/outliers.
+        result["plane_residual_std"] = float(
+            1.4826 * np.median(np.abs(residual))
+        )
+        return result
 
     def is_inside_detection_roi(self, u, v, image_w, image_h):
         x0 = image_w * max(0.0, min(self.roi_x_min_ratio, 1.0))
@@ -859,9 +980,10 @@ class ColorTagDetector(object):
 
         stable = False
         if best is not None:
-            stable = self.candidate_matches_stable_reference(
+            temporal_stable = self.candidate_matches_stable_reference(
                 best, stable_info.get(best["color"], {"stable": False})
             )
+            stable = temporal_stable and bool(best.get("confirmation_quality", False))
 
         if self.debug_draw_mode == 0:
             drawable_candidates = []
@@ -940,7 +1062,11 @@ class ColorTagDetector(object):
                 elif not self.has_camera_info():
                     lines.append("waiting camera_info")
             else:
-                lines.append("waiting for detector confirmation")
+                reasons = best.get("confirmation_reasons", [])
+                if reasons:
+                    lines.append("quality hold: " + ",".join(reasons))
+                else:
+                    lines.append("waiting for detector confirmation")
         else:
             lines.append("candidate:false stable:false")
             lines.append("waiting for candidate")
@@ -968,14 +1094,14 @@ class ColorTagDetector(object):
         cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
     def format_candidate_label(self, candidate):
-        return "{} s:{:.2f} p:{:.2f} z:{:.2f} w:{:.2f} h:{:.2f} std:{:.2f}".format(
+        return "{} s:{:.2f} p:{:.2f} r:{:.2f} z:{:.2f} w:{:.2f} h:{:.2f}".format(
             candidate["color"],
             candidate["final_score"],
             candidate["color_purity"],
+            candidate["rectangularity"],
             candidate["depth"] if candidate["depth"] is not None else -1.0,
             candidate["real_width"] if candidate["real_width"] is not None else -1.0,
             candidate["real_height"] if candidate["real_height"] is not None else -1.0,
-            candidate["depth_std"] if candidate["depth_std"] is not None else -1.0,
         )
 
     def publish_mask(self, mask, header):
@@ -1003,7 +1129,8 @@ class ColorTagDetector(object):
             return
 
         color_info = stable_info.get(best["color"], {"stable": False, "count": 0})
-        stable = self.candidate_matches_stable_reference(best, color_info)
+        temporal_stable = self.candidate_matches_stable_reference(best, color_info)
+        stable = temporal_stable and bool(best.get("confirmation_quality", False))
         point_msg = PointStamped()
         point_msg.header.stamp = header.stamp
         point_msg.header.frame_id = self.camera_frame_id or header.frame_id
@@ -1017,6 +1144,7 @@ class ColorTagDetector(object):
             "candidate": True,
             "stable": bool(stable),
             "confirmable": bool(stable),
+            "temporal_stable": bool(temporal_stable),
             "held": False,
             "color": best["color"],
             "u": int(round(best["u"])),
@@ -1026,6 +1154,13 @@ class ColorTagDetector(object):
             "point_camera": [round(float(value), 4) for value in point_out],
             "score": round(float(best["final_score"]), 3),
             "color_purity": round(float(best["color_purity"]), 3),
+            "rectangularity": round(float(best["rectangularity"]), 3),
+            "surface_plane_residual_std": (
+                round(float(best["surface_plane_residual_std"]), 4)
+                if best["surface_plane_residual_std"] is not None
+                else None
+            ),
+            "confirmation_reasons": list(best.get("confirmation_reasons", [])),
             "stable_count": int(color_info.get("count", 0)),
             "stable_window": int(self.stable_window),
             "stamp": header.stamp.to_sec() if header.stamp else None,
@@ -1056,13 +1191,21 @@ class ColorTagDetector(object):
             return
 
         color_info = stable_info.get(best["color"], {"stable": False, "count": 0})
-        stable = self.candidate_matches_stable_reference(best, color_info)
+        temporal_stable = self.candidate_matches_stable_reference(best, color_info)
+        stable = temporal_stable and bool(best.get("confirmation_quality", False))
         if not stable:
             self.publish_result_text(
                 {
                     "detected": False,
                     "stable": False,
-                    "reason": "not_stable_yet",
+                    "reason": (
+                        "quality_gate"
+                        if temporal_stable and best.get("confirmation_reasons")
+                        else "not_stable_yet"
+                    ),
+                    "confirmation_reasons": list(
+                        best.get("confirmation_reasons", [])
+                    ),
                     "best_color": best["color"],
                     "best_score": round(float(best["final_score"]), 3),
                     "stable_count": int(color_info.get("count", 0)),
@@ -1107,6 +1250,12 @@ class ColorTagDetector(object):
             "pixel_area": round(float(best["pixel_area"]), 1),
             "fill_ratio": round(float(best["fill_ratio"]), 3),
             "color_purity": round(float(best["color_purity"]), 3),
+            "rectangularity": round(float(best["rectangularity"]), 3),
+            "surface_plane_residual_std": (
+                round(float(best["surface_plane_residual_std"]), 4)
+                if best["surface_plane_residual_std"] is not None
+                else None
+            ),
             "stable_count": int(color_info["count"]),
             "stable_window": int(self.stable_window),
         }
