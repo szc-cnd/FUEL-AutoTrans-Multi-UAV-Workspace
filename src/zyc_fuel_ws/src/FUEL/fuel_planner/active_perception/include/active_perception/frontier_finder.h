@@ -57,6 +57,7 @@ public:
 
   void searchFrontiers();
   void computeFrontiersToVisit();
+  void clearFrontierHistory();
 
   void getFrontiers(vector<vector<Vector3d>>& clusters);
   void getDormantFrontiers(vector<vector<Vector3d>>& clusters);

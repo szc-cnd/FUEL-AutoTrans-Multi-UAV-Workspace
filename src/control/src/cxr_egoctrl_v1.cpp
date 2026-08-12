@@ -83,6 +83,8 @@ public:
 
     // 状态控制变量
     bool receive, get_now_pos;
+    bool ever_received_trajectory;
+    bool timeout_hold_latched;
     bool have_odom;
     bool planner_cmd_enabled;
     // 2026-07-13: 规划安全悬停与终点降落拥有高于普通轨迹的控制优先级。
@@ -97,6 +99,7 @@ public:
     double mavros_odom_max_horizontal_error, mavros_odom_max_vertical_error;
     double mavros_position_x, mavros_position_y, mavros_position_z, mavros_yaw;
     double safety_hold_x, safety_hold_y, safety_hold_z, safety_hold_yaw;
+    double timeout_hold_x, timeout_hold_y, timeout_hold_yaw;
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
     std::string odom_topic;
@@ -106,6 +109,7 @@ public:
     double traj_cmd_timeout; // 规划轨迹超时保护
     double planner_enable_height; // FAST-LIO z 高度接管门限
     double offboard_takeoff_height; // 未收到规划轨迹时的 OFFBOARD 起飞/悬停高度
+    double max_takeoff_speed_z; // 起飞阶段独立竖直速度上限
     ros::Time last_traj_cmd_time;
     ros::Time last_tf_stamp;
     double max_reverse_speed;
@@ -165,6 +169,8 @@ Ctrl::Ctrl()
 
     get_now_pos = false;
     receive = false;
+    ever_received_trajectory = false;
+    timeout_hold_latched = false;
     planner_cmd_enabled = false;
     safety_hold_active = false;
     safety_hold_position_latched = false;
@@ -177,20 +183,22 @@ Ctrl::Ctrl()
     pnh.param("mavros_odom_max_vertical_error", mavros_odom_max_vertical_error, 0.50);
     mavros_position_x = mavros_position_y = mavros_position_z = mavros_yaw = 0.0;
     safety_hold_x = safety_hold_y = safety_hold_z = safety_hold_yaw = 0.0;
+    timeout_hold_x = timeout_hold_y = timeout_hold_yaw = 0.0;
     safety_hold_uses_mavros_frame = false;
     landing_requested = false;
     have_odom = false;
     traj_cmd_timeout = 0.6;
     pnh.param("planner_enable_height", planner_enable_height, 0.5);
     pnh.param("offboard_takeoff_height", offboard_takeoff_height, 0.6);
+    pnh.param("max_takeoff_speed_z", max_takeoff_speed_z, 0.30);
     // 2026-07-08: 为了避免窄通道里重规划后突然大幅后退导致炸机，增加反向速度上限与速度斜率限制参数。
     pnh.param("max_reverse_speed", max_reverse_speed, 0.25);
     // 2026-07-27: 前后机水平加速度约束统一为1.0m/s^2；该斜率参数直接限制发送给PX4的速度指令变化率。
     pnh.param("vel_slew_rate_xy", vel_slew_rate_xy, 1.0);
     pnh.param("vel_slew_rate_z", vel_slew_rate_z, 1.0);
-    // 2026-07-27: 控制器默认水平速度上限与前机FUEL规划的0.5m/s一致，UAV0/UAV1共用同一安全上限。
-    pnh.param("max_cmd_speed_xy", max_cmd_speed_xy, 0.50);
-    pnh.param("max_cmd_speed_z", max_cmd_speed_z, 0.35);
+    // 起飞以外的规划轨迹统一限速0.2m/s；起飞爬升由max_takeoff_speed_z独立控制。
+    pnh.param("max_cmd_speed_xy", max_cmd_speed_xy, 0.20);
+    pnh.param("max_cmd_speed_z", max_cmd_speed_z, 0.20);
     // 2026-07-13: 加速度前馈同样限制到本次保守规划范围，避免柱边速度虽限幅但前馈仍瞬间推得过猛。
     pnh.param("max_cmd_acc_xy", max_cmd_acc_xy, 1.00);
     pnh.param("max_cmd_acc_z", max_cmd_acc_z, 0.80);
@@ -346,6 +354,8 @@ void Ctrl::twist_cb(const quadrotor_msgs::PositionCommand::ConstPtr& msg)
     ego_yaw_rate = ego.yaw_dot;
 
     receive = true;
+    ever_received_trajectory = true;
+    timeout_hold_latched = false;
     last_traj_cmd_time = ros::Time::now();
 }
 
@@ -531,23 +541,40 @@ void Ctrl::control(const ros::TimerEvent&)
         return;
     }
 
-    // 没有收到轨迹时保持起始水平位置并爬升/悬停。
+    // 首次收到轨迹前保持起始水平位置并爬升；飞行中轨迹中断时禁止返回起飞点。
     // 该 setpoint 从地面阶段就以 50Hz 发布，以满足 PX4 进入 OFFBOARD 前必须先收到
     // 连续 setpoint 流的要求；规划轨迹仍受 planner_cmd_enabled 高度门控保护。
     if (!receive)
     {
         const double hold_kp_xy = 1.0;
         const double takeoff_kp_z = 0.5;
-        current_goal.velocity.x = std::max(-0.20, std::min(0.20,
-            hold_kp_xy * (now_x - position_x)));
-        current_goal.velocity.y = std::max(-0.20, std::min(0.20,
-            hold_kp_xy * (now_y - position_y)));
-        current_goal.velocity.z = std::max(-max_cmd_speed_z, std::min(max_cmd_speed_z,
+        if (!ever_received_trajectory)
+        {
+            current_goal.velocity.x = std::max(-0.20, std::min(0.20,
+                hold_kp_xy * (now_x - position_x)));
+            current_goal.velocity.y = std::max(-0.20, std::min(0.20,
+                hold_kp_xy * (now_y - position_y)));
+        }
+        else
+        {
+            const double hold_speed_xy_max = 0.08;
+            double hold_vx = hold_kp_xy * (timeout_hold_x - position_x);
+            double hold_vy = hold_kp_xy * (timeout_hold_y - position_y);
+            const double hold_speed_xy = std::hypot(hold_vx, hold_vy);
+            if (hold_speed_xy > hold_speed_xy_max && hold_speed_xy > 1e-6)
+            {
+                hold_vx *= hold_speed_xy_max / hold_speed_xy;
+                hold_vy *= hold_speed_xy_max / hold_speed_xy;
+            }
+            current_goal.velocity.x = hold_vx;
+            current_goal.velocity.y = hold_vy;
+        }
+        current_goal.velocity.z = std::max(-max_takeoff_speed_z, std::min(max_takeoff_speed_z,
             takeoff_kp_z * (offboard_takeoff_height - position_z)));
         current_goal.acceleration_or_force.x = 0.0;
         current_goal.acceleration_or_force.y = 0.0;
         current_goal.acceleration_or_force.z = 0.0;
-        current_goal.yaw = now_yaw;
+        current_goal.yaw = ever_received_trajectory ? timeout_hold_yaw : now_yaw;
         local_pos_pub.publish(current_goal);
         last_cmd_vx = current_goal.velocity.x;
         last_cmd_vy = current_goal.velocity.y;
@@ -563,10 +590,14 @@ void Ctrl::control(const ros::TimerEvent&)
         const double traj_stale = (ros::Time::now() - last_traj_cmd_time).toSec();
         if (traj_stale > traj_cmd_timeout)
         {
+            timeout_hold_x = position_x;
+            timeout_hold_y = position_y;
+            timeout_hold_yaw = current_yaw;
+            timeout_hold_latched = true;
             receive = false;
             ROS_WARN_THROTTLE(1.0,
-                              "规划轨迹超时 %.2fs > %.2fs，停止跟踪并等待新轨迹",
-                              traj_stale, traj_cmd_timeout);
+                              "规划轨迹超时 %.2fs > %.2fs，锁存当前位置(%.2f,%.2f)等待新轨迹",
+                              traj_stale, traj_cmd_timeout, timeout_hold_x, timeout_hold_y);
             return;
         }
     }

@@ -1,5 +1,7 @@
 // 2026-07-13: 实现比赛第二阶段任务搜索、重复站点抑制、目标登记和多方向搜索恢复排序。
 #include <exploration_manager/task_search_manager.h>
+#include <exploration_manager/motion_direction_rules.h>
+#include <exploration_manager/frontier_clearance_policy.h>
 
 #include <std_msgs/String.h>
 #include <std_msgs/Bool.h>
@@ -39,8 +41,23 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/height_weight", height_weight_, 2.0);
   nh.param("mission/task_search/repeat_penalty", repeat_penalty_, 6.0);
   nh.param("mission/task_search/frontier_gain_weight", frontier_gain_weight_, 0.10);
+  nh.param("mission/task_search/clearance_reward_enabled",
+           clearance_reward_enabled_, true);
+  nh.param("mission/task_search/clearance_reward_start",
+           clearance_reward_start_, 0.30);
+  nh.param("mission/task_search/clearance_reward_full",
+           clearance_reward_full_, 0.60);
+  nh.param("mission/task_search/clearance_reward_max",
+           clearance_reward_max_, 5.0);
+  clearance_reward_start_ = std::max(0.0, clearance_reward_start_);
+  clearance_reward_full_ =
+      std::max(clearance_reward_start_ + 0.05, clearance_reward_full_);
+  clearance_reward_max_ = std::max(0.0, clearance_reward_max_);
   nh.param("mission/task_search/entry_forward_distance", entry_forward_distance_, 2.0);
   nh.param("mission/task_search/entry_forward_weight", entry_forward_weight_, 1.5);
+  nh.param("mission/task_search/forward_viewpoint_bonus", forward_viewpoint_bonus_, 5.0);
+  nh.param("mission/task_search/backward_viewpoint_penalty",
+           backward_viewpoint_penalty_, 5.0);
   // 2026-07-21: 单通道任务不能把单帧frontier耗尽当成死路；默认只接受前向/侧向候选。
   nh.param("mission/task_search/prefer_motion_forward", prefer_motion_forward_, true);
   nh.param("mission/task_search/allow_search_backtrack", allow_search_backtrack_, false);
@@ -50,11 +67,6 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/min_goal_hold_time", min_goal_hold_time_, 1.2);
   // 2026-07-14: 活动目标未到达且未失败时惩罚远距离换点，防止前机突然倒车撞向后机。
   nh.param("mission/task_search/goal_switch_weight", goal_switch_weight_, 1.2);
-  // 2026-07-21: FUEL会持久保存远处frontier；任务搜索层按已完成航迹走廊硬过滤，禁止为补旧图回头。
-  nh.param("mission/task_search/completed_route_exclusion_radius",
-           completed_route_exclusion_radius_, 0.90);
-  nh.param("mission/task_search/completed_route_recent_arc_length",
-           completed_route_recent_arc_length_, 2.00);
   nh.param("mission/task_search/failed_goal_radius", failed_goal_radius_, 0.55);
   nh.param("mission/task_search/failed_goal_cooldown", failed_goal_cooldown_, 2.0);
   nh.param("mission/task_search/inside_return_margin", inside_return_margin_, 0.10);
@@ -68,11 +80,11 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/recovery/turn_probe_step",
            recovery_turn_probe_step_, 0.10);
   nh.param("mission/task_search/recovery/turn_min_free_length",
-           recovery_turn_min_free_length_, 0.90);
+           recovery_turn_min_free_length_, 0.50);
   nh.param("mission/task_search/recovery/turn_min_free_gain",
-           recovery_turn_min_free_gain_, 0.30);
+           recovery_turn_min_free_gain_, 0.15);
   nh.param("mission/task_search/recovery/turn_min_angle_deg",
-           recovery_turn_min_angle_deg_, 45.0);
+           recovery_turn_min_angle_deg_, 30.0);
   nh.param("mission/task_search/recovery/turn_max_angle_deg",
            recovery_turn_max_angle_deg_, 120.0);
   nh.param("mission/task_search/recovery/turn_wall_min_half_width",
@@ -351,34 +363,9 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
   }
   if (visited_positions_.empty() ||
       (pos.head<2>() - visited_positions_.back().head<2>()).norm() >= visit_spacing_) {
-    if (!visited_positions_.empty()) {
-      Eigen::Vector2d segment = pos.head<2>() - visited_positions_.back().head<2>();
-      if (segment.norm() > 1e-3) {
-        segment.normalize();
-        if (!stable_progress_direction_valid_) {
-          stable_progress_direction_ = segment;
-          stable_progress_direction_valid_ = true;
-        } else {
-          const double dot = std::max(-1.0, std::min(
-              1.0, segment.dot(stable_progress_direction_.normalized())));
-          const double change_deg = std::acos(dot) * 180.0 / M_PI;
-          if (change_deg <= exit_progress_reverse_reject_deg_) {
-            // 大角度正常转弯需要更快跟随；小角度则低通滤波，避免定位抖动拖动门法向。
-            const double alpha = change_deg >= 60.0 ? 0.55 : 0.35;
-            const Eigen::Vector2d blended =
-                (1.0 - alpha) * stable_progress_direction_ + alpha * segment;
-            if (blended.norm() > 1e-3)
-              stable_progress_direction_ = blended.normalized();
-          } else {
-            ROS_WARN("[exit_mission] ignore reverse motion segment %.1fdeg while "
-                     "maintaining stable progress direction %.1fdeg.",
-                     change_deg,
-                     std::atan2(stable_progress_direction_.y(),
-                                stable_progress_direction_.x()) * 180.0 / M_PI);
-          }
-        }
-      }
-    }
+    // 实际位移方向不能重定义通道正方向。向右前方斜飞只是局部避障动作；若在这里
+    // 跟随里程计切线，恢复器会把斜向误当成新的“直行”，随后无法回到原通道轴线。
+    // stable_progress_direction_ 只在下方累计地图确认真实双墙拐弯后更新。
     visited_positions_.push_back(pos);
     while (static_cast<int>(visited_positions_.size()) > max_history_size_)
       visited_positions_.pop_front();
@@ -697,6 +684,31 @@ double TaskSearchManager::wrapYaw(double yaw) const {
   return yaw;
 }
 
+double TaskSearchManager::knownHorizontalClearance(
+    const Eigen::Vector3d& point) const {
+  if (!sdf_map_ || !sdf_map_->isInMap(point) ||
+      sdf_map_->getOccupancy(point) != SDFMap::FREE)
+    return 0.0;
+  constexpr int kDirections = 16;
+  const double step = std::max(0.05, sdf_map_->getResolution());
+  return frontier_clearance::minimumKnownRadialClearance(
+      step, clearance_reward_full_, kDirections,
+      [&](int direction, double distance) {
+        const double angle = 2.0 * M_PI * static_cast<double>(direction) /
+                             static_cast<double>(kDirections);
+        Eigen::Vector3d probe = point;
+        probe.x() += distance * std::cos(angle);
+        probe.y() += distance * std::sin(angle);
+        for (double z_offset : {-0.06, 0.0, 0.06}) {
+          probe.z() = point.z() + z_offset;
+          if (!sdf_map_->isInMap(probe) ||
+              sdf_map_->getOccupancy(probe) != SDFMap::FREE)
+            return false;
+        }
+        return true;
+      });
+}
+
 int TaskSearchManager::selectSearchCandidate(
     const std::vector<Eigen::Vector3d>& points, const std::vector<double>& yaws,
     const std::vector<std::vector<Eigen::Vector3d>>& frontiers,
@@ -708,24 +720,24 @@ int TaskSearchManager::selectSearchCandidate(
                                       : 0.0;
   const bool entry_forward_phase =
       corridor_frame_received_ && current_progress < entry_forward_distance_;
-  // 2026-07-16: 用真实走过的轨迹作为前向，避免FAST-LIO/控制航向暂未联动时仅靠cur_yaw误判前后。
-  Eigen::Vector2d motion_forward(std::cos(cur_yaw), std::sin(cur_yaw));
-  if (visited_positions_.size() >= 2) {
-    const Eigen::Vector2d recent_motion =
-        (visited_positions_.back() - visited_positions_[visited_positions_.size() - 2]).head<2>();
-    if (recent_motion.norm() > 0.15) motion_forward = recent_motion.normalized();
-  } else if (corridor_frame_received_) {
-    motion_forward = corridor_dir_.head<2>().normalized();
-  }
+  // frontier的前后语义与恢复器使用同一条持久通道轴线。机头转动和避障斜飞
+  // 都不能让候选排序跟着偏转；真实拐弯由累计地图确认后才更新该轴线。
+  Eigen::Vector2d motion_forward = stableProgressDirection();
+  if (motion_forward.norm() < 1e-3)
+    motion_forward = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
+  motion_forward.normalize();
   int best_idx = -1;
   int best_non_backward_idx = -1;
   int rejected_revisit = 0;
   int rejected_failed = 0;
   int rejected_door_return = 0;
   int rejected_exit_regression = 0;
-  int rejected_completed_route = 0;
   double best_score = std::numeric_limits<double>::infinity();
   double best_non_backward_score = std::numeric_limits<double>::infinity();
+  double best_clearance = 0.0;
+  double best_clearance_reward = 0.0;
+  double best_non_backward_clearance = 0.0;
+  double best_non_backward_clearance_reward = 0.0;
 
   // 2026-07-20: 终点未确认（或拓扑距离不足）时该保护完全关闭，下面原有的全体最优回退
   // 继续允许U形通道掉头；只有可信最终出口出现后才开始约束普通frontier。
@@ -776,19 +788,6 @@ int TaskSearchManager::selectSearchCandidate(
     const Eigen::Vector3d& point = points[i];
     if (goalTemporarilyBlocked(point)) {
       ++rejected_failed;
-      continue;
-    }
-
-    // 2026-07-21: 比赛任务允许FUEL提供前方未知边界，但不允许其持久历史frontier把飞机拉回
-    // 已完成通道。观点或其frontier中心只要落入旧航迹管、同时不属于最近航迹管，就永久失去资格。
-    Eigen::Vector3d frontier_center = point;
-    if (i < frontiers.size() && !frontiers[i].empty()) {
-      frontier_center.setZero();
-      for (const auto& cell : frontiers[i]) frontier_center += cell;
-      frontier_center /= static_cast<double>(frontiers[i].size());
-    }
-    if (belongsToCompletedRoute(point) || belongsToCompletedRoute(frontier_center)) {
-      ++rejected_completed_route;
       continue;
     }
 
@@ -851,9 +850,26 @@ int TaskSearchManager::selectSearchCandidate(
     const double height_cost = std::fabs(clampSearchHeight(point.z()) - cruise_height_);
     const double frontier_gain =
         i < frontiers.size() ? std::log1p(static_cast<double>(frontiers[i].size())) : 0.0;
+    const double clearance = clearance_reward_enabled_
+                                 ? knownHorizontalClearance(point)
+                                 : 0.0;
+    const double clearance_reward = clearance_reward_enabled_
+        ? frontier_clearance::clearanceReward(
+              clearance, clearance_reward_start_, clearance_reward_full_,
+              clearance_reward_max_)
+        : 0.0;
     double score = travel_weight_ * travel + yaw_weight_ * yaw_cost +
                    height_weight_ * height_cost - novelty_weight_ * std::min(2.0, novelty) -
-                   frontier_gain_weight_ * frontier_gain;
+                   frontier_gain_weight_ * frontier_gain - clearance_reward;
+    // 前向只作为软偏好：正前方获得完整加分，斜前方按投影加分，横向和后方不加分也不拒绝。
+    // 使用稳定通道方向而非瞬时机头角，避免避障转头时把合法横移误判成回头。
+    const Eigen::Vector2d candidate_delta = point.head<2>() - cur_pos.head<2>();
+    if (prefer_motion_forward_ && candidate_delta.norm() > 1e-3) {
+      const double forward_alignment =
+          candidate_delta.normalized().dot(motion_forward.normalized());
+      score += task_search::viewpointDirectionScoreAdjustment(
+          forward_alignment, forward_viewpoint_bonus_, backward_viewpoint_penalty_);
+    }
     // 2026-07-14: 仅对仍有效且尚未到达的活动目标施加连续性代价；失败目标已由
     // reportGoalFailure 失效，不会阻止规划器绕开真正不可达的位置。
     if (active_goal_valid_ && !goalTemporarilyBlocked(active_goal_) &&
@@ -872,23 +888,27 @@ int TaskSearchManager::selectSearchCandidate(
     if (score < best_score) {
       best_score = score;
       best_idx = static_cast<int>(i);
+      best_clearance = clearance;
+      best_clearance_reward = clearance_reward;
     }
-    const Eigen::Vector2d candidate_delta = point.head<2>() - cur_pos.head<2>();
     const bool is_backward =
         candidate_delta.norm() > 0.35 &&
         candidate_delta.normalized().dot(motion_forward) < backward_cos_threshold_;
     if (!is_backward && score < best_non_backward_score) {
       best_non_backward_score = score;
       best_non_backward_idx = static_cast<int>(i);
+      best_non_backward_clearance = clearance;
+      best_non_backward_clearance_reward = clearance_reward;
     }
   }
 
-  // 2026-07-21: U形通道应由连续的前向/左右90度站点通过，不能用一次135/180度回头代替。
-  // 没有非后向候选时返回-1，让FSM悬停等待地图/frontier刷新；只有显式打开故障回撤才选后方点。
+  // 后方候选仍执行硬拒绝；前向加分只负责在合法的前向/横向/斜向候选中加速排序。
   if (prefer_motion_forward_) {
     if (best_non_backward_idx >= 0) {
       best_idx = best_non_backward_idx;
       best_score = best_non_backward_score;
+      best_clearance = best_non_backward_clearance;
+      best_clearance_reward = best_non_backward_clearance_reward;
     } else if (best_idx >= 0 && !allow_search_backtrack_) {
       ROS_ERROR_THROTTLE(1.0,
                          "[task_search] reject backward-only frontier set; hold for forward map "
@@ -899,68 +919,19 @@ int TaskSearchManager::selectSearchCandidate(
   }
 
   ROS_WARN("[task_search] candidates=%zu selected=%d rejected_revisit=%d rejected_failed=%d "
-           "rejected_completed_route=%d rejected_door=%d rejected_exit_regression=%d exit_guard=%d "
-           "current_exit_distance=%.2f entry_forward=%d forward_candidate=%d score=%.2f.",
-           points.size(), best_idx, rejected_revisit, rejected_failed, rejected_completed_route,
-           rejected_door_return, rejected_exit_regression, static_cast<int>(final_exit_guard),
+           "rejected_door=%d rejected_exit_regression=%d exit_guard=%d "
+           "current_exit_distance=%.2f entry_forward=%d forward_candidate=%d score=%.2f "
+           "clearance=%.2f reward=%.2f.",
+           points.size(), best_idx, rejected_revisit, rejected_failed, rejected_door_return,
+           rejected_exit_regression, static_cast<int>(final_exit_guard),
            current_distance_to_exit, static_cast<int>(entry_forward_phase),
-           best_non_backward_idx, best_score);
+           best_non_backward_idx, best_score, best_clearance,
+           best_clearance_reward);
   return best_idx;
 }
 
-// 2026-07-21: 用按里程截断的历史航迹管识别“已经完成的旧通道”。最近一段航迹不算完成区，
-// 因而前方短步、90度拐弯和U形通道当前弯道仍可继续使用新frontier。
-bool TaskSearchManager::belongsToCompletedRoute(const Eigen::Vector3d& point) const {
-  if (!global_no_return_ || !corridor_frame_received_ || visited_positions_.size() < 3 ||
-      completed_route_exclusion_radius_ <= 0.0)
-    return false;
-
-  size_t recent_begin = visited_positions_.size() - 1;
-  double recent_arc = 0.0;
-  while (recent_begin > 0 && recent_arc < completed_route_recent_arc_length_) {
-    recent_arc += (visited_positions_[recent_begin].head<2>() -
-                   visited_positions_[recent_begin - 1].head<2>()).norm();
-    --recent_begin;
-  }
-  if (recent_begin == 0) return false;
-
-  double old_distance = std::numeric_limits<double>::infinity();
-  size_t nearest_old_index = 0;
-  for (size_t i = 0; i < recent_begin; ++i) {
-    const double distance = (point.head<2>() - visited_positions_[i].head<2>()).norm();
-    if (distance < old_distance) {
-      old_distance = distance;
-      nearest_old_index = i;
-    }
-  }
-  if (old_distance >= completed_route_exclusion_radius_) return false;
-
-  double recent_distance = std::numeric_limits<double>::infinity();
-  for (size_t i = recent_begin; i < visited_positions_.size(); ++i) {
-    recent_distance = std::min(
-        recent_distance,
-        (point.head<2>() - visited_positions_[i].head<2>()).norm());
-  }
-  if (recent_distance < completed_route_exclusion_radius_) return false;
-
-  // U形通道的相邻支路可能离旧航迹不到0.9m，但中间隔着墙；只有候选与旧航迹在累计地图中
-  // 属于同一无遮挡通道时才算“走回旧路”，避免纯欧氏航迹管误杀正常U弯。
-  if (sdf_map_ && old_distance > 0.08) {
-    const Eigen::Vector3d& old_point = visited_positions_[nearest_old_index];
-    const int samples = std::max(1, static_cast<int>(std::ceil(old_distance / 0.08)));
-    for (int sample = 1; sample < samples; ++sample) {
-      const double ratio = static_cast<double>(sample) / static_cast<double>(samples);
-      const Eigen::Vector3d probe = old_point + ratio * (point - old_point);
-      if (sdf_map_->isInMap(probe) &&
-          sdf_map_->getOccupancy(probe) == SDFMap::OCCUPIED)
-        return false;
-    }
-  }
-  return true;
-}
-
 // 2026-07-28: 用累计占据地图识别“旧前向封闭、侧向通道连续”的正常弯道；
-// 障碍物或单侧开口缺少双侧墙支撑，不允许改变任务前进方向。
+// 允许一侧墙在拐角中断，但另一侧必须有连续地图轮廓，避免孤立障碍物误触发。
 bool TaskSearchManager::inferOccupancyTurnDirection(
     const Eigen::Vector3d& travel_direction, Eigen::Vector3d& turn_direction,
     double& forward_free_length, double& turn_free_length) const {
@@ -973,29 +944,33 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   const Eigen::Vector3d origin = visited_positions_.back();
   const Eigen::Vector2d travel = travel_direction.head<2>().normalized();
   const double probe_step = std::max(0.05, recovery_turn_probe_step_);
-  auto knownFreeLength = [&](const Eigen::Vector2d& direction) {
+  auto knownFreeLength = [&](const Eigen::Vector3d& ray_origin,
+                             const Eigen::Vector2d& direction) {
     double free_length = 0.0;
     for (double distance = probe_step; distance <= recovery_turn_probe_length_ + 1e-6;
          distance += probe_step) {
-      Eigen::Vector3d probe = origin;
+      Eigen::Vector3d probe = ray_origin;
       probe.head<2>() += distance * direction;
-      // 2026-07-28: UNKNOWN不作为可飞拐弯证据；中心线还必须通过膨胀占据检查。
-      if (!mapPointSafe(probe)) break;
+      // 这里只识别地图轮廓，不签发飞行许可。UNKNOWN和占据都终止射线，足迹安全仍由A*复核。
+      if (!sdf_map_->isInMap(probe) ||
+          sdf_map_->getOccupancy(probe) != SDFMap::FREE)
+        break;
       free_length = distance;
     }
     return free_length;
   };
-  auto wallSupport = [&](const Eigen::Vector2d& direction, double side_sign) {
+  auto wallSupport = [&](const Eigen::Vector3d& probe_origin,
+                         const Eigen::Vector2d& direction, double side_sign) {
     const Eigen::Vector2d lateral(-direction.y(), direction.x());
     int supported_sections = 0;
-    for (double along : {0.30, 0.60, 0.90}) {
+    for (double along : {0.20, 0.40, 0.60}) {
       bool section_supported = false;
       for (double half_width = recovery_turn_wall_min_half_width_;
            half_width <= recovery_turn_wall_max_half_width_ + 1e-6;
            half_width += 0.10) {
-        Eigen::Vector3d wall_probe = origin;
+        Eigen::Vector3d wall_probe = probe_origin;
         wall_probe.head<2>() += along * direction + side_sign * half_width * lateral;
-        if (mapRelativeColumnOccupied(wall_probe, origin.z())) {
+        if (mapRelativeColumnOccupied(wall_probe, probe_origin.z())) {
           section_supported = true;
           break;
         }
@@ -1005,7 +980,21 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
     return supported_sections;
   };
 
-  forward_free_length = knownFreeLength(travel);
+  forward_free_length = knownFreeLength(origin, travel);
+  // 在旧通道中心线前方找到实际墙面；仅UNKNOWN截止不能作为转弯结构证据。
+  Eigen::Vector3d front_wall_probe = origin;
+  front_wall_probe.head<2>() +=
+      std::min(recovery_turn_probe_length_, forward_free_length + probe_step) * travel;
+  const bool front_wall_blocked =
+      forward_free_length + probe_step < recovery_turn_probe_length_ + 1e-6 &&
+      mapRelativeColumnOccupied(front_wall_probe, origin.z());
+  if (!front_wall_blocked) return false;
+
+  // 不从无人机当前位置横向打射线，而把虚拟观察点提前放到前方墙前。这样地图刚形成明显
+  // L形/弧形轮廓时就能看到侧向通道，无需先横移进入新通道1m以上。
+  Eigen::Vector3d contour_origin = origin;
+  contour_origin.head<2>() += std::max(0.0, forward_free_length - 0.20) * travel;
+  const double contour_forward_free = knownFreeLength(contour_origin, travel);
   double best_score = -std::numeric_limits<double>::infinity();
   Eigen::Vector2d best_direction = travel;
   int best_left_support = 0;
@@ -1018,14 +1007,22 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       const Eigen::Vector2d direction(
           std::cos(signed_angle) * travel.x() - std::sin(signed_angle) * travel.y(),
           std::sin(signed_angle) * travel.x() + std::cos(signed_angle) * travel.y());
-      const double free_length = knownFreeLength(direction);
-      if (free_length < recovery_turn_min_free_length_ ||
-          free_length < forward_free_length + recovery_turn_min_free_gain_)
+      // Recovery 的地图转向只能落在入口朝内方向的前半平面，禁止把持久前进轴
+      // 重写为 -120/-165 度一类实际朝入口的方向。
+      if (corridor_frame_received_ &&
+          !task_search::insideForwardHalfPlane(direction, corridor_dir_.head<2>()))
         continue;
-      const int left_support = wallSupport(direction, 1.0);
-      const int right_support = wallSupport(direction, -1.0);
-      if (left_support < recovery_turn_min_wall_support_ ||
-          right_support < recovery_turn_min_wall_support_)
+      const double free_length = knownFreeLength(contour_origin, direction);
+      if (free_length < recovery_turn_min_free_length_ ||
+          free_length < contour_forward_free + recovery_turn_min_free_gain_)
+        continue;
+      const int left_support = wallSupport(contour_origin, direction, 1.0);
+      const int right_support = wallSupport(contour_origin, direction, -1.0);
+      // 正常直角/弧形弯道允许内侧墙在拐角终止，只要求外侧存在连续墙轮廓；孤立柱体
+      // 没有连续三截面支撑，不能改变通道主方向。
+      if (!task_search::mappedContourSupportsTurn(
+              front_wall_blocked, left_support, right_support,
+              recovery_turn_min_wall_support_))
         continue;
       // 2026-07-28: 先选自由延伸最长的双墙通道，同等长度才轻微偏好小转角。
       const double score = free_length + 0.08 * (left_support + right_support) -
@@ -1044,37 +1041,65 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   ROS_ERROR_THROTTLE(
       0.5,
       "[task_search] OCCUPANCY TURN selected yaw=%.1fdeg old_free=%.2fm new_free=%.2fm "
-      "wall_support=%d/%d; recovery forward axis rotated to mapped corridor.",
+      "wall_support=%d/%d contour_probe=(%.2f,%.2f); mapped wall contour selected.",
       std::atan2(best_direction.y(), best_direction.x()) * 180.0 / M_PI,
-      forward_free_length, turn_free_length, best_left_support, best_right_support);
+      forward_free_length, turn_free_length, best_left_support, best_right_support,
+      contour_origin.x(), contour_origin.y());
   return true;
 }
 
-// 2026-07-28: 局部恢复先采用累计地图确认的通道拐弯轴线；没有结构证据时才使用最近实飞切线。
-Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) const {
+bool TaskSearchManager::mappedCorridorDirection(
+    double cur_yaw, Eigen::Vector3d& direction) const {
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
+  const Eigen::Vector3d travel(stable.x(), stable.y(), 0.0);
+  double forward_free_length = 0.0;
+  double turn_free_length = 0.0;
+  return inferOccupancyTurnDirection(
+      travel, direction, forward_free_length, turn_free_length);
+}
+
+// 2026-07-28: 局部恢复先采用累计地图确认的通道拐弯轴线；没有结构证据时才使用最近实飞切线。
+Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
+  Eigen::Vector2d stable = stableProgressDirection();
+  if (stable.norm() < 1e-3)
+    stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
+  if (corridor_frame_received_ &&
+      !task_search::insideForwardHalfPlane(stable, corridor_dir_.head<2>()))
+    stable = corridor_dir_.head<2>().normalized();
   const Eigen::Vector3d travel(stable.x(), stable.y(), 0.0);
   Eigen::Vector3d occupancy_turn;
   double forward_free_length = 0.0;
   double turn_free_length = 0.0;
   if (inferOccupancyTurnDirection(travel, occupancy_turn, forward_free_length,
-                                  turn_free_length))
+                                  turn_free_length)) {
+    // 只有“旧前向受阻、新方向自由距离更长且两侧都有连续墙体”的地图证据，
+    // 才表示已经进入真实弯道并允许改变主方向。机头yaw和临时斜飞均不参与更新。
+    stable_progress_direction_ = occupancy_turn.head<2>().normalized();
+    stable_progress_direction_valid_ = true;
+    ROS_ERROR_THROTTLE(0.5,
+                       "[task_search] confirmed corridor turn; persistent forward yaw=%.1fdeg.",
+                       std::atan2(stable_progress_direction_.y(),
+                                  stable_progress_direction_.x()) * 180.0 / M_PI);
     return occupancy_turn;
+  }
   return travel;
 }
 
 // 2026-07-28: 与普通候选使用相同角度阈值，避免恢复器和frontier对“后退”的定义不一致。
 bool TaskSearchManager::isRecoveryDirectionBackward(
-    const Eigen::Vector3d& direction, double cur_yaw) const {
+    const Eigen::Vector3d& direction, double cur_yaw) {
+  if (corridor_frame_received_ &&
+      !task_search::insideForwardHalfPlane(direction.head<2>(), corridor_dir_.head<2>()))
+    return true;
   const Eigen::Vector3d forward = recoveryForwardDirection(cur_yaw);
   return direction.head<2>().norm() > 1e-3 &&
          direction.head<2>().normalized().dot(forward.head<2>()) <
              backward_cos_threshold_;
 }
 
-std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_yaw) const {
+std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_yaw) {
   const Eigen::Vector3d forward = recoveryForwardDirection(cur_yaw);
   const double travel_yaw = std::atan2(forward.y(), forward.x());
 
@@ -1097,6 +1122,9 @@ std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_ya
   for (double offset : offsets) {
     const double yaw = wrapYaw(travel_yaw + offset);
     Eigen::Vector3d dir(std::cos(yaw), std::sin(yaw), 0.0);
+    if (corridor_frame_received_ &&
+        !task_search::insideForwardHalfPlane(dir.head<2>(), corridor_dir_.head<2>()))
+      continue;
     const Eigen::Vector3d probe =
         visited_positions_.empty() ? dir : visited_positions_.back() + 1.2 * dir;
     const double novelty = minDistance2D(probe, visited_positions_);
@@ -1115,9 +1143,13 @@ std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_ya
 }
 
 bool TaskSearchManager::isRecoveryCandidateUseful(const Eigen::Vector3d& candidate) const {
-  // 2026-07-23: 恢复点从当前位置向前生成，若再要求它离“包含当前位置的整条航迹”至少0.9m，
-  // 窄通道中的0.45/0.90m安全短步会在做A*之前全部被误杀。这里只复用全局禁回头：
-  // 最近实飞段允许继续向前，真正的旧通道仍由belongsToCompletedRoute及隔墙判断拒绝。
+  // 恢复点只受入口和最终出口边界约束；历史航迹距离不能否决窄通道中的侧移绕障。
+  if (corridor_frame_received_ && !visited_positions_.empty()) {
+    const Eigen::Vector2d motion =
+        candidate.head<2>() - visited_positions_.back().head<2>();
+    if (!task_search::insideForwardHalfPlane(motion, corridor_dir_.head<2>()))
+      return false;
+  }
   return isTaskMotionAllowed(candidate);
 }
 
@@ -1126,83 +1158,45 @@ bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) co
   // 普通搜索永远不能重新穿回初始入口外侧。最终出口的专用状态由上层
   // exit_transit_active 绕过普通任务路径过滤，不受这里影响。
   const double door_progress = (candidate - corridor_origin_).dot(corridor_dir_);
-  if (door_progress < -inside_return_margin_) return false;
   // 2026-07-23: 最终出口只允许穿越一次。CROSS_EXIT确认完成后，出口外的所有区域
   // 统一视为通道外；候选若重新落到门内侧就直接拒绝，不再做任何复杂区域分类。
-  if (mission_stage_ >= SEARCH_OUTSIDE_QR && exit_candidate_confirmed_ &&
-      exit_outward_direction_.norm() > 1e-3) {
-    const double exit_side =
+  const bool final_exit_guard_active =
+      mission_stage_ >= SEARCH_OUTSIDE_QR && exit_candidate_confirmed_ &&
+      exit_outward_direction_.norm() > 1e-3;
+  double exit_side = 0.0;
+  if (final_exit_guard_active) {
+    exit_side =
         (candidate.head<2>() - exit_portal_center_.head<2>())
             .dot(exit_outward_direction_.normalized());
-    if (exit_side < -0.05) return false;
   }
-  return !belongsToCompletedRoute(candidate);
+  return task_search::passesMissionBoundaryNoReturn(
+      door_progress, inside_return_margin_, final_exit_guard_active, exit_side);
 }
 
 bool TaskSearchManager::isTaskPathAllowed(
     const std::vector<Eigen::Vector3d>& path) const {
   if (!global_no_return_ || !corridor_frame_received_ || path.empty()) return true;
 
-  // 完整路径逐点检查，堵住“目标合法、A*先回旧通道再绕过去”的旁路。
+  // 完整路径逐点检查入口和最终出口边界，避免目标合法但中途越界。
   for (const auto& point : path) {
     if (!isTaskMotionAllowed(point)) return false;
   }
 
-  // 刚穿门时 A* 常需横向绕开门柱、细杆和膨胀体素。门后这段仍执行逐点占据、
-  // 机体足迹以及入口外侧检查，但暂不把路径初段与通道轴线夹角作为“回头”。
-  if (corridor_entry_crossed_ && !visited_positions_.empty()) {
-    const double entry_progress =
-        (visited_positions_.back() - corridor_origin_).dot(corridor_dir_);
-    if (entry_progress >= -inside_return_margin_ &&
-        entry_progress < entry_path_direction_grace_distance_) {
-      const double end_progress = (path.back() - corridor_origin_).dot(corridor_dir_);
-      double min_path_progress = entry_progress;
-      for (const auto& point : path) {
-        min_path_progress =
-            std::min(min_path_progress, (point - corridor_origin_).dot(corridor_dir_));
-      }
-      if (end_progress < entry_progress - 0.10 ||
-          min_path_progress < entry_progress - 0.15) {
-        ROS_WARN_THROTTLE(1.0,
-                          "[global_no_return] reject entry-grace path: progress %.2f -> %.2f "
-                          "min=%.2f; lateral avoidance may not become a U-turn.",
-                          entry_progress, end_progress, min_path_progress);
-        return false;
-      }
-      ROS_WARN_THROTTLE(1.0,
-                        "[global_no_return] entry grace active progress=%.2f/%.2fm; "
-                        "allow collision-checked lateral A* turn.",
-                        entry_progress, entry_path_direction_grace_distance_);
-      return true;
-    }
-  }
-
-  // 最近实飞切线只检查A*最初约0.55m：明显沿原通道倒车时拒绝；90度转弯和沿U形
-  // 中心线逐步转向仍可通过，不能用世界坐标朝向是否反转来判断U弯。
-  if (visited_positions_.size() < 2 || path.size() < 2) return true;
-  // 用经过反向运动抑制和转弯平滑的稳定方向判断是否回头。最后两个里程计点可能来自
-  // 悬停漂移、短回撤或定位跳变，直接使用会把随后恢复向前的合法路径全部判成倒车。
-  Eigen::Vector2d travel = stableProgressDirection();
-  if (travel.norm() < 1e-3) {
-    travel =
-        (visited_positions_.back() - visited_positions_[visited_positions_.size() - 2]).head<2>();
-  }
-  if (travel.norm() < 0.15) return true;
-  travel.normalize();
-  double accumulated = 0.0;
-  Eigen::Vector3d probe = path.front();
-  for (size_t i = 1; i < path.size() && accumulated < 0.55; ++i) {
-    const double segment = (path[i].head<2>() - path[i - 1].head<2>()).norm();
-    accumulated += segment;
-    probe = path[i];
-  }
-  const Eigen::Vector2d initial_motion = (probe - path.front()).head<2>();
-  if (initial_motion.norm() < 0.20) return true;
-  return initial_motion.normalized().dot(travel) >= backward_cos_threshold_;
+  // 不再按局部后退距离或路径夹角否决A*结果。横移、斜向避障和短时位置波动
+  // 只接受占据/足迹安全检查；全局禁回仍由上面的入口和最终出口平面逐点检查保证。
+  return true;
 }
 
 bool TaskSearchManager::isRecoveryPathAllowed(
     const std::vector<Eigen::Vector3d>& path, bool allow_initial_reverse) const {
+  // 所有普通/恢复路径都不得从规划起点向入口方向倒退；侧移(dot=0)允许。
+  // short_backtrack 开关不再能绕过这条多机硬约束。
+  if (corridor_frame_received_ && path.size() >= 2) {
+    const double start_progress = path.front().dot(corridor_dir_);
+    for (const auto& point : path) {
+      if (point.dot(corridor_dir_) < start_progress - 1e-3) return false;
+    }
+  }
   if (!allow_initial_reverse) return isTaskPathAllowed(path);
   if (!global_no_return_ || !corridor_frame_received_ || path.empty()) return true;
 

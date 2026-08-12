@@ -36,10 +36,15 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
   nh.param("manager/min_time", pp_.min_time_, false);
   // 2026-07-23: 0.15m膨胀图用于A*搜索引导；路径和轨迹最终安全按此真实机体圆盘半径复核，
   // 两者不再叠成硬性的0.35m净空要求。
-  nh.param("manager/footprint_check_radius", footprint_check_radius_, 0.22);
+  nh.param("manager/footprint_check_radius", footprint_check_radius_, 0.18);
   nh.param("manager/footprint_check_samples", footprint_check_samples_, 12);
+  nh.param("manager/footprint_min_occupied_support",
+           footprint_min_occupied_support_, 2);
+  nh.param("manager/supported_occupancy_hard_reject_enabled",
+           supported_occupancy_hard_reject_enabled_, true);
   footprint_check_radius_ = std::max(0.0, footprint_check_radius_);
   footprint_check_samples_ = std::max(4, footprint_check_samples_);
+  footprint_min_occupied_support_ = std::max(1, footprint_min_occupied_support_);
 
   bool use_geometric_path, use_kinodynamic_path, use_topo_path, use_optimization,
       use_active_perception;
@@ -138,6 +143,37 @@ bool FastPlannerManager::checkTrajCollision(double& distance, bool allow_inflati
   return true;
 }
 
+bool FastPlannerManager::isSupportedOccupied(const Eigen::Vector3d& position) const {
+  if (!sdf_map_ || sdf_map_->getOccupancy(position) != SDFMap::OCCUPIED)
+    return false;
+  if (!supported_occupancy_hard_reject_enabled_) {
+    ROS_WARN_THROTTLE(0.5,
+                      "[footprint_safety] supported occupancy hard rejection disabled; "
+                      "ignore raw occupied footprint contacts.");
+    return false;
+  }
+  Eigen::Vector3i center;
+  sdf_map_->posToIndex(position, center);
+  int support = 0;
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dz = -1; dz <= 1; ++dz) {
+        const Eigen::Vector3i neighbor = center + Eigen::Vector3i(dx, dy, dz);
+        if (sdf_map_->isInMap(neighbor) &&
+            sdf_map_->getOccupancy(neighbor) == SDFMap::OCCUPIED &&
+            ++support >= footprint_min_occupied_support_)
+          return true;
+      }
+    }
+  }
+  ROS_WARN_THROTTLE(0.5,
+                    "[footprint_safety] ignore isolated occupied voxel at %.2f %.2f %.2f "
+                    "support=%d/%d.",
+                    position.x(), position.y(), position.z(), support,
+                    footprint_min_occupied_support_);
+  return false;
+}
+
 bool FastPlannerManager::isRawFootprintSafe(const Eigen::Vector3d& position) const {
   if (!sdf_map_ || !sdf_map_->isInMap(position)) return false;
 
@@ -155,8 +191,7 @@ bool FastPlannerManager::isRawFootprintSafe(const Eigen::Vector3d& position) con
         probe.x() += radius * std::cos(angle);
         probe.y() += radius * std::sin(angle);
         probe.z() += z_offset;
-        if (!sdf_map_->isInMap(probe) ||
-            sdf_map_->getOccupancy(probe) == SDFMap::OCCUPIED)
+        if (!sdf_map_->isInMap(probe) || isSupportedOccupied(probe))
           return false;
       }
     }

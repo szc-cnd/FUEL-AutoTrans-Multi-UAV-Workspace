@@ -77,11 +77,14 @@ private:
 
   // 2026-07-23: A*保留膨胀图引导，最终路径安全以原始占据上的真实圆盘足迹为准，
   // 避免把膨胀层与机体半径重复作为两个硬约束。
-  double footprint_check_radius_{0.22};
+  double footprint_check_radius_{0.18};
   int footprint_check_samples_{12};
+  int footprint_min_occupied_support_{2};
+  bool supported_occupancy_hard_reject_enabled_{true};
   // 2026-07-23: 真实圆盘足迹检查供路径/轨迹最终复核；膨胀图仅用于A*引导，
   // 避免当前位置被膨胀层擦到后所有前向脱困路径因共享同一起点而全部失败。
   bool isRawFootprintSafe(const Eigen::Vector3d& position) const;
+  bool isSupportedOccupied(const Eigen::Vector3d& position) const;
 
   unique_ptr<KinodynamicAstar> kino_path_finder_;
   vector<BsplineOptimizer::Ptr> bspline_optimizers_;

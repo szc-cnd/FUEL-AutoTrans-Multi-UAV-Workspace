@@ -33,11 +33,14 @@ input_cost_exponential: 0.5     # scaling for input costs
 max_bodyrate_xy:    3.0       # ~ pi [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
 max_bodyrate_z:     1.2         # ~ pi*2/3 [rad/s]
+# NMPC 世界系速度硬约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
+# 该约束直接进入 ACADO 优化器，超过上限的预测速度不会被求解器接受。
+max_velocity_xy:    0.3
+max_velocity_z:     0.3
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
-# 对 1.844 kg、g=9.795、hover_percentage=0.54，max_thrust=26.5 N 对应的归一化推力约为 0.792，
-# 与最终 max_normalized_thrust=0.8 保持一致；这里的 max_thrust 单位是 N。
+# 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
 min_thrust:         1.0
-max_thrust:         26.5
+max_thrust:         29.5
 
 # use ending pos for better ending tracking performance)
 use_trajectory_ending_pos: true
@@ -59,7 +62,7 @@ enable_rc_hover_adjust: false
 # x/y/z 是 /mavros/local_position/odom 对应的 ENU 世界坐标，单位 m；yaw 仍取切入时当前航向。
 # 关闭后恢复为“切换瞬间当前位置悬停”。固定模式下会忽略 enable_rc_hover_adjust。
 fixed_hover:
-    enabled: false
+    enabled: true
     x: 0.0
     y: 0.0
     z: 0.5
@@ -96,8 +99,8 @@ filter:
     cutoff_freq_dcable: 20.0
 
 force_estimator: # *
-    # kf 将当前 UAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.844 kg 实机稳定悬停日志标定。
-    kf: 1.84e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    # kf 将当前 CAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.865 kg 实机稳定悬停日志标定。
+    kf: 1.735e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
@@ -156,19 +159,11 @@ rc_mode:
 takeoff:
     # AUTO_TAKEOFF 不自动解锁，也不调用 /mavros/set_mode；仅等待 PX4 已进入 OFFBOARD。
     enabled: true
-    # ENU 世界系目标高度，单位 m；起飞过程中保持起始 x/y。
+    # 唯一 ENU 世界系起飞/悬停目标点的高度，单位 m；参考值按 climb_rate 平滑上升。
     target_z: 0.5
-    # z 参考上升速度上限，单位 m/s。
+    # z 参考值上升速度，单位 m/s；达到 target_z 后保持目标点。
     climb_rate: 0.15
-    # 到达目标高度的允许误差，单位 m。
-    position_tolerance: 0.10
-    # 稳定判定允许的世界系垂直速度，单位 m/s。
-    velocity_tolerance: 0.15
-    # 高度和速度同时满足后需持续的时间，单位 s。
-    settle_time: 0.8
-    # 起飞状态最长持续时间，单位 s；超时回到 MANUAL_CTRL。
-    timeout: 8.0
-    # fixed_hover 启用时，起飞点到固定悬停点的水平距离上限，单位 m。
+    # fixed_hover 启用时，起飞前到唯一目标点的水平距离上限，单位 m。
     max_initial_xy_error: 0.5
 
 land:
@@ -189,8 +184,8 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     # 1 means use the scale factor to map thrust to commmand with online calibration(use the rotor speed to calibrate the scale factor)
     # 原工程模式 2 依赖负载/电缆动力学；普通四旋翼版本已禁止该模式，配置为 2 时节点拒绝启动。
     # approximate thrust mapping parameters
-    # UAV2 实测归一化悬停推力；模式 0 固定使用该映射，模式 1 将其作为在线学习初值。
-    hover_percentage: 0.54
+    # CAV0 在 1.865 kg 起飞质量下的实测归一化悬停推力；模式 0 固定使用，模式 1 作为在线学习初值。
+    hover_percentage: 0.53
     # RLS 新估计对 thrustscale 的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
     filter_factor: 0.2
     # 模式 1 学习门限，单位 rpm；只影响在线推力映射，不改变外力估计器的 1000 rpm 门限。
@@ -217,13 +212,3 @@ msg_timeout:
     state: 1.5
     # /mavros/extended_state 提供 landed_state；超时后禁止外力补偿，单位 s。
     extended_state: 0.5
-    # PolynomialTraj 起始时间最多允许落后当前时间 0.8 s；超过后拒绝旧轨迹，单位 s。
-    trajectory: 0.8
-    # PolynomialTraj 起始时间最多允许超前当前时间 0.1 s，避免时钟/队列异常造成未来轨迹，单位 s。
-    trajectory_future: 0.1
-
-# FUEL 规划器心跳频率约 10 Hz；连续超过该时间未收到心跳时清空轨迹并保持当前位置。
-# 这不是 B-spline 更新超时，正常执行期间没有新规划也不会触发该保护。
-planner_heartbeat_timeout: 0.5
-# 未使用 FUEL 心跳的规划器入口保持 false；CAV0 专用 launch 会显式开启。
-require_planner_heartbeat: false

@@ -34,7 +34,8 @@ namespace PayloadMPC
     mpc_wrapper_.setExternalForce(Eigen::Vector3d::Zero());
     mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
-        params_.max_bodyrate_xy_, params_.max_bodyrate_z_);
+        params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
+        params_.max_velocity_xy_, params_.max_velocity_z_);
 
     // first_traj_received_ = false;
     solve_from_scratch_ = false;
@@ -73,56 +74,17 @@ namespace PayloadMPC
       last_mpc_solve_success_ = mpc_wrapper_.update(estimated_state, do_preparation_step);
     }
 
-    Eigen::Matrix<real_t, kStateSize, kSamples + 1> candidate_states;
-    Eigen::Matrix<real_t, kInputSize, kSamples> candidate_inputs;
-    if (last_mpc_solve_success_)
+    if (!last_mpc_solve_success_)
     {
-      mpc_wrapper_.getStates(candidate_states);
-      mpc_wrapper_.getInputs(candidate_inputs);
-      if (!candidate_states.allFinite() || !candidate_inputs.allFinite())
-      {
-        last_mpc_solve_success_ = false;
-        ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 输出包含非有限值，切换到上一安全控制量。");
-      }
-      else
-      {
-        // 发送前再次限制 body rate 和物理推力，避免数值越界进入 MAVROS。
-        for (int i = 0; i < kSamples; ++i)
-        {
-          candidate_inputs(kThrust, i) = std::max(
-              params_.min_thrust_, std::min(params_.max_thrust_, candidate_inputs(kThrust, i)));
-          candidate_inputs(kRateX, i) = std::max(
-              -params_.max_bodyrate_xy_, std::min(params_.max_bodyrate_xy_, candidate_inputs(kRateX, i)));
-          candidate_inputs(kRateY, i) = std::max(
-              -params_.max_bodyrate_xy_, std::min(params_.max_bodyrate_xy_, candidate_inputs(kRateY, i)));
-          candidate_inputs(kRateZ, i) = std::max(
-              -params_.max_bodyrate_z_, std::min(params_.max_bodyrate_z_, candidate_inputs(kRateZ, i)));
-        }
-      }
+		ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，保持上一安全控制量。");
+    }
+    else if (!previous_mpc_solve_success)
+    {
+      ROS_INFO("[OUTPUT] NMPC 恢复正常。");
     }
 
-    if (last_mpc_solve_success_)
-    {
-      predicted_states = candidate_states;
-      control_inputs = candidate_inputs;
-      using_fallback_output_ = false;
-      if (!previous_mpc_solve_success)
-      {
-        ROS_INFO("[OUTPUT] NMPC 恢复正常。");
-      }
-    }
-    else
-    {
-      using_fallback_output_ = true;
-      // 求解失败时不再把上一帧可能正在加速或转向的控制量复制回来。
-      // FSM 会在同一控制周期发布零机体系角速度和悬停推力。
-      predicted_states = reference_states;
-      control_inputs.setZero();
-      const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
-      control_inputs.row(kThrust).setConstant(
-          std::isfinite(hover_thrust) ? hover_thrust : 0.0);
-      ROS_ERROR_THROTTLE(1.0, "[OUTPUT] NMPC 求解失败，立即切换安全悬停输出。");
-    }
+    mpc_wrapper_.getStates(predicted_states);
+    mpc_wrapper_.getInputs(control_inputs);
 
     // Start a thread to prepare for the next execution.
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);
@@ -131,7 +93,7 @@ namespace PayloadMPC
     const clock_t end = clock();
     timing_feedback_ = 0.9*timing_feedback_ + 0.1* double(end - start) / CLOCKS_PER_SEC;
     if (params_.print_info_)
-    ROS_INFO_THROTTLE(1.0, "[NMPC] 计算耗时：反馈延迟=%1.2f ms，总耗时=%1.2f ms。",
+	ROS_INFO_THROTTLE(5.0, "[NMPC] 计算耗时：反馈延迟=%1.2f ms，总耗时=%1.2f ms。",
                       timing_feedback_ * 1000, (timing_feedback_ + timing_preparation_) * 1000);
   }
 
@@ -140,28 +102,6 @@ namespace PayloadMPC
                               Eigen::Matrix<real_t, kInputSize, kSamples> &control_inputs)
   {
     execMPC(reference_states_, reference_inputs_, estimated_state, predicted_states, control_inputs);
-  }
-
-  double MpcController::getHoverNormalizedThrust() const
-  {
-    const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
-    const double configured_hover = params_.thr_map_.hover_percentage;
-    const double max_normalized = params_.thr_map_.max_normalized_thrust;
-    double normalized = configured_hover;
-
-    if (std::isfinite(hover_thrust) && hover_thrust > 0.0 &&
-        std::isfinite(thrustscale_) && thrustscale_ > 0.0)
-    {
-      normalized = hover_thrust / thrustscale_;
-    }
-
-    if (!std::isfinite(normalized))
-    {
-      normalized = 0.0;
-    }
-    const double upper_bound =
-        std::isfinite(max_normalized) && max_normalized > 0.0 ? max_normalized : 1.0;
-    return std::max(0.0, std::min(upper_bound, normalized));
   }
   // drone pos
   void MpcController::setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw)

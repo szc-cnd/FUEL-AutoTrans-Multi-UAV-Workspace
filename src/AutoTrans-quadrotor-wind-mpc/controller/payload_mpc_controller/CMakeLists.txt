@@ -113,6 +113,10 @@ if(CATKIN_ENABLE_TESTING)
   endif()
   catkin_add_nosetests(scripts/tests/test_autotrans_mpc_logger_battery.py)
   catkin_add_nosetests(test/test_position_command_latch_static.py)
+catkin_add_nosetests(test/test_velocity_hard_constraint_static.py)
+  catkin_add_nosetests(test/test_chinese_log_locale_static.py)
+  catkin_add_nosetests(test/test_log_rate_policy_static.py)
+  catkin_add_nosetests(test/test_takeoff_timeout_hover_static.py)
   catkin_add_gtest(test_entry_command_reference_limiter
     test/test_position_command_limiter.cpp
   )

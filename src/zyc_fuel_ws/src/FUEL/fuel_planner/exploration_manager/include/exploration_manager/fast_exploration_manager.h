@@ -8,6 +8,7 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <exploration_manager/vertical_detour_policy.h>
 using Eigen::Vector3d;
 using std::shared_ptr;
 using std::unique_ptr;
@@ -95,18 +96,52 @@ private:
   // 2026-07-14: 保存任务层请求的最终目标；执行期碰撞不能只冷却 5m 截断后的中间点。
   Vector3d last_requested_goal_{0.0, 0.0, 0.0};
   bool has_last_requested_goal_{false};
-  // 2026-07-28: 前向扇区堵塞时允许有限次数、不同方向的短回撤；禁止串成同方向持续倒飞。
+  // 正前方不可行后短暂锁定同一侧绕行，推进0.2m后重新允许选择。
+  bool recovery_side_latched_{false};
+  Vector3d recovery_side_origin_{0.0, 0.0, 0.0};
+  Vector3d recovery_side_dir_{1.0, 0.0, 0.0};
+  double recovery_side_release_distance_{0.20};
+  // 可选的一次性短回撤；比赛窄通道默认关闭。
+  bool short_backtrack_enabled_{false};
   bool short_backtrack_latched_{false};
   Vector3d short_backtrack_release_origin_{0.0, 0.0, 0.0};
   Vector3d short_backtrack_forward_dir_{1.0, 0.0, 0.0};
   Vector3d short_backtrack_last_dir_{0.0, 0.0, 0.0};
   ros::Time short_backtrack_last_time_;
   int short_backtrack_chain_count_{0};
-  double short_backtrack_max_distance_{0.45};
+  bool pending_short_backtrack_{false};
+  Vector3d pending_short_backtrack_target_{0.0, 0.0, 0.0};
+  Vector3d pending_short_backtrack_dir_{0.0, 0.0, 0.0};
+  Vector3d pending_short_backtrack_forward_dir_{1.0, 0.0, 0.0};
+  double short_backtrack_min_distance_{0.10};
+  double short_backtrack_max_distance_{0.20};
   double short_backtrack_forward_release_{0.60};
   double short_backtrack_retry_cooldown_{1.5};
-  int short_backtrack_max_chain_{2};
+  int short_backtrack_max_chain_{1};
   double short_backtrack_min_direction_change_deg_{35.0};
+  // 水平绕障全部失败后的三维恢复。下绕必须先原地下降并连续确认，不能生成斜向俯冲轨迹。
+  bool vertical_detour_enabled_{true};
+  double vertical_detour_low_height_{0.10};
+  double vertical_detour_forward_check_distance_{0.20};
+  double vertical_detour_upper_step_{0.20};
+  double vertical_detour_upper_max_rise_{0.60};
+  double vertical_detour_upper_forward_max_distance_{0.60};
+  double vertical_detour_upper_max_side_angle_deg_{45.0};
+  double vertical_detour_down_first_height_{0.75};
+  double vertical_detour_height_tolerance_{0.06};
+  double vertical_detour_xy_tolerance_{0.08};
+  double vertical_detour_verification_timeout_{2.0};
+  double vertical_detour_footprint_radius_{0.17};
+  int vertical_detour_required_confirmations_{1};
+  vertical_detour::LowProbePhase low_probe_phase_{
+      vertical_detour::LowProbePhase::IDLE};
+  int low_probe_confirmations_{0};
+  Vector3d low_probe_origin_{0.0, 0.0, 0.0};
+  Vector3d low_probe_direction_{1.0, 0.0, 0.0};
+  Vector3d low_probe_target_{0.0, 0.0, 0.0};
+  double low_probe_return_height_{0.60};
+  double low_probe_yaw_{0.0};
+  ros::Time low_probe_verify_start_;
 
   // Find optimal tour for coarse viewpoints of all frontiers
   void findGlobalTour(const Vector3d& cur_pos, const Vector3d& cur_vel, const Vector3d cur_yaw,
@@ -132,6 +167,16 @@ private:
   // 2026-07-13: 动态门后阶段改为多方向任务搜索恢复，不再永久沿入口朝向直飞。
   bool buildMissionForwardFallback(const Vector3d& pos, double cur_yaw, Vector3d& next_pos,
                                    double& next_yaw);
+  bool buildVerticalDetourFallback(const Vector3d& pos, double cur_yaw,
+                                   const Vector3d& forward, Vector3d& next_pos,
+                                   double& next_yaw);
+  bool handleActiveLowProbe(const Vector3d& pos, Vector3d& next_pos, double& next_yaw,
+                            bool& wait_for_confirmation);
+  bool isKnownSafeHorizontalCorridor(const Vector3d& start, const Vector3d& direction,
+                                     double distance) const;
+  bool isLowProbeCorridorSafe(const Vector3d& start, const Vector3d& direction,
+                              double distance) const;
+  bool isKnownSafeVerticalPath(const Vector3d& start, double target_z) const;
   // 2026-07-24: 以当前高度附近的XY占据柱检测物体，并用沿通道方向的连续支撑剔除左右墙。
   bool cameraOccupancyColumn(const Vector3d& point, double reference_z) const;
   bool cameraWallSupported(const Vector3d& point, const Eigen::Vector2d& travel_dir) const;

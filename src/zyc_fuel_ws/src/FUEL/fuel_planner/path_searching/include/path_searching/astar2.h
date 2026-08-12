@@ -76,6 +76,8 @@ private:
   double margin_;
   // 2026-07-28: 任务A*高度带，防止三维搜索从未知/稀疏地面下方绕障。
   double min_search_height_, max_search_height_;
+  // Prefer wide horizontal corridors instead of the geometrically shortest wall-hugging route.
+  double vertical_weight_, preferred_clearance_, clearance_weight_;
   int allocate_num_;
   double tie_breaker_;
   double resolution_, inv_resolution_;

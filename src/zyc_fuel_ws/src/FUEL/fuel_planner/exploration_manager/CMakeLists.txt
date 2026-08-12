@@ -80,3 +80,14 @@ add_executable(load_obj test/load_obj.cpp)
 target_link_libraries(load_obj
   ${catkin_LIBRARIES} ${PCL_LIBRARIES}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(motion_direction_rules_test test/motion_direction_rules_test.cpp)
+  add_test(NAME motion_direction_rules_test COMMAND motion_direction_rules_test)
+  add_executable(vertical_detour_policy_test test/vertical_detour_policy_test.cpp)
+  add_test(NAME vertical_detour_policy_test COMMAND vertical_detour_policy_test)
+  add_executable(frontier_clearance_policy_test test/frontier_clearance_policy_test.cpp)
+  add_test(NAME frontier_clearance_policy_test COMMAND frontier_clearance_policy_test)
+  add_executable(path_shortening_policy_test test/path_shortening_policy_test.cpp)
+  add_test(NAME path_shortening_policy_test COMMAND path_shortening_policy_test)
+endif()

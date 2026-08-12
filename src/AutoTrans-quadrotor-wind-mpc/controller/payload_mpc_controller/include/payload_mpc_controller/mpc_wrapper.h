@@ -28,6 +28,8 @@ namespace PayloadMPC
     static constexpr int kInputSize = ACADO_NU;           // number of inputs
     static constexpr int kCostSize = ACADO_NY - ACADO_NU; // number of state costs
     static constexpr int kOdSize = ACADO_NOD;             // number of online data
+    // 每个预测节点的边界顺序：T、w_x、w_y、w_z、v_x、v_y、v_z。
+    static constexpr int kStateConstraintSize = 3;
     // static constexpr real_t dt_{0.05};                    // time step
 
     // extern ACADOvariables acadoVariables;
@@ -52,7 +54,8 @@ namespace PayloadMPC
             real_t state_cost_scaling = 0.0, real_t input_cost_scaling = 0.0);
 
         bool setLimits(real_t min_thrust, real_t max_thrust,
-                       real_t max_rollpitchrate, real_t max_yawrate);
+                       real_t max_rollpitchrate, real_t max_yawrate,
+                       real_t max_velocity_xy, real_t max_velocity_z);
 
         bool setReferencePose(
             const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> reference_state);
@@ -107,11 +110,11 @@ namespace PayloadMPC
         Eigen::Map<Eigen::Matrix<real_t, 4, kSamples, Eigen::ColMajor>>
             acado_upper_bounds_{acadoVariables.ubValues};
 
-        // Eigen::Map<Eigen::Matrix<real_t, 1, kSamples>>
-        //   acado_lower_affine_bounds_{acadoVariables.lbAValues};
+        Eigen::Map<Eigen::Matrix<real_t, kStateConstraintSize, kSamples, Eigen::ColMajor>>
+            acado_lower_affine_bounds_{acadoVariables.lbAValues};
 
-        // Eigen::Map<Eigen::Matrix<real_t, 1, kSamples>>
-        //   acado_upper_affine_bounds_{acadoVariables.ubAValues};
+        Eigen::Map<Eigen::Matrix<real_t, kStateConstraintSize, kSamples, Eigen::ColMajor>>
+            acado_upper_affine_bounds_{acadoVariables.ubAValues};
 
         Eigen::Matrix<real_t, kRefSize, kRefSize> W_ = (Eigen::Matrix<real_t, kRefSize, kRefSize>::Identity());
 

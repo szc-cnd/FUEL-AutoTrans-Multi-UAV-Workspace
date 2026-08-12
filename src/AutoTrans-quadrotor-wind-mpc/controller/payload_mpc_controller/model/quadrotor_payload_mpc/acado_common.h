@@ -160,6 +160,18 @@ real_t lbValues[ 80 ];
  */
 real_t ubValues[ 80 ];
 
+/** Column vector of size: 60
+ * 
+ *  Lower bounds values for affine constraints.
+ */
+real_t lbAValues[ 60 ];
+
+/** Column vector of size: 60
+ * 
+ *  Upper bounds values for affine constraints.
+ */
+real_t ubAValues[ 60 ];
+
 
 } ACADOvariables;
 
@@ -240,6 +252,9 @@ real_t w2[ 10 ];
 /** Matrix of size: 80 x 80 (row major format) */
 real_t H[ 6400 ];
 
+/** Matrix of size: 60 x 80 (row major format) */
+real_t A[ 4800 ];
+
 /** Column vector of size: 80 */
 real_t g[ 80 ];
 
@@ -249,11 +264,17 @@ real_t lb[ 80 ];
 /** Column vector of size: 80 */
 real_t ub[ 80 ];
 
+/** Column vector of size: 60 */
+real_t lbA[ 60 ];
+
+/** Column vector of size: 60 */
+real_t ubA[ 60 ];
+
 /** Column vector of size: 80 */
 real_t x[ 80 ];
 
-/** Column vector of size: 80 */
-real_t y[ 80 ];
+/** Column vector of size: 140 */
+real_t y[ 140 ];
 
 
 } ACADOworkspace;

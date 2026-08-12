@@ -15,8 +15,6 @@
   <arg name="cmd_trigger_topic" default="/UAV1/hummingbird/goal"/>
   <arg name="goal_topic" default="/UAV1/planning/goal"/>
   <arg name="trajectory_timeout" default="0.5"/>
-  <arg name="planner_heartbeat_topic" default="/UAV1/planning/heartbeat"/>
-  <arg name="require_planner_heartbeat" default="false"/>
   <arg name="enable_logger" default="true"/>
 
   <!-- Diff-Planner 继续输出完整 PolyTraj；不启动旧 px4ctrl。 -->
@@ -37,8 +35,6 @@
   <include file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>
-    <arg name="planner_heartbeat_topic" value="$(arg planner_heartbeat_topic)"/>
-    <arg name="require_planner_heartbeat" value="$(arg require_planner_heartbeat)"/>
     <arg name="imu_topic" value="$(arg imu_topic)"/>
     <arg name="state_topic" value="$(arg state_topic)"/>
     <arg name="extended_state_topic" value="$(arg extended_state_topic)"/>

@@ -43,7 +43,6 @@
     <remap from="/planning/new" to="$(arg topic_prefix)/planning/new"/>
     <remap from="/planning/bspline" to="$(arg topic_prefix)/planning/bspline"/>
     <remap from="/planning/safety_hold" to="$(arg topic_prefix)/planning/safety_hold"/>
-    <remap from="/planning/heartbeat" to="$(arg topic_prefix)/planning/heartbeat"/>
     <remap from="/sdf_map/occupancy_all" to="$(arg topic_prefix)/sdf_map/occupancy_all"/>
     <remap from="/sdf_map/occupancy_local" to="$(arg topic_prefix)/sdf_map/occupancy_local"/>
     <remap from="/sdf_map/occupancy_local_inflate" to="$(arg topic_prefix)/sdf_map/occupancy_local_inflate"/>
@@ -76,7 +75,7 @@
     <!-- <param name="sdf_map/obstacles_inflation"     value="0.099" />  -->
     <!-- 2026-07-08: 针对 indoor1/管道环境里 frontier 被过度吞掉的问题，将障碍物膨胀从 0.4 下调到 0.15，先单独验证是否恢复对空白区的探索意愿。 -->
     <!-- 2026-07-27: A*膨胀层由0.25m折中为0.18m，避免窄通道已知自由域被切断；最终轨迹仍由0.28m真实足迹硬复核。 -->
-    <param name="sdf_map/obstacles_inflation"     value="0.18" /> 
+    <param name="sdf_map/obstacles_inflation"     value="0.099" />
 
     <param name="sdf_map/local_bound_inflate"    value="0.5"/>
     <param name="sdf_map/local_map_margin" value="50"/>
@@ -88,6 +87,12 @@
     <param name="sdf_map/p_min"  value="0.12"/>
     <param name="sdf_map/p_max"  value="0.90"/>
     <param name="sdf_map/p_occ"  value="0.80"/>
+
+    <!-- 仅阻止孤立单帧点进入规划膨胀层；原始概率地图仍保留，墙面/竖直细柱凭空间支撑立即生效。 -->
+    <param name="sdf_map/inflation_noise_filter_enabled" value="true" type="bool"/>
+    <param name="sdf_map/inflation_min_hit_evidence" value="2" type="int"/>
+    <param name="sdf_map/inflation_min_neighbors" value="2" type="int"/>
+    <param name="sdf_map/inflation_vertical_radius" value="2" type="int"/>
 
     <!-- 2026-07-08: 为了让无人机能在大房间里看见通道另一侧的未知区，恢复到更接近 FUEL 原始探索距离的雷达建图射线长度。 -->
     <param name="sdf_map/min_ray_length" value="0.5"/>
@@ -208,11 +213,11 @@
     <param name="manager/dynamic_environment" value="1" type="int"/>
     <param name="manager/local_segment_length" value="5.0" type="double"/>
     <param name="manager/clearance_threshold" value="0.2" type="double"/>
-    <!-- 2026-07-23: iris_mid360_250最外沿约0.196m；最终路径按0.20m真实圆盘检查，
-         0.15m膨胀图仅用于A*引导，避免膨胀层擦到当前位置后无法向前脱困。 -->
-    <!-- 2026-07-27: 最终路径/轨迹按0.28m水平包络复核，覆盖旋翼与跟踪误差。 -->
-    <param name="manager/footprint_check_radius" value="0.28" type="double"/>
+    <!-- 最终路径/轨迹按0.18m机体圆盘复核；孤立占据点按噪声忽略，连续墙柱仍硬拒绝。 -->
+    <param name="manager/footprint_check_radius" value="0.18" type="double"/>
     <param name="manager/footprint_check_samples" value="12" type="int"/>
+    <param name="manager/footprint_min_occupied_support" value="2" type="int"/>
+    <param name="manager/supported_occupancy_hard_reject_enabled" value="true" type="bool"/>
     <!-- 2026-07-16: 控制点间距缩到0.25m，使轨迹在窄道拐角更贴近已验证A*折线。 -->
     <param name="manager/control_points_distance" value="0.25" type="double"/>
     <param name="manager/use_geometric_path" value="true" type="bool"/>
@@ -240,11 +245,14 @@
     <param name="search/margin" value="0.2" type="double"/>
     <param name="search/allocate_num" value="100000" type="int"/>
     <param name="search/check_num" value="10" type="int"/>
-    <param name="search/optimistic" value="false" type="bool"/>
+    <param name="search/optimistic" value="true" type="bool"/>
 
     <param name="astar/lambda_heu" value="10000.0" type="double"/>
     <!-- 2026-07-13: 几何 A* 对竖直偏移加权，避免在 1.5m 内窄通道习惯性从障碍物上方绕行。 -->
     <param name="astar/vertical_weight" value="4.0" type="double"/>
+    <!-- 宽通道优先：0.60m净空内按距离连续惩罚贴墙路径，不扩大0.14m硬膨胀边界。 -->
+    <param name="astar/preferred_clearance" value="0.60" type="double"/>
+    <param name="astar/clearance_weight" value="8.0" type="double"/>
     <param name="astar/resolution_astar" value="0.2" type="double"/>
     <param name="astar/allocate_num" value="1000000" type="int"/>
     <!-- 2026-07-16: 旧值1ms会把复杂但可达的通道误判为No path；50ms仍满足规划周期且允许绕柱搜索。 -->
@@ -263,7 +271,7 @@
     <param name="optimization/ld_view" value="0.0" type="double"/>
     <param name="optimization/ld_time" value="1.0" type="double"/>
     <!-- 2026-07-20: 优化器软净空由0.70m校准为0.32m（0.20m机体半径+0.12m栅格/跟踪余量），允许通过比赛窄道；发布前0.20m完整足迹硬检查仍保留。 -->
-    <param name="optimization/dist0" value="0.32" type="double"/>
+    <param name="optimization/dist0" value="0.27" type="double"/>
     <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
     <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>
     <param name="optimization/algorithm1" value="15" type="int"/>

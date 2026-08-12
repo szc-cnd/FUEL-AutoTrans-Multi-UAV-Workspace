@@ -5,6 +5,7 @@
 
 #include <exploration_manager/fast_exploration_fsm.h>
 #include <exploration_manager/expl_data.h>
+#include <exploration_manager/replan_execution_policy.h>
 #include <plan_env/edt_environment.h>
 #include <plan_env/sdf_map.h>
 
@@ -30,6 +31,9 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/hard_tracking_error_z", fp_->hard_tracking_error_z_, 0.50);
   // 2026-07-22: FAIL后保持悬停并等待地图更新，禁止100Hz重复规划同一目标。
   nh.param("fsm/plan_failure_retry_interval", fp_->plan_failure_retry_interval_, 0.50);
+  nh.param("fsm/safety_hold_enabled", safety_hold_enabled_, true);
+  nh.param("fsm/hold_on_plan_failure", hold_on_plan_failure_, true);
+  nh.param("fsm/periodic_replan_enabled", periodic_replan_enabled_, true);
   // 2026-07-28: 连续复核覆盖至少两次20Hz地图/安全周期；起点误差过大则从真实里程计重规划。
   nh.param("fsm/trajectory_release_confirm_time", fp_->trajectory_release_confirm_time_, 0.12);
   nh.param("fsm/trajectory_release_check_interval", fp_->trajectory_release_check_interval_, 0.04);
@@ -55,8 +59,6 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   exec_timer_ = nh.createTimer(ros::Duration(0.01), &FastExplorationFSM::FSMCallback, this);
   safety_timer_ = nh.createTimer(ros::Duration(0.05), &FastExplorationFSM::safetyCallback, this);
   frontier_timer_ = nh.createTimer(ros::Duration(0.5), &FastExplorationFSM::frontierCallback, this);
-  // 规划器心跳固定 10 Hz，只表示 FUEL 进程仍在运行，不代表发布了新的 B-spline。
-  heartbeat_timer_ = nh.createTimer(ros::Duration(0.1), &FastExplorationFSM::heartbeatCallback, this);
 
   trigger_sub_ =
       nh.subscribe("/waypoint_generator/waypoints", 1, &FastExplorationFSM::triggerCallback, this);
@@ -76,8 +78,6 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   bspline_pub_ = nh.advertise<bspline::Bspline>("/planning/bspline", 10);
   // 2026-07-13: latch 保证后启动的控制器也能收到当前安全门控状态。
   safety_hold_pub_ = nh.advertise<std_msgs::Bool>("/planning/safety_hold", 2, true);
-  // 非 latched 心跳，避免控制器重启时重放旧的“规划器存活”状态。
-  planning_heartbeat_pub_ = nh.advertise<std_msgs::Empty>("/planning/heartbeat", 10, false);
   dynamic_detection_enable_pub_ =
       nh.advertise<std_msgs::Bool>(dynamic_detection_enable_topic, 2, true);
   setSafetyHold(false, "initialization");
@@ -85,12 +85,12 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   setDynamicDetectionEnable(false, "initialization", true);
 }
 
-void FastExplorationFSM::heartbeatCallback(const ros::TimerEvent&) {
-  std_msgs::Empty heartbeat;
-  planning_heartbeat_pub_.publish(heartbeat);
-}
-
 void FastExplorationFSM::setSafetyHold(bool active, const string& reason) {
+  if (active && !safety_hold_enabled_) {
+    ROS_WARN_THROTTLE(1.0, "[safety_hold] ignored reason=%s; FUEL hold disabled.",
+                      reason.c_str());
+    return;
+  }
   if (safety_hold_active_ == active && reason != "initialization") return;
   safety_hold_active_ = active;
   std_msgs::Bool msg;
@@ -114,10 +114,11 @@ void FastExplorationFSM::setDynamicDetectionEnable(bool active, const string& re
 // 2026-07-27: 通道内、出口门内接近及穿门阶段保持检测；确认门外搜索后立即关闭。
 void FastExplorationFSM::missionStatusCallback(const std_msgs::StringConstPtr &msg) {
   const std::string &state = msg->data;
-  mission_allows_dynamic_detection_ =
+  narrow_corridor_stage_ =
       state.find("SEARCH_CORRIDOR") == 0 ||
       state.find("EXIT_APPROACH_INSIDE") == 0 ||
       state.find("CROSS_EXIT") == 0;
+  mission_allows_dynamic_detection_ = narrow_corridor_stage_;
   setDynamicDetectionEnable(first_corridor_traj_published_ &&
                                 mission_allows_dynamic_detection_,
                             mission_allows_dynamic_detection_
@@ -177,10 +178,12 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         fd_->start_yaw_(2) = info->yawdotdot_traj_.evaluateDeBoorT(t_r)[0];
       }
 
-      // Inform traj_server the replanning
-      replan_pub_.publish(std_msgs::Empty());
       int res = callExplorationPlanner();
       if (res == SUCCEED) {
+        // 只有替代轨迹已经成功生成后才让traj_server准备交接。规划失败时继续执行
+        // 原有安全轨迹，不能先截断再原地等待下一次尝试。
+        if (exploration_policy::shouldInterruptCurrentTrajectory(true))
+          replan_pub_.publish(std_msgs::Empty());
         next_plan_retry_time_ = ros::Time(0);
         pending_traj_safe_since_ = ros::Time(0);
         next_pending_traj_check_ = ros::Time(0);
@@ -192,7 +195,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       } else if (res == FAIL) {
         // Still in PLAN_TRAJ state, keep replanning
         // 2026-07-13: 新轨迹未生成时立即悬停，旧 bspline 不允许继续把机体带向障碍物。
-        setSafetyHold(true, "planning failed");
+        if (hold_on_plan_failure_) setSafetyHold(true, "planning failed");
         // 2026-07-14: FSM 定时器为 100 Hz，连续不可达时限制重复日志，保留悬停和后续重规划行为。
         ROS_WARN_THROTTLE(1.0, "plan fail");
         fd_->static_state_ = true;
@@ -258,8 +261,9 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         fd_->static_state_ = false;
         transitState(EXEC_TRAJ, "FSM");
 
-        thread vis_thread(&FastExplorationFSM::visualize, this);
-        vis_thread.detach();
+        // 可视化必须在单线程 ROS 回调内读取当前轨迹和 frontier。分离线程会与紧随其后的
+        // 安全重规划并发改写同一批容器，造成悬空访问并以 SIGSEGV 退出。
+        visualize();
       }
       break;
     }
@@ -276,13 +280,16 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         return;
       }
       // Replan if next frontier to be visited is covered
-      if (t_cur > fp_->replan_thresh2_ && expl_manager_->frontier_finder_->isFrontierCovered()) {
+      if (exploration_policy::shouldReplanForCoveredFrontier(
+              expl_manager_->frontier_finder_->isFrontierCovered(),
+              narrow_corridor_stage_, t_cur, fp_->replan_thresh2_)) {
         transitState(PLAN_TRAJ, "FSM");
         ROS_WARN("Replan: cluster covered=====================================");
         return;
       }
       // Replan after some time
-      if (t_cur > fp_->replan_thresh3_ && !classic_) {
+      if (!classic_ && exploration_policy::shouldPeriodicReplan(
+                           t_cur, fp_->replan_thresh3_, periodic_replan_enabled_)) {
         transitState(PLAN_TRAJ, "FSM");
         ROS_WARN("Replan: periodic call=======================================");
       }

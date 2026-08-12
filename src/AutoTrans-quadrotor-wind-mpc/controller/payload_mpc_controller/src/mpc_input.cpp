@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <utility>
 
 namespace
 {
@@ -66,7 +65,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (msg.channels.size() < 4)
     {
-        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：RC 通道数量不足。");
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：RC 通道数量不足。");
         is_manual_mode = true;
         is_command_mode = false;
         is_hover_mode = false;
@@ -87,7 +86,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (mode_channel < 0 || msg.channels.size() <= static_cast<size_t>(mode_channel))
     {
-        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：未收到模式通道 CH%d。", mode_channel + 1);
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：未收到模式通道 CH%d。", mode_channel + 1);
         // 模式通道缺失时按手动请求处理，避免通道异常时沿用上一帧 AUTO_HOVER/CMD_CTRL 状态。
         is_manual_mode = true;
         is_command_mode = false;
@@ -102,7 +101,6 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     mode = static_cast<double>(msg.channels[mode_channel]);
     const char *requested_mode = requestedRcMode(
         mode, low_threshold, mid_low_threshold, mid_high_threshold, high_threshold);
-    ROS_INFO_THROTTLE(1.0, "[RC] CH8=%.0f us，当前请求模式：%s。", mode, requested_mode);
     check_validity();
     if (!have_init_last_mode)
     {
@@ -113,7 +111,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     const bool mode_valid = mode >= 800.0 && mode <= 2200.0;
     if (!mode_valid)
     {
-        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：PWM=%.0f us。", mode);
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：PWM=%.0f us。", mode);
         // 异常 PWM 不能触发起飞或自动控制，交给状态机执行安全退出。
         is_manual_mode = true;
         is_takeoff_mode = false;
@@ -164,7 +162,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     }
     else
     {
-        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：未收到降落通道 CH%d。", land_channel + 1);
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效，保持安全状态：未收到降落通道 CH%d。", land_channel + 1);
     }
 
     // CH8 已改为主模式通道，不再兼任飞控重启触发，避免模式切换和重启命令冲突。
@@ -182,7 +180,7 @@ void RC_Data_t::check_validity()
     }
     else
     {
-        ROS_WARN_THROTTLE(1.0, "[RC] CH8 信号无效，保持安全状态：模式 PWM=%.1f。", mode);
+        ROS_ERROR("[RC] CH8 信号无效，保持安全状态：模式 PWM=%.1f。", mode);
     }
 }
 
@@ -279,45 +277,30 @@ void ExtendedState_Data_t::feed(mavros_msgs::ExtendedStateConstPtr pMsg)
 
 Trajectory_Data_t::Trajectory_Data_t()
 {
-    clear();
-}
-
-void Trajectory_Data_t::clear()
-{
     total_traj_start_time = ros::Time(0);
     total_traj_end_time = ros::Time(0);
-    trajectory_id = 0;
-    traj_queue.clear();
-    ending_position.setZero();
-    ending_yaw = 0.0;
-    ending_yaw_valid = false;
-    ending_pose_valid = false;
     exec_traj = 0;
-}
-
-void Trajectory_Data_t::abort()
-{
-    clear();
-    exec_traj = -1;
 }
 
 void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
 {
+
+    // #1. try to execuse the action
     const quadrotor_msgs::PolynomialTraj &traj = *pMsg;
     if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
     {
-        ROS_INFO("[TRAJ] 正在加载规划轨迹：id=%u。", traj.trajectory_id);
-        auto reject_trajectory = [&traj]()
+        // exec_traj = false;
+        ROS_INFO("[TRAJ] 正在加载规划轨迹。");
+        if ((int)traj.trajectory_id < 1)
         {
-            ROS_ERROR_THROTTLE(1.0,
-                               "[TRAJ] 轨迹数据无效：id=%u，清除当前轨迹并保持当前位置。",
-                               traj.trajectory_id);
-        };
+            ROS_ERROR("[TRAJ] 轨迹数据无效：trajectory_id 必须从 1 开始。");
+            return;
+        }
+        // if ((int)traj.trajectory_id > 1 && (int)traj.trajectory_id < _traj_id) return ;
 
-        if (traj.trajectory_id < 1 || traj.header.stamp.isZero() || traj.trajectory.empty())
+        if (traj.header.stamp.isZero() || traj.trajectory.empty())
         {
-            reject_trajectory();
-            abort();
+            ROS_ERROR("[TRAJ] 轨迹数据无效：缺少起始时间或位置分段。");
             return;
         }
 
@@ -326,46 +309,30 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
         double t_total = 0.0;
         for (const auto &piece : traj.trajectory)
         {
-            if (piece.num_dim != 3 || piece.num_order > 12)
-            {
-                reject_trajectory();
-                abort();
-                return;
-            }
             const std::size_t expected_size = static_cast<std::size_t>(piece.num_dim) *
                                               static_cast<std::size_t>(piece.num_order + 1);
-            if (!std::isfinite(piece.duration) || piece.duration <= 0.0 ||
-                piece.data.size() != expected_size)
+            if (piece.num_dim != 3 || piece.duration <= 0.0 ||
+                piece.data.size() != expected_size || !std::isfinite(piece.duration))
             {
-                reject_trajectory();
-                abort();
+            ROS_ERROR("[TRAJ] 轨迹数据无效：位置分段维度或持续时间错误。");
                 return;
             }
             Eigen::Map<const Eigen::MatrixXd> coefficient_matrix(
                 piece.data.data(), piece.num_dim, piece.num_order + 1);
             if (!coefficient_matrix.allFinite())
             {
-                reject_trajectory();
-                abort();
+                ROS_ERROR("[TRAJ] 轨迹数据无效：位置多项式系数包含非有限值。");
                 return;
             }
             traj_data.traj.emplace_back(piece.duration, coefficient_matrix);
             t_total += piece.duration;
         }
 
-        if (!std::isfinite(t_total) || t_total <= 0.0 || traj_data.traj.getPieceNum() <= 0)
-        {
-            reject_trajectory();
-            abort();
-            return;
-        }
-
         if (traj.has_yaw)
         {
             if (traj.yaw_trajectory.size() != traj.trajectory.size())
             {
-                reject_trajectory();
-                abort();
+                ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 分段数量与位置分段数量不一致。");
                 return;
             }
             traj_data.has_yaw = true;
@@ -374,60 +341,68 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
                 const auto &yaw_piece = traj.yaw_trajectory[i];
                 const std::size_t expected_size = static_cast<std::size_t>(yaw_piece.num_dim) *
                                                   static_cast<std::size_t>(yaw_piece.num_order + 1);
-                if (yaw_piece.num_dim != 1 || yaw_piece.num_order > 12 ||
-                    yaw_piece.duration <= 0.0 ||
+                if (yaw_piece.num_dim != 1 || yaw_piece.duration <= 0.0 ||
                     !std::isfinite(yaw_piece.duration) ||
                     std::fabs(yaw_piece.duration - traj.trajectory[i].duration) > 1.0e-6 ||
                     yaw_piece.data.size() != expected_size)
                 {
-                    reject_trajectory();
-                    abort();
+                    ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 分段无效或持续时间不匹配。");
                     return;
                 }
                 Eigen::Map<const Eigen::MatrixXd> yaw_coefficients(
                     yaw_piece.data.data(), yaw_piece.num_dim, yaw_piece.num_order + 1);
                 if (!yaw_coefficients.allFinite())
                 {
-                    reject_trajectory();
-                    abort();
+                    ROS_ERROR("[TRAJ] 轨迹数据无效：yaw 多项式系数包含非有限值。");
                     return;
                 }
                 traj_data.yaw_traj.emplace_back(yaw_piece.duration, yaw_coefficients);
             }
         }
         traj_data.traj_end_time = traj_data.traj_start_time + ros::Duration(t_total);
-
-        // 每条 PolynomialTraj 是一个完整规划结果：先构造临时对象，全部通过校验后再一次性替换旧轨迹。
-        std::deque<oneTraj_Data_t> replacement;
-        replacement.push_back(std::move(traj_data));
-        traj_queue.swap(replacement);
-        total_traj_start_time = traj_queue.front().traj_start_time;
-        total_traj_end_time = traj_queue.front().traj_end_time;
-        trajectory_id = traj.trajectory_id;
-        ending_position = traj_queue.front().traj.getJuncPos(traj_queue.front().traj.getPieceNum());
-        ending_pose_valid = ending_position.size() == 3 && ending_position.allFinite();
-        ending_yaw_valid = false;
-        if (traj_queue.front().has_yaw && traj_queue.front().yaw_traj.getPieceNum() > 0)
+        if (ros::Time::now() < traj_data.traj_start_time) // Future traj
         {
-            const Eigen::VectorXd yaw_end = traj_queue.front().yaw_traj.getJuncPos(
-                traj_queue.front().yaw_traj.getPieceNum());
-            ending_yaw_valid = yaw_end.size() == 1 && yaw_end.allFinite();
-            if (ending_yaw_valid)
-                ending_yaw = yaw_end(0);
+            // A future trajectory
+            while ((!traj_queue.empty()) && traj_queue.back().traj_start_time > traj_data.traj_start_time)
+            {
+                traj_queue.pop_back(); // remove old trajectory (remove the traj newer than the new traj)
+            }
+            traj_queue.push_back(traj_data);
+            // adjust_end_time();
+            total_traj_end_time = traj_queue.back().traj_end_time;
+            total_traj_start_time = traj_queue.front().traj_start_time;
         }
+        else
+        {
+            while ((!traj_queue.empty()) && traj_queue.front().traj_start_time < traj_data.traj_start_time)
+            {
+                traj_queue.pop_front(); // remove old trajectory
+            }
+            traj_queue.push_front(traj_data);
+            // adjust_end_time();
+            total_traj_end_time = traj_queue.back().traj_end_time;
+            total_traj_start_time = traj_queue.front().traj_start_time;
+        }
+        trajectory_id = traj.trajectory_id;
         exec_traj = 1;
         ROS_INFO("[TRAJ] 收到轨迹：id=%u，piece 数量=%d。",
-                 traj.trajectory_id, traj_queue.front().traj.getPieceNum());
+                 traj.trajectory_id, traj_data.traj.getPieceNum());
     }
     else if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ABORT)
     {
         ROS_WARN("[TRAJ] 收到轨迹中止指令。");
-        abort();
+        total_traj_start_time = ros::Time(0);
+        total_traj_end_time = ros::Time(0);
+        traj_queue.clear();
+        exec_traj = -1;
     }
     else if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_WARN_IMPOSSIBLE)
     {
         ROS_WARN("[TRAJ] 收到规划失败/不可行指令，清除当前轨迹。");
-        abort();
+        total_traj_start_time = ros::Time(0);
+        total_traj_end_time = ros::Time(0);
+        traj_queue.clear();
+        exec_traj = -1;
     }
 }
 
@@ -478,14 +453,7 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         vlotage += pMsg->cell_voltage[i];
     }
-    // 首个有效样本直接初始化，避免从 0 V 低通收敛产生伪启动电压；后续再进行平滑。
-    if (std::isfinite(vlotage) && vlotage > 0.0)
-    {
-        if (!std::isfinite(volt) || volt <= 0.0)
-            volt = vlotage;
-        else
-            volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
-    }
+    volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
 
     // volt = 0.8 * volt + 0.2 * pMsg->voltage; // Naive LPF
     percentage = pMsg->percentage;
@@ -522,7 +490,7 @@ void Rpm_Data_t::feed(mavros_msgs::ESCStatusConstPtr pMsg)
 {
     if (pMsg->esc_status.size() < 4)
     {
-        ROS_WARN_THROTTLE(1.0, "[RPM] ESC 转速数据无效：收到的电机数量少于 4 路。");
+        ROS_WARN_THROTTLE(5.0, "[RPM] ESC 转速数据无效：收到的电机数量少于 4 路。");
         return;
     }
 

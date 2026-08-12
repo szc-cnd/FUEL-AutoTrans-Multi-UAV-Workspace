@@ -108,10 +108,6 @@ namespace PayloadMPC
 			// /mavros/state 与 /mavros/extended_state 的超时阈值，单位 s。
 			double state;
 			double extended_state;
-			// PolynomialTraj 起始时间允许落后当前时间的最大值，单位 s；超过后拒绝旧轨迹。
-			double trajectory;
-			// PolynomialTraj 起始时间允许超前当前时间的最大值，单位 s；超过后拒绝未来轨迹。
-			double trajectory_future;
 		};
 
 		struct ThrustMapping
@@ -167,18 +163,10 @@ namespace PayloadMPC
 		{
 			// AUTO_TAKEOFF 只在 PX4 已经进入 OFFBOARD 后执行，不自动解锁或切换 OFFBOARD。
 			bool enabled{true};
-			// ENU 世界系目标高度，单位 m；起飞期间 x/y 保持起飞开始位置。
+			// 唯一 ENU 世界系起飞/悬停目标点的高度，单位 m。
 			double target_z{1.0};
-			// z 参考值的最大上升速度，单位 m/s。
+			// z 参考值上升速度，单位 m/s；达到 target_z 后保持目标点。
 			double climb_rate{0.25};
-			// 判定实际高度到达目标的允许误差，单位 m。
-			double position_tolerance{0.10};
-			// 判定起飞稳定的最大世界系垂直速度，单位 m/s。
-			double velocity_tolerance{0.15};
-			// 高度和速度满足条件后需持续的稳定时间，单位 s。
-			double settle_time{0.8};
-			// 起飞过程最大持续时间，单位 s。
-			double timeout{8.0};
 			// 固定悬停点启用时，起飞前允许的水平距离，单位 m。
 			double max_initial_xy_error{0.5};
 		};
@@ -221,6 +209,9 @@ namespace PayloadMPC
 		real_t max_thrust_;
 		real_t max_bodyrate_xy_;
 		real_t max_bodyrate_z_;
+		// 世界系 ENU 速度硬约束，单位 m/s；直接传给 ACADO 约束边界。
+		real_t max_velocity_xy_;
+		real_t max_velocity_z_;
 
 		real_t state_cost_exponential_;
 		real_t input_cost_exponential_;
@@ -231,10 +222,6 @@ namespace PayloadMPC
 		int step_N_;
 
 		double ctrl_freq_max_;
-		// FUEL 规划器心跳超时阈值，单位 s；仅用于 CMD_CTRL/PolynomialTraj 执行阶段。
-		double planner_heartbeat_timeout_{0.5};
-		// 是否要求规划器心跳；CAV0 FUEL 开启，其他没有心跳的规划器入口显式关闭。
-		bool require_planner_heartbeat_{false};
 
 		bool use_trajectory_ending_pos_;
 
@@ -257,6 +244,8 @@ namespace PayloadMPC
 			max_thrust_ = 0.0;
 			max_bodyrate_z_ = 0.0;
 			max_bodyrate_xy_ = 0.0;
+			max_velocity_xy_ = 0.0;
+			max_velocity_z_ = 0.0;
 			enable_rc_hover_adjust_ = false;
 		}
 
@@ -285,6 +274,14 @@ namespace PayloadMPC
 			read_essential_param(nh, "max_thrust", max_thrust_);
 			read_essential_param(nh, "max_bodyrate_xy", max_bodyrate_xy_);
 			read_essential_param(nh, "max_bodyrate_z", max_bodyrate_z_);
+			read_essential_param(nh, "max_velocity_xy", max_velocity_xy_);
+			read_essential_param(nh, "max_velocity_z", max_velocity_z_);
+			if (!std::isfinite(max_velocity_xy_) || !std::isfinite(max_velocity_z_) ||
+				max_velocity_xy_ <= 0.0 || max_velocity_z_ <= 0.0)
+			{
+				ROS_ERROR("[参数] max_velocity_xy/max_velocity_z 必须为有限正数，单位 m/s。");
+				ROS_BREAK();
+			}
 
 			read_essential_param(nh, "state_cost_exponential", state_cost_exponential_);
 			read_essential_param(nh, "input_cost_exponential", input_cost_exponential_);
@@ -320,19 +317,11 @@ namespace PayloadMPC
 			read_essential_param(nh, "takeoff/enabled", takeoff_.enabled);
 			read_essential_param(nh, "takeoff/target_z", takeoff_.target_z);
 			read_essential_param(nh, "takeoff/climb_rate", takeoff_.climb_rate);
-			read_essential_param(nh, "takeoff/position_tolerance", takeoff_.position_tolerance);
-			read_essential_param(nh, "takeoff/velocity_tolerance", takeoff_.velocity_tolerance);
-			read_essential_param(nh, "takeoff/settle_time", takeoff_.settle_time);
-			read_essential_param(nh, "takeoff/timeout", takeoff_.timeout);
 			read_essential_param(nh, "takeoff/max_initial_xy_error", takeoff_.max_initial_xy_error);
 			read_essential_param(nh, "entry_command/max_velocity", entry_command_.max_velocity);
 			read_essential_param(nh, "entry_command/max_acceleration", entry_command_.max_acceleration);
 			if (!std::isfinite(takeoff_.target_z) || takeoff_.target_z < 0.0 ||
 				!std::isfinite(takeoff_.climb_rate) || takeoff_.climb_rate <= 0.0 ||
-				!std::isfinite(takeoff_.position_tolerance) || takeoff_.position_tolerance <= 0.0 ||
-				!std::isfinite(takeoff_.velocity_tolerance) || takeoff_.velocity_tolerance <= 0.0 ||
-				!std::isfinite(takeoff_.settle_time) || takeoff_.settle_time < 0.0 ||
-				!std::isfinite(takeoff_.timeout) || takeoff_.timeout <= 0.0 ||
 				!std::isfinite(takeoff_.max_initial_xy_error) || takeoff_.max_initial_xy_error < 0.0)
 			{
 				ROS_ERROR("[参数] takeoff 参数无效。");
@@ -396,18 +385,6 @@ namespace PayloadMPC
 				thr_map_.max_hover_percentage_step >= 0.1)
 			{
 				ROS_ERROR("[参数] thrust_model/max_hover_percentage_step 必须为有限值且位于 (0, 0.1)。");
-				ROS_BREAK();
-			}
-			const double initial_thrustscale =
-				dyn_params_.mass_q * gravity_ / thr_map_.hover_percentage;
-			const double normalized_capacity =
-				initial_thrustscale * thr_map_.max_normalized_thrust;
-			if (!std::isfinite(initial_thrustscale) || !std::isfinite(normalized_capacity) ||
-				max_thrust_ > normalized_capacity + 1.0e-6)
-			{
-				ROS_ERROR("[参数] max_thrust=%.3f N 超过初始归一化上限对应的 %.3f N；"
-						  "请保持 NMPC 物理推力和 MAVROS normalized thrust 一致。",
-						  static_cast<double>(max_thrust_), normalized_capacity);
 				ROS_BREAK();
 			}
 
@@ -511,26 +488,18 @@ namespace PayloadMPC
 			read_essential_param(nh, "msg_timeout/rpm", msg_timeout_.rpm);
 			read_essential_param(nh, "msg_timeout/state", msg_timeout_.state);
 			read_essential_param(nh, "msg_timeout/extended_state", msg_timeout_.extended_state);
-			read_essential_param(nh, "msg_timeout/trajectory", msg_timeout_.trajectory);
-			read_essential_param(nh, "msg_timeout/trajectory_future", msg_timeout_.trajectory_future);
-			read_essential_param(nh, "planner_heartbeat_timeout", planner_heartbeat_timeout_);
-			read_essential_param(nh, "require_planner_heartbeat", require_planner_heartbeat_);
 			if (!std::isfinite(msg_timeout_.odom) || !std::isfinite(msg_timeout_.force_attitude_odom) ||
 				!std::isfinite(msg_timeout_.rc) ||
 				!std::isfinite(msg_timeout_.cmd) || !std::isfinite(msg_timeout_.imu) ||
 				!std::isfinite(msg_timeout_.bat) || !std::isfinite(msg_timeout_.rpm) ||
 				!std::isfinite(msg_timeout_.state) || !std::isfinite(msg_timeout_.extended_state) ||
-				!std::isfinite(msg_timeout_.trajectory) || !std::isfinite(msg_timeout_.trajectory_future) ||
-				!std::isfinite(planner_heartbeat_timeout_) ||
 				msg_timeout_.odom <= 0.0 || msg_timeout_.force_attitude_odom <= 0.0 ||
 				msg_timeout_.rc <= 0.0 ||
 				msg_timeout_.cmd <= 0.0 || msg_timeout_.imu <= 0.0 ||
 				msg_timeout_.bat <= 0.0 || msg_timeout_.rpm <= 0.0 ||
-				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0 ||
-				msg_timeout_.trajectory <= 0.0 || msg_timeout_.trajectory_future < 0.0 ||
-				planner_heartbeat_timeout_ <= 0.0)
+				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0)
 			{
-				ROS_ERROR("[参数] 消息和规划器心跳超时参数必须为有限正数。");
+				ROS_ERROR("[参数] 所有 msg_timeout 必须为有限正数。");
 				ROS_BREAK();
 			}
 

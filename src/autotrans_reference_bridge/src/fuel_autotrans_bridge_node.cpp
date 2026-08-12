@@ -21,20 +21,21 @@ class FuelAutoTransBridge
 {
 public:
   FuelAutoTransBridge()
-      : nh_(), private_nh_("~"), last_trajectory_id_(1)
+      : nh_(), private_nh_("~"), last_input_time_(0), last_trajectory_id_(1), abort_sent_(false)
   {
     private_nh_.param<std::string>("input_topic", input_topic_, "/UAV0/planning/bspline");
     private_nh_.param<std::string>("output_topic", output_topic_,
                                    "/UAV0/planning/autotrans_trajectory");
     private_nh_.param<std::string>("frame_id", frame_id_, "UAV0/camera_init");
+    private_nh_.param("trajectory_timeout", trajectory_timeout_, 0.5);
 
-    // 非 latched：控制器重启或重新订阅时不能自动收到上一轮实验的旧 ACTION_ADD。
-    output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, false);
+    output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true);
     input_sub_ = nh_.subscribe(input_topic_, 2, &FuelAutoTransBridge::bsplineCallback, this);
+    timeout_timer_ = nh_.createTimer(ros::Duration(0.05), &FuelAutoTransBridge::timeoutCallback, this);
 
-    ROS_INFO("[fuel_autotrans_bridge] %s (bspline/Bspline) -> %s "
-             "(quadrotor_msgs/PolynomialTraj), frame=%s, non-latched",
-             input_topic_.c_str(), output_topic_.c_str(), frame_id_.c_str());
+    ROS_INFO("[fuel_autotrans_bridge] %s (bspline/Bspline) -> %s (quadrotor_msgs/PolynomialTraj), "
+             "frame=%s timeout=%.3f s",
+             input_topic_.c_str(), output_topic_.c_str(), frame_id_.c_str(), trajectory_timeout_);
   }
 
 private:
@@ -131,9 +132,8 @@ private:
     output.num_dim = static_cast<uint32_t>(dimension);
     output.duration = duration;
     output.data.reserve(static_cast<std::size_t>((degree + 1) * dimension));
-    // AutoTrans 的 Piece 按降幂读取多项式：第 0 列是最高次项，最后一列是常数项。
-    // data[] 按列主序保存，每一列依次写入 x/y/z 三轴系数。
-    for (int order = degree; order >= 0; --order)
+    // AutoTrans 使用 Eigen::Map<MatrixXd> 按列主序恢复矩阵；这里按阶次再按维度写入。
+    for (int order = 0; order <= degree; ++order)
     {
       for (int dim = 0; dim < dimension; ++dim)
       {
@@ -260,37 +260,47 @@ private:
     quadrotor_msgs::PolynomialTraj output;
     if (!buildTrajectory(*input, output))
     {
-      publishAbort(input->traj_id >= 1 ? static_cast<uint32_t>(input->traj_id)
-                                      : last_trajectory_id_);
       return;
     }
     output_pub_.publish(output);
+    last_input_time_ = ros::Time::now();
     last_trajectory_id_ = output.trajectory_id;
+    abort_sent_ = false;
     ROS_INFO_THROTTLE(1.0, "[fuel_autotrans_bridge] Forward FUEL trajectory id=%u, pieces=%zu, yaw=enabled.",
                       output.trajectory_id, output.trajectory.size());
   }
 
-  void publishAbort(uint32_t trajectory_id)
+  void timeoutCallback(const ros::TimerEvent&)
   {
+    if (last_input_time_.isZero() || abort_sent_ ||
+        (ros::Time::now() - last_input_time_).toSec() <= trajectory_timeout_)
+    {
+      return;
+    }
+
     quadrotor_msgs::PolynomialTraj abort_message;
     abort_message.header.stamp = ros::Time::now();
     abort_message.header.frame_id = frame_id_;
-    abort_message.trajectory_id = trajectory_id;
+    abort_message.trajectory_id = last_trajectory_id_;
     abort_message.action = quadrotor_msgs::PolynomialTraj::ACTION_ABORT;
     abort_message.has_yaw = false;
     output_pub_.publish(abort_message);
-    ROS_ERROR_THROTTLE(1.0,
-                       "[fuel_autotrans_bridge] 输入 B-spline 无效，已发布一次非 latched ACTION_ABORT。");
+    abort_sent_ = true;
+    ROS_ERROR("[fuel_autotrans_bridge] FUEL B-spline timeout; ACTION_ABORT published.");
   }
 
   ros::NodeHandle nh_;
   ros::NodeHandle private_nh_;
   ros::Subscriber input_sub_;
   ros::Publisher output_pub_;
+  ros::Timer timeout_timer_;
   std::string input_topic_;
   std::string output_topic_;
   std::string frame_id_;
+  double trajectory_timeout_;
+  ros::Time last_input_time_;
   uint32_t last_trajectory_id_;
+  bool abort_sent_;
 };
 
 }  // namespace

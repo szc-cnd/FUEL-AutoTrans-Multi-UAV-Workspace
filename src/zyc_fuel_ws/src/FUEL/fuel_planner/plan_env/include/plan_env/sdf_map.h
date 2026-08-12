@@ -99,6 +99,12 @@ struct MapParam {
   double p_hit_, p_miss_, p_min_, p_max_, p_occ_;  // occupancy probability
   double prob_hit_log_, prob_miss_log_, clamp_min_log_, clamp_max_log_, min_occupancy_log_;  // logit
   double max_ray_length_;
+  bool static_retention_enabled_;
+  int static_retention_required_hits_;
+  bool inflation_noise_filter_enabled_;
+  int inflation_min_hit_evidence_;
+  int inflation_min_neighbors_;
+  int inflation_vertical_radius_;
   double local_bound_inflate_;
   int local_map_margin_;
   double unknown_flag_;
@@ -114,6 +120,8 @@ struct MapData {
   std::vector<double> tmp_buffer2_;
   // data for updating
   vector<short> count_hit_, count_miss_, count_hit_and_miss_;
+  vector<unsigned short> static_hit_evidence_;
+  vector<char> static_occupancy_locked_;
   vector<char> flag_rayend_, flag_visited_;
   char raycast_num_;
   queue<int> cache_voxel_;

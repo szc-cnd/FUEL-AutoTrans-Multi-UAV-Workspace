@@ -22,6 +22,9 @@ void Astar::init(ros::NodeHandle& nh, const EDTEnvironment::Ptr& env) {
   // 2026-07-28: 默认不改变通用FUEL；比赛launch显式设置0.45~0.78m飞行高度带。
   nh.param("astar/min_search_height", min_search_height_, -1e6);
   nh.param("astar/max_search_height", max_search_height_, 1e6);
+  nh.param("astar/vertical_weight", vertical_weight_, 1.0);
+  nh.param("astar/preferred_clearance", preferred_clearance_, 0.0);
+  nh.param("astar/clearance_weight", clearance_weight_, 0.0);
 
   tie_breaker_ = 1.0 + 1.0 / 1000;
 
@@ -169,7 +172,21 @@ int Astar::search(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& end_pt
           if (close_set_map_.find(nbr_idx) != close_set_map_.end()) continue;
 
           NodePtr neighbor;
-          double tmp_g_score = step.norm() + cur_node->g_score;
+          // Horizontal detours toward open space are safer than short vertical or wall-hugging
+          // shortcuts. This is a soft cost: the inflated occupancy remains the hard boundary.
+          const double weighted_step =
+              sqrt(dx * dx + dy * dy + vertical_weight_ * vertical_weight_ * dz * dz);
+          double clearance_penalty = 0.0;
+          if (preferred_clearance_ > 1e-3 && clearance_weight_ > 0.0) {
+            const double clearance = std::min(edt_env_->sdf_map_->getDistance(cur_pos),
+                                              edt_env_->sdf_map_->getDistance(nbr_pos));
+            if (clearance < preferred_clearance_) {
+              const double deficit =
+                  (preferred_clearance_ - std::max(0.0, clearance)) / preferred_clearance_;
+              clearance_penalty = clearance_weight_ * weighted_step * deficit * deficit;
+            }
+          }
+          double tmp_g_score = weighted_step + clearance_penalty + cur_node->g_score;
           auto node_iter = open_set_map_.find(nbr_idx);
           if (node_iter == open_set_map_.end()) {
             neighbor = path_node_pool_[use_node_num_];

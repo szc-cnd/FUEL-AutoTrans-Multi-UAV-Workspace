@@ -29,11 +29,13 @@ public:
                             const std::vector<double>& yaws,
                             const std::vector<std::vector<Eigen::Vector3d>>& frontiers,
                             const Eigen::Vector3d& cur_pos, double cur_yaw);
-  std::vector<Eigen::Vector3d> recoveryDirections(double cur_yaw) const;
+  std::vector<Eigen::Vector3d> recoveryDirections(double cur_yaw);
   // 2026-07-28: 仅供局部脱困判断真实最近航向和短回撤方向；普通frontier仍执行全局禁回头。
-  Eigen::Vector3d recoveryForwardDirection(double cur_yaw) const;
+  Eigen::Vector3d recoveryForwardDirection(double cur_yaw);
+  // 只读查询累计占据地图轮廓推断的局部通道转向，供yaw提前对准；不修改任务状态。
+  bool mappedCorridorDirection(double cur_yaw, Eigen::Vector3d& direction) const;
   bool isRecoveryDirectionBackward(const Eigen::Vector3d& direction,
-                                   double cur_yaw) const;
+                                   double cur_yaw);
   bool isRecoveryCandidateUseful(const Eigen::Vector3d& candidate) const;
   bool isTaskMotionAllowed(const Eigen::Vector3d& candidate) const;
   bool isTaskPathAllowed(const std::vector<Eigen::Vector3d>& path) const;
@@ -45,6 +47,7 @@ public:
   double projectSearchHeight(double candidate_z, double current_z) const;
   void recordSelectedGoal(const Eigen::Vector3d& goal);
   void reportGoalFailure(const Eigen::Vector3d& goal);
+  void clearActiveGoal() { active_goal_valid_ = false; }
   // 2026-07-13: search_exhausted 只负责允许切换阶段，出口位置始终由地图拓扑决定。
   bool buildStage3Goal(const Eigen::Vector3d& cur_pos, double cur_yaw, bool search_exhausted,
                        Eigen::Vector3d& goal, double& goal_yaw);
@@ -142,7 +145,7 @@ private:
   bool mapWallRaySupported(const Eigen::Vector3d& start,
                            const Eigen::Vector2d& direction,
                            double length, double min_ratio) const;
-  // 2026-07-28: 从累计占据地图的中心自由射线和双侧连续墙推断正常拐弯轴线，
+  // 2026-07-28: 从累计占据地图的前墙和至少一侧连续墙轮廓推断正常拐弯轴线，
   // 供恢复器在90度弯道替换已经失效的历史直行切线。
   bool inferOccupancyTurnDirection(const Eigen::Vector3d& travel_direction,
                                    Eigen::Vector3d& turn_direction,
@@ -150,11 +153,11 @@ private:
                                    double& turn_free_length) const;
   bool allStage2TargetsFound() const;
   bool goalTemporarilyBlocked(const Eigen::Vector3d& goal) const;
-  bool belongsToCompletedRoute(const Eigen::Vector3d& point) const;
   void publishLandingRequest(bool active);
   void publishSearchState();
   double minDistance2D(const Eigen::Vector3d& point,
                        const std::deque<Eigen::Vector3d>& history) const;
+  double knownHorizontalClearance(const Eigen::Vector3d& point) const;
   // 独立于瞬时速度维护任务推进方向：正常转弯可逐段更新，短回撤不能把前后语义翻转。
   Eigen::Vector2d stableProgressDirection() const;
   double wrapYaw(double yaw) const;
@@ -256,8 +259,14 @@ private:
   double height_weight_{2.0};
   double repeat_penalty_{6.0};
   double frontier_gain_weight_{0.10};
+  bool clearance_reward_enabled_{true};
+  double clearance_reward_start_{0.30};
+  double clearance_reward_full_{0.60};
+  double clearance_reward_max_{5.0};
   double entry_forward_distance_{2.0};
   double entry_forward_weight_{1.5};
+  double forward_viewpoint_bonus_{5.0};
+  double backward_viewpoint_penalty_{5.0};
   // 2026-07-21: 普通单通道搜索默认禁止把“暂无前向候选”解释成掉头；显式故障回撤才允许后向恢复。
   bool prefer_motion_forward_{true};
   bool allow_search_backtrack_{false};
@@ -266,9 +275,6 @@ private:
   double min_goal_hold_time_{1.2};
   // 2026-07-14: 对尚未到达的活动目标增加空间连续性代价，避免相邻重规划周期跨数米反向换点。
   double goal_switch_weight_{1.2};
-  // 2026-07-21: 任务模式不再回收已完成通道里的FUEL历史frontier；最近航迹保留用于正常转弯和连续推进。
-  double completed_route_exclusion_radius_{0.90};
-  double completed_route_recent_arc_length_{2.00};
   double failed_goal_radius_{0.55};
   double failed_goal_cooldown_{2.0};
   double inside_return_margin_{0.10};
@@ -277,9 +283,9 @@ private:
   bool recovery_occupancy_turn_enabled_{true};
   double recovery_turn_probe_length_{1.50};
   double recovery_turn_probe_step_{0.10};
-  double recovery_turn_min_free_length_{0.90};
-  double recovery_turn_min_free_gain_{0.30};
-  double recovery_turn_min_angle_deg_{45.0};
+  double recovery_turn_min_free_length_{0.50};
+  double recovery_turn_min_free_gain_{0.15};
+  double recovery_turn_min_angle_deg_{30.0};
   double recovery_turn_max_angle_deg_{120.0};
   double recovery_turn_wall_min_half_width_{0.35};
   double recovery_turn_wall_max_half_width_{1.05};

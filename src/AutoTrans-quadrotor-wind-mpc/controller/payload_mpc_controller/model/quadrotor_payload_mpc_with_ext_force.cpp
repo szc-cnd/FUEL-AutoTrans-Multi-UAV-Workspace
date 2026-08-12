@@ -62,6 +62,9 @@ int main(int argc, char **argv)
 #endif
 
   double g_z = cfg_root["gravity"].As<double>(9.81);
+  // 代码生成阶段的世界系 ENU 速度边界，单位 m/s；运行时由 mpc.yaml 覆盖边界数值。
+  const double max_velocity_xy = cfg_root["max_velocity_xy"].As<double>(0.3);
+  const double max_velocity_z = cfg_root["max_velocity_z"].As<double>(0.3);
   double dt = cfg_root["step_T"].As<double>(0.05);
   int N = cfg_root["step_N"].As<int>(20);
 
@@ -175,6 +178,10 @@ int main(int argc, char **argv)
   ocp.subjectTo(-w_max_xy <= w_y <= w_max_xy);
   ocp.subjectTo(-w_max_yaw <= w_z <= w_max_yaw);
   ocp.subjectTo(T_min <= T <= T_max);
+  // v_x/v_y/v_z 是 ENU 世界系线速度，单位 m/s；这是 NMPC 的硬速度约束。
+  ocp.subjectTo(-max_velocity_xy <= v_x <= max_velocity_xy);
+  ocp.subjectTo(-max_velocity_xy <= v_y <= max_velocity_xy);
+  ocp.subjectTo(-max_velocity_z <= v_z <= max_velocity_z);
 
   ocp.setNOD(4);
 

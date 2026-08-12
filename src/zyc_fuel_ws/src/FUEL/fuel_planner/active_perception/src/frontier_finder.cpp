@@ -53,6 +53,14 @@ FrontierFinder::FrontierFinder(const EDTEnvironment::Ptr& edt, ros::NodeHandle& 
 FrontierFinder::~FrontierFinder() {
 }
 
+void FrontierFinder::clearFrontierHistory() {
+  std::fill(frontier_flag_.begin(), frontier_flag_.end(), 0);
+  frontiers_.clear();
+  dormant_frontiers_.clear();
+  tmp_frontiers_.clear();
+  removed_ids_.clear();
+}
+
 void FrontierFinder::searchFrontiers() {
   ros::Time t1 = ros::Time::now();
   tmp_frontiers_.clear();

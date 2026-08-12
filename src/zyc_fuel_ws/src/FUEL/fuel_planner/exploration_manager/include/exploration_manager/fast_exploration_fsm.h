@@ -48,11 +48,13 @@ private:
 
   /* ROS utils */
   ros::NodeHandle node_;
-  ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_, heartbeat_timer_;
+  ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
-  ros::Publisher replan_pub_, new_pub_, bspline_pub_, safety_hold_pub_,
-      dynamic_detection_enable_pub_, planning_heartbeat_pub_;
+  ros::Publisher replan_pub_, new_pub_, bspline_pub_, safety_hold_pub_, dynamic_detection_enable_pub_;
   bool safety_hold_active_{false};
+  bool safety_hold_enabled_{true};
+  bool hold_on_plan_failure_{true};
+  bool periodic_replan_enabled_{true};
   // 2026-07-13: 记录连续跟踪误差起点，区分短时控制滞后与真实失控。
   ros::Time tracking_error_since_;
   // 2026-07-22: 规划失败后低频重试，禁止PLAN_TRAJ在100Hz下重复生成同一批轨迹和RViz线段。
@@ -65,6 +67,7 @@ private:
   // 2026-07-27: 必须先发布首条通道内轨迹，且任务仍在门内/穿出口阶段，才允许 LDOT 工作。
   bool first_corridor_traj_published_{false};
   bool mission_allows_dynamic_detection_{false};
+  bool narrow_corridor_stage_{false};
   bool dynamic_detection_enabled_{false};
 
   /* helper functions */
@@ -78,7 +81,6 @@ private:
   void FSMCallback(const ros::TimerEvent& e);
   void safetyCallback(const ros::TimerEvent& e);
   void frontierCallback(const ros::TimerEvent& e);
-  void heartbeatCallback(const ros::TimerEvent& e);
   void triggerCallback(const nav_msgs::PathConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
   void missionStatusCallback(const std_msgs::StringConstPtr& msg);

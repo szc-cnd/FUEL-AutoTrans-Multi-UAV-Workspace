@@ -1,6 +1,7 @@
 #include "plan_env/sdf_map.h"
 #include "plan_env/map_ros.h"
 #include <plan_env/raycast.h>
+#include <plan_env/static_occupancy_policy.h>
 
 namespace fast_planner {
 SDFMap::SDFMap() {
@@ -44,6 +45,16 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   nh.param("sdf_map/p_max", mp_->p_max_, 0.97);
   nh.param("sdf_map/p_occ", mp_->p_occ_, 0.80);
   nh.param("sdf_map/max_ray_length", mp_->max_ray_length_, -0.1);
+  nh.param("sdf_map/static_retention_enabled", mp_->static_retention_enabled_, false);
+  nh.param("sdf_map/static_retention_required_hits", mp_->static_retention_required_hits_, 6);
+  mp_->static_retention_required_hits_ = std::max(2, mp_->static_retention_required_hits_);
+  nh.param("sdf_map/inflation_noise_filter_enabled", mp_->inflation_noise_filter_enabled_, false);
+  nh.param("sdf_map/inflation_min_hit_evidence", mp_->inflation_min_hit_evidence_, 2);
+  nh.param("sdf_map/inflation_min_neighbors", mp_->inflation_min_neighbors_, 2);
+  nh.param("sdf_map/inflation_vertical_radius", mp_->inflation_vertical_radius_, 2);
+  mp_->inflation_min_hit_evidence_ = std::max(1, mp_->inflation_min_hit_evidence_);
+  mp_->inflation_min_neighbors_ = std::max(0, mp_->inflation_min_neighbors_);
+  mp_->inflation_vertical_radius_ = std::max(0, mp_->inflation_vertical_radius_);
   nh.param("sdf_map/virtual_ceil_height", mp_->virtual_ceil_height_, -0.1);
 
   auto logit = [](const double& x) { return log(x / (1 - x)); };
@@ -56,6 +67,10 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   cout << "hit: " << mp_->prob_hit_log_ << ", miss: " << mp_->prob_miss_log_
        << ", min: " << mp_->clamp_min_log_ << ", max: " << mp_->clamp_max_log_
        << ", thresh: " << mp_->min_occupancy_log_ << endl;
+  ROS_INFO("[sdf_map] inflation noise filter=%s min_hits=%d neighbors=%d vertical_radius=%d",
+           mp_->inflation_noise_filter_enabled_ ? "true" : "false",
+           mp_->inflation_min_hit_evidence_, mp_->inflation_min_neighbors_,
+           mp_->inflation_vertical_radius_);
 
   // Initialize data buffer of map
   int buffer_size = mp_->map_voxel_num_(0) * mp_->map_voxel_num_(1) * mp_->map_voxel_num_(2);
@@ -64,6 +79,8 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   md_->distance_buffer_neg_ = vector<double>(buffer_size, mp_->default_dist_);
   md_->distance_buffer_ = vector<double>(buffer_size, mp_->default_dist_);
   md_->count_hit_and_miss_ = vector<short>(buffer_size, 0);
+  md_->static_hit_evidence_ = vector<unsigned short>(buffer_size, 0);
+  md_->static_occupancy_locked_ = vector<char>(buffer_size, 0);
   md_->count_hit_ = vector<short>(buffer_size, 0);
   md_->count_miss_ = vector<short>(buffer_size, 0);
   md_->flag_rayend_ = vector<char>(buffer_size, -1);
@@ -332,9 +349,23 @@ void SDFMap::inputPointCloud(
   while (!md_->cache_voxel_.empty()) {
     int adr = md_->cache_voxel_.front();
     md_->cache_voxel_.pop();
-    double log_odds_update =
-        md_->count_hit_[adr] >= md_->count_miss_[adr] ? mp_->prob_hit_log_ : mp_->prob_miss_log_;
+    const bool observed_hit = md_->count_hit_[adr] >= md_->count_miss_[adr];
+    const int evidence_limit = std::max(
+        mp_->static_retention_enabled_ ? mp_->static_retention_required_hits_ : 0,
+        mp_->inflation_noise_filter_enabled_ ? mp_->inflation_min_hit_evidence_ : 0);
+    if (evidence_limit > 0 && !md_->static_occupancy_locked_[adr]) {
+      const unsigned short required = static_cast<unsigned short>(evidence_limit);
+      md_->static_hit_evidence_[adr] = occupancy_policy::updateEvidence(
+          md_->static_hit_evidence_[adr], observed_hit, required);
+      if (mp_->static_retention_enabled_ &&
+          md_->static_hit_evidence_[adr] >= mp_->static_retention_required_hits_)
+        md_->static_occupancy_locked_[adr] = 1;
+    }
+    const bool ignore_miss = mp_->static_retention_enabled_ &&
+                             md_->static_occupancy_locked_[adr] && !observed_hit;
+    double log_odds_update = observed_hit ? mp_->prob_hit_log_ : mp_->prob_miss_log_;
     md_->count_hit_[adr] = md_->count_miss_[adr] = 0;
+    if (ignore_miss) continue;
     if (md_->occupancy_buffer_[adr] < mp_->clamp_min_log_ - 1e-3)
       md_->occupancy_buffer_[adr] = mp_->min_occupancy_log_;
 
@@ -447,6 +478,36 @@ void SDFMap::clearAndInflateLocalMap() {
       for (int z = md_->local_bound_min_(2); z <= md_->local_bound_max_(2); ++z) {
         int id1 = toAddress(x, y, z);
         if (md_->occupancy_buffer_[id1] > mp_->min_occupancy_log_) {
+          bool supported = !mp_->inflation_noise_filter_enabled_ ||
+                           md_->static_hit_evidence_[id1] >=
+                               mp_->inflation_min_hit_evidence_;
+          if (!supported && mp_->inflation_min_neighbors_ > 0) {
+            int occupied_neighbors = 0;
+            for (int dx = -1; dx <= 1 && !supported; ++dx)
+              for (int dy = -1; dy <= 1 && !supported; ++dy)
+                for (int dz = -1; dz <= 1; ++dz) {
+                  if (dx == 0 && dy == 0 && dz == 0) continue;
+                  const Eigen::Vector3i neighbor(x + dx, y + dy, z + dz);
+                  if (!isInMap(neighbor)) continue;
+                  if (md_->occupancy_buffer_[toAddress(neighbor)] > mp_->min_occupancy_log_ &&
+                      ++occupied_neighbors >= mp_->inflation_min_neighbors_) {
+                    supported = true;
+                    break;
+                  }
+                }
+          }
+          // 细柱在单个水平切片中可能只有一个体素；竖直方向有连续回波时仍按真实障碍保留。
+          for (int dz = 1; !supported && dz <= mp_->inflation_vertical_radius_; ++dz) {
+            for (int sign : {-1, 1}) {
+              const Eigen::Vector3i vertical(x, y, z + sign * dz);
+              if (isInMap(vertical) &&
+                  md_->occupancy_buffer_[toAddress(vertical)] > mp_->min_occupancy_log_) {
+                supported = true;
+                break;
+              }
+            }
+          }
+          if (!supported) continue;
           inflatePoint(Eigen::Vector3i(x, y, z), inf_step, inf_pts);
 
           for (auto inf_pt : inf_pts) {

@@ -55,8 +55,7 @@ roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch
 
 x 7.5 y:4.5
 
-这个终端只启动 FUEL 规划器、地图和 RViz，不启动桥接节点、AutoTrans MPC
-或 cxr_egoctrl_v1。方案 A 和方案 B 共用这一规划器进程，不能重复启动。
+。
 
 方案 A：使用原来的简单控制器
 
@@ -71,14 +70,13 @@ rosrun exploration_control cxr_egoctrl_v1 \
 
 方案 B：使用 AutoTrans MPC 控制器
 
-在另一个终端只启动轨迹桥接和 AutoTrans MPC。该入口只消费
-`/UAV0/planning/autotrans_trajectory` 的 `quadrotor_msgs/PolynomialTraj`；
-FUEL 的 `/UAV0/planning/pos_cmd` 仅供方案 A 的简单控制器使用：
+在另一个终端只启动轨迹桥接和 AutoTrans MPC：
 
 
 cd ~/match_ws
 source devel/setup.bash
-roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch
+roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch \
+  enable_logger:=true
 
 启动两个终端后检查：
 
@@ -93,8 +91,9 @@ rostopic echo /mpc_controller_node/mpc/force_applied
 
 四、原规划器与简单控制器流程（方案 A，双机硬件链路补齐后再执行）
 
-UAV0 方案 A 使用第三节终端 5 已启动的 FUEL 规划器，不再重复执行
-`roslaunch diff_planner run_swarm_indoor1_fuel_exploration.launch`。
+UAV0 方案 A 使用第三节终端 5 的 FUEL 规划器，不再直接启动
+diff_planner run_swarm_indoor1_fuel_exploration.launch，以确保 UAV0
+的雷达里程计、点云和目标点话题保持统一。
 
 后机
 run_uav1_relay_diff.launch

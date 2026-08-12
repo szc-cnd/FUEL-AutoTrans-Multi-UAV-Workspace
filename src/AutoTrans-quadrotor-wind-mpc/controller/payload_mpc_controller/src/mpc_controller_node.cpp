@@ -1,6 +1,7 @@
 #include "mpc_wrapper.h"
 #include "mpc_fsm.h"
 #include "mpc_controller.h"
+#include <clocale>
 #include <ros/ros.h>
 
 std::unique_ptr<PayloadMPC::MPCFSM> fsm_ptr;
@@ -16,6 +17,8 @@ void system_state_update_main(const ros::TimerEvent &)
 
 int main(int argc, char **argv)
 {
+    // 让 ROS1 log4cxx 按系统 UTF-8 locale 处理中文日志，避免非 ASCII 文本被替换为问号。
+    std::setlocale(LC_ALL, "");
     ros::init(argc, argv, "MPCctrl");
     ros::NodeHandle nh("~");
 
@@ -49,27 +52,24 @@ int main(int argc, char **argv)
                                          ros::VoidConstPtr(),
                                          ros::TransportHints().tcpNoDelay());
 
+    ros::Subscriber cmd_trig_sub =
+        nh.subscribe<geometry_msgs::PoseStamped>("cmd_trigger",
+                                                 10,
+                                                 boost::bind(&Cmd_Trigger_Data_t::feed, &fsm.cmd_trigger_data, _1));
+
     ros::Subscriber mpc_traj_sub =
         nh.subscribe<quadrotor_msgs::PolynomialTraj>("traj",
                                                      100,
-                                                     boost::bind(&MPCFSM::trajectoryCallback, &fsm, _1),
+                                                     boost::bind(&Trajectory_Data_t::feed, &fsm.trajectory_data, _1),
                                                      ros::VoidConstPtr(),
                                                      ros::TransportHints().tcpNoDelay());
 
-    ros::Subscriber planner_heartbeat_sub =
-        nh.subscribe<std_msgs::Empty>("planner_heartbeat",
-                                      10,
-                                      boost::bind(&MPCFSM::plannerHeartbeatCallback, &fsm, _1),
-                                      ros::VoidConstPtr(),
-                                      ros::TransportHints().tcpNoDelay());
-
-    // PositionCommand 只由原简单控制器消费；AutoTrans 仅接收完整 PolynomialTraj。
-    ros::Subscriber safety_hold_sub =
-        nh.subscribe<std_msgs::Bool>("safety_hold", 2,
-                                     boost::bind(&MPCFSM::safetyHoldCallback, &fsm, _1));
-    ros::Subscriber landing_request_sub =
-        nh.subscribe<std_msgs::Bool>("landing_request", 2,
-                                     boost::bind(&MPCFSM::landingRequestCallback, &fsm, _1));
+    ros::Subscriber cmd_sub =
+        nh.subscribe<quadrotor_msgs::PositionCommand>("cmd",
+                                                      100,
+                                                      boost::bind(&Command_Data_t::feed, &fsm.cmd_data, _1),
+                                                      ros::VoidConstPtr(),
+                                                      ros::TransportHints().tcpNoDelay());
 
     ros::Subscriber imu_sub =
         nh.subscribe<sensor_msgs::Imu>("drone_imu/data",

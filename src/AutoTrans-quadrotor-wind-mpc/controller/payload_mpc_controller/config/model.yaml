@@ -1,6 +1,6 @@
 # Model parameters
 # mass_q 是无人机实际起飞总质量，单位 kg；包含电池、机载电脑、桨和全部飞行安装件。
-mass_q: 1.844
+mass_q: 1.865
 # 普通四旋翼版本不再使用吊挂绳长和负载质量；这里仅为兼容旧参数读取保留，不作为调参对象。
 l_length: 0.66844507
 mass_l: 0.285
@@ -8,6 +8,9 @@ mass_l: 0.285
 # !!! if the below model parameters has been changed, 
 # !!! please re-run the quadrotor_payload_mpc_with_ext_force_codegen to re-generate the MPC model code. !!!  
 gravity: 9.795
+# 代码生成时的世界系 ENU 速度硬约束默认值，单位 m/s；运行时由 mpc.yaml 的同名参数覆盖。
+max_velocity_xy: 0.3
+max_velocity_z: 0.3
 # step_N/step_T 决定 ACADO 预测时域和采样时间；修改后必须重新运行 codegen 并重新 catkin_make。
 step_N: 20
 step_T: 0.041

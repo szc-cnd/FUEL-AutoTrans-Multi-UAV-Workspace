@@ -23,7 +23,7 @@ Panels:
         - /Axes2
         - /Path1
       Splitter Ratio: 0.5216138362884521
-    Tree Height: 664
+    Tree Height: 443
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -104,7 +104,6 @@ Visualization Manager:
           Value: false
         - Class: rviz/Marker
           Enabled: true
-          # 2026-07-27: RViz 的前机规划、地图、门识别和任务可视化话题统一切换到 UAV0。
           Marker Topic: /UAV0/planning/travel_traj
           Name: executed_traj
           Namespaces:
@@ -121,7 +120,6 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: Planning
-    # 2026-07-27: 在双机主RViz直接显示LDOT动态点、确认框和预测轨迹，避免另开RViz才能判断是否漏检。
     - Class: rviz/Group
       Displays:
         - Alpha: 1
@@ -135,7 +133,7 @@ Visualization Manager:
           Class: rviz/PointCloud2
           Color: 255; 40; 40
           Color Transformer: FlatColor
-          Decay Time: 0.3
+          Decay Time: 0.30000001192092896
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
@@ -145,7 +143,7 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 5
-          Size (m): 0.06
+          Size (m): 0.05999999865889549
           Style: Flat Squares
           Topic: /UAV0/ldot_detector/dynamic_point_cloud
           Unreliable: false
@@ -156,24 +154,28 @@ Visualization Manager:
           Enabled: true
           Marker Topic: /UAV0/ldot_detector/dynamic_bboxes
           Name: dynamic_bboxes
-          Namespaces: {}
+          Namespaces:
+            {}
           Queue Size: 20
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /UAV0/ldot_detector/dynamic_trajectories
           Name: dynamic_predictions
-          Namespaces: {}
+          Namespaces:
+            {}
           Queue Size: 20
           Value: true
       Enabled: true
       Name: LDOT_Dynamic
-    # 2026-07-27: 后机独立LDOT显示，输出命名空间与UAV0检测器分离。
     - Class: rviz/Group
       Displays:
         - Alpha: 1
           Autocompute Intensity Bounds: true
-          Autocompute Value Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
           Axis: Z
           Channel Name: intensity
           Class: rviz/PointCloud2
@@ -189,7 +191,7 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 5
-          Size (m): 0.06
+          Size (m): 0.05999999865889549
           Style: Flat Squares
           Topic: /UAV1/UAV0/ldot_detector/dynamic_point_cloud
           Unreliable: false
@@ -200,14 +202,16 @@ Visualization Manager:
           Enabled: true
           Marker Topic: /UAV1/UAV0/ldot_detector/dynamic_bboxes
           Name: UAV1_dynamic_bboxes
-          Namespaces: {}
+          Namespaces:
+            {}
           Queue Size: 20
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /UAV1/UAV0/ldot_detector/dynamic_trajectories
           Name: UAV1_dynamic_predictions
-          Namespaces: {}
+          Namespaces:
+            {}
           Queue Size: 20
           Value: true
       Enabled: true
@@ -223,8 +227,6 @@ Visualization Manager:
           Queue Size: 10000
           Value: false
         - Class: rviz/Marker
-          # 2026-07-14: 默认关闭规划 viewpoint 线框，避免把右上角红色视野三角误认为里程计机体；
-          # 真实里程计机体保留在 Simulation/robot。
           Enabled: false
           Marker Topic: /UAV0/planning_vis/viewpoints
           Name: viewpoint
@@ -256,17 +258,16 @@ Visualization Manager:
             {}
           Queue Size: 100
           Value: true
-        # 2026-07-13: 默认显示第二阶段已搜索覆盖和颜色/二维码/温度目标标记。
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /UAV0/mission/search_markers
           Name: task_search
           Namespaces:
-            {}
+            task_search_coverage: true
           Queue Size: 100
           Value: true
         - Class: rviz/Image
-          Enabled: true
+          Enabled: false
           Image Topic: /image_converter/output_video
           Max Value: 1
           Median window: 5
@@ -276,7 +277,7 @@ Visualization Manager:
           Queue Size: 2
           Transport Hint: raw
           Unreliable: false
-          Value: true
+          Value: false
       Enabled: true
       Name: active_perception
     - Class: rviz/Group
@@ -523,14 +524,12 @@ Visualization Manager:
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          # 2026-07-27: 跟随 UAV0 显式里程计可视化输出，避免显示旧全局 latched marker 造成坐标错位假象。
           Marker Topic: /UAV0/odom_visualization/robot
           Name: UAV0_robot
           Namespaces:
-            {}
+            drone: true
           Queue Size: 100
           Value: true
-        # 2026-07-27: 在同一个 RViz 中显示后机蓝色机体，位置由 world->UAV1/camera_init TF 对齐。
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /UAV1/odom_visualization/robot
@@ -539,17 +538,16 @@ Visualization Manager:
             {}
           Queue Size: 100
           Value: true
-        # 2026-07-14: 分别显示前机和后机的真实 FAST-LIO 里程计历史，便于检查跟随距离和漂移。
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
           Color: 20; 20; 20
           Enabled: true
-          Head Diameter: 0.2
-          Head Length: 0.1
-          Length: 0.2
+          Head Diameter: 0.20000000298023224
+          Head Length: 0.10000000149011612
+          Length: 0.20000000298023224
           Line Style: Billboards
-          Line Width: 0.04
+          Line Width: 0.03999999910593033
           Name: UAV0_odom_path
           Offset:
             X: 0
@@ -558,9 +556,9 @@ Visualization Manager:
           Pose Color: 20; 20; 20
           Pose Style: None
           Queue Size: 10
-          Radius: 0.02
-          Shaft Diameter: 0.05
-          Shaft Length: 0.05
+          Radius: 0.019999999552965164
+          Shaft Diameter: 0.05000000074505806
+          Shaft Length: 0.05000000074505806
           Topic: /UAV0/odom_visualization/path
           Unreliable: false
           Value: true
@@ -569,11 +567,11 @@ Visualization Manager:
           Class: rviz/Path
           Color: 0; 90; 255
           Enabled: true
-          Head Diameter: 0.2
-          Head Length: 0.1
-          Length: 0.2
+          Head Diameter: 0.20000000298023224
+          Head Length: 0.10000000149011612
+          Length: 0.20000000298023224
           Line Style: Billboards
-          Line Width: 0.04
+          Line Width: 0.03999999910593033
           Name: UAV1_odom_path
           Offset:
             X: 0
@@ -582,23 +580,22 @@ Visualization Manager:
           Pose Color: 0; 90; 255
           Pose Style: None
           Queue Size: 10
-          Radius: 0.02
-          Shaft Diameter: 0.05
-          Shaft Length: 0.05
+          Radius: 0.019999999552965164
+          Shaft Diameter: 0.05000000074505806
+          Shaft Length: 0.05000000074505806
           Topic: /UAV1/odom_visualization/path
           Unreliable: false
           Value: true
-        # 2026-07-14: 显示前机已经实际飞过、可供后机跟随的公共坐标安全历史路径。
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
           Color: 0; 210; 255
           Enabled: true
-          Head Diameter: 0.2
-          Head Length: 0.1
-          Length: 0.2
+          Head Diameter: 0.20000000298023224
+          Head Length: 0.10000000149011612
+          Length: 0.20000000298023224
           Line Style: Billboards
-          Line Width: 0.06
+          Line Width: 0.05999999865889549
           Name: leader_safe_route
           Offset:
             X: 0
@@ -607,23 +604,22 @@ Visualization Manager:
           Pose Color: 0; 210; 255
           Pose Style: None
           Queue Size: 10
-          Radius: 0.02
-          Shaft Diameter: 0.05
-          Shaft Length: 0.05
+          Radius: 0.019999999552965164
+          Shaft Diameter: 0.05000000074505806
+          Shaft Length: 0.05000000074505806
           Topic: /leader_safe_path_follower/leader_safe_route
           Unreliable: false
           Value: true
-        # 2026-07-16: 绿色折线只显示前机已经释放给后机的最多5个任务点，不等同于前机稠密历史轨迹。
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
           Color: 40; 230; 80
           Enabled: true
-          Head Diameter: 0.2
-          Head Length: 0.1
-          Length: 0.2
+          Head Diameter: 0.20000000298023224
+          Head Length: 0.10000000149011612
+          Length: 0.20000000298023224
           Line Style: Billboards
-          Line Width: 0.09
+          Line Width: 0.09000000357627869
           Name: released_relay_waypoints
           Offset:
             X: 0
@@ -632,13 +628,12 @@ Visualization Manager:
           Pose Color: 40; 230; 80
           Pose Style: Axes
           Queue Size: 10
-          Radius: 0.03
-          Shaft Diameter: 0.05
-          Shaft Length: 0.05
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.05000000074505806
+          Shaft Length: 0.05000000074505806
           Topic: /UAV0/mission/relay_waypoints
           Unreliable: false
           Value: true
-        # 2026-07-16: 蓝球为后机当前接力点，文字显示等待门、等待下一点、执行接力或终点降落状态。
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /leader_safe_path_follower/target_marker
@@ -1024,13 +1019,13 @@ Visualization Manager:
         Y: 0.36561644077301025
 Window Geometry:
   Displays:
-    collapsed: false
-  Height: 1016
-  Hide Left Dock: false
+    collapsed: true
+  Height: 736
+  Hide Left Dock: true
   Hide Right Dock: false
   Image:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000400000000000002300000039efc0200000010fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000002d5000000c900fffffffb0000000a006400650070007400680100000318000000c30000001600fffffffb0000000a0049006d00610067006500000001900000007f0000001600fffffffb0000000a00560069006500770073000000014b000000e3000000a400fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb0000000c00430061006d00650072006100000001d1000000b50000000000000000fb0000000a0049006d0061006700650100000415000000f80000000000000000fb0000000a0049006d00610067006501000003f4000001190000000000000000fb0000000a0049006d0061006700650100000385000001c90000000000000000fb0000000a0049006d0061006700650000000476000000d80000000000000000000000010000010f00000385fc0200000002fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000738000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000006100000003bfc0100000002fb0000000800540069006d00650000000000000006100000041800fffffffb0000000800540069006d00650100000000000004500000000000000000000005020000039e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000004000000000000023000000286fc0200000010fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073000000003d000001f8000000c900fffffffb0000000a00640065007000740068000000023b000000880000001600fffffffb0000000a0049006d00610067006500000001900000007f0000001600fffffffb0000000a00560069006500770073000000014b000000e3000000a400fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb0000000c00430061006d00650072006100000001d1000000b50000000000000000fb0000000a0049006d0061006700650100000415000000f80000000000000000fb0000000a0049006d00610067006501000003f4000001190000000000000000fb0000000a0049006d0061006700650100000385000001c90000000000000000fb0000000a0049006d0061006700650000000476000000d80000000000000000000000010000010f00000385fc0200000002fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000738000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000006100000003bfc0100000002fb0000000800540069006d00650000000000000006100000041800fffffffb0000000800540069006d00650100000000000004500000000000000000000004b80000028600000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -1039,8 +1034,8 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1848
+  Width: 1208
   X: 72
   Y: 27
   depth:
-    collapsed: false
+    collapsed: true
