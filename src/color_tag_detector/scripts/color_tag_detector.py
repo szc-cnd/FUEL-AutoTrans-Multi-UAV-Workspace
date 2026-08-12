@@ -99,6 +99,13 @@ class ColorTagDetector(object):
         self.aspect_ratio_min = float(rospy.get_param("~aspect_ratio_min", 0.35))
         self.aspect_ratio_max = float(rospy.get_param("~aspect_ratio_max", 3.0))
         self.fill_ratio_min = float(rospy.get_param("~fill_ratio_min", 0.45))
+        # fill_ratio uses the contour geometry, while mask_fill_ratio measures
+        # how much of the bounding box is actually occupied by the HSV mask.
+        # Keeping both checks rejects thin nets, wires, and wall textures that
+        # can produce a large convex contour after morphology closing.
+        self.mask_fill_ratio_min = float(
+            rospy.get_param("~mask_fill_ratio_min", 0.35)
+        )
         self.min_extent = float(rospy.get_param("~min_extent", self.fill_ratio_min))
         self.min_solidity = float(rospy.get_param("~min_solidity", 0.45))
         self.max_bbox_width_ratio = float(rospy.get_param("~max_bbox_width_ratio", 0.55))
@@ -368,6 +375,19 @@ class ColorTagDetector(object):
         area_min = float(color_cfg.get("area_min", self.area_min))
         area_max_ratio = float(color_cfg.get("area_max_ratio", self.area_max_ratio))
         fill_ratio_min = float(color_cfg.get("fill_ratio_min", self.fill_ratio_min))
+        mask_fill_ratio_min = float(
+            color_cfg.get("mask_fill_ratio_min", self.mask_fill_ratio_min)
+        )
+        # Some colors (especially green in the current scene) need stricter
+        # rectangle geometry than the global defaults.  Keep these limits in
+        # the per-color YAML instead of weakening all color detectors.
+        aspect_ratio_min = float(
+            color_cfg.get("aspect_ratio_min", self.aspect_ratio_min)
+        )
+        aspect_ratio_max = float(
+            color_cfg.get("aspect_ratio_max", self.aspect_ratio_max)
+        )
+        min_solidity = float(color_cfg.get("min_solidity", self.min_solidity))
         min_valid_depth_ratio = float(
             color_cfg.get("min_valid_depth_ratio", self.min_valid_depth_ratio)
         )
@@ -395,6 +415,8 @@ class ColorTagDetector(object):
 
             bbox_area = float(max(w * h, 1))
             fill_ratio = area / bbox_area
+            mask_roi = mask[y : y + h, x : x + w]
+            mask_fill_ratio = float(np.count_nonzero(mask_roi)) / bbox_area
             aspect_ratio = float(w) / float(h)
             moments = cv2.moments(contour)
             if abs(moments["m00"]) < 1e-6:
@@ -407,9 +429,10 @@ class ColorTagDetector(object):
                 or area >= max_area
                 or float(w) / float(image_w) > max_bbox_width_ratio
                 or float(h) / float(image_h) > max_bbox_height_ratio
-                or aspect_ratio < self.aspect_ratio_min
-                or aspect_ratio > self.aspect_ratio_max
+                or aspect_ratio < aspect_ratio_min
+                or aspect_ratio > aspect_ratio_max
                 or fill_ratio < fill_ratio_min
+                or mask_fill_ratio < mask_fill_ratio_min
                 or not self.is_inside_detection_roi(u, v, image_w, image_h)
             )
             if cheap_reject:
@@ -418,7 +441,6 @@ class ColorTagDetector(object):
             hull = cv2.convexHull(contour)
             hull_area = float(cv2.contourArea(hull))
             solidity = area / hull_area if hull_area > 1e-6 else 0.0
-            min_solidity = float(color_cfg.get("min_solidity", self.min_solidity))
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
             min_mean_h = color_cfg.get("min_mean_hue", None)
@@ -464,10 +486,12 @@ class ColorTagDetector(object):
                 reject_reasons.append("bbox_too_wide")
             if float(h) / float(image_h) > max_bbox_height_ratio:
                 reject_reasons.append("bbox_too_tall")
-            if aspect_ratio < self.aspect_ratio_min or aspect_ratio > self.aspect_ratio_max:
+            if aspect_ratio < aspect_ratio_min or aspect_ratio > aspect_ratio_max:
                 reject_reasons.append("aspect_ratio")
             if fill_ratio < fill_ratio_min:
                 reject_reasons.append("fill_ratio")
+            if mask_fill_ratio < mask_fill_ratio_min:
+                reject_reasons.append("mask_fill_ratio")
             if solidity < min_solidity:
                 reject_reasons.append("solidity")
             if min_mean_h is not None and hsv_stats["mean_h"] < float(min_mean_h):
@@ -542,6 +566,7 @@ class ColorTagDetector(object):
                     "pixel_area": area,
                     "aspect_ratio": aspect_ratio,
                     "fill_ratio": fill_ratio,
+                    "mask_fill_ratio": mask_fill_ratio,
                     "extent": fill_ratio,
                     "solidity": solidity,
                     "real_width": real_width,
