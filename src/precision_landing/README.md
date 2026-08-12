@@ -1,5 +1,9 @@
 # Precision landing operator guide
 
+> 比赛入口 `landing_stack.launch` 只启动下视相机和精确降落节点，不负责
+> 解锁、起飞或悬停。`landing_test.launch` 是旧的独立测试入口，现已默认关闭
+> 自动开始和解锁权限，不得用于正式比赛启动流程。
+
 This package controls a PX4 vehicle through MAVROS only after a rising
 `/need_to_land` trigger, valid camera calibration, fresh vehicle data, and an
 armed `OFFBOARD` state. Treat it as flight-critical software: begin every
