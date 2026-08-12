@@ -95,8 +95,26 @@ class QRDetectorNode(object):
         self.pose_pub = rospy.Publisher(
             "/UAV0/vision/qr_pose_camera", PoseStamped, queue_size=1
         )
+        # 候选只供机载 target_reporting/RViz 观察，不直接连接远程发送器；
+        # target_reporting 的 send_candidate_observations 默认仍为 false。
+        self.candidate_pose_pub = rospy.Publisher(
+            rospy.get_param(
+                "~candidate_pose_topic",
+                "/UAV0/vision/qr_candidate_pose_camera",
+            ),
+            PoseStamped,
+            queue_size=1,
+        )
         self.detected_pub = rospy.Publisher(
             "/UAV0/vision/qr_detected", String, queue_size=1
+        )
+        self.candidate_detected_pub = rospy.Publisher(
+            rospy.get_param(
+                "~candidate_detected_topic",
+                "/UAV0/vision/qr_candidate_detected",
+            ),
+            String,
+            queue_size=1,
         )
         self.debug_pub = rospy.Publisher(
             "/UAV0/vision/qr_debug_image", Image, queue_size=1
@@ -164,6 +182,11 @@ class QRDetectorNode(object):
 
         result = self.build_result(raw_detection, image_msg.header)
         confirmed = raw_valid and self.consecutive_detect_count >= self.confirm_frames
+
+        # 有效角点和深度一出现就发布本机候选，供 target_reporting 在 RViz
+        # 显示观察位姿；稳定结果仍由下面的 confirmed 分支负责正式上报。
+        if raw_valid and result.get("z") is not None:
+            self.publish_candidate(result, image_msg.header, confirmed)
 
         if confirmed:
             self.last_confirmed_result = result
@@ -531,6 +554,38 @@ class QRDetectorNode(object):
         pose_msg.pose.position.z = float(result["z"])
         pose_msg.pose.orientation.w = 1.0
         self.pose_pub.publish(pose_msg)
+
+    def publish_candidate(self, result, header, source_confirmed):
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = header.stamp
+        pose_msg.header.frame_id = self.camera_frame_id or header.frame_id
+        pose_msg.pose.position.x = float(result["x"])
+        pose_msg.pose.position.y = float(result["y"])
+        pose_msg.pose.position.z = float(result["z"])
+        pose_msg.pose.orientation.w = 1.0
+        self.candidate_pose_pub.publish(pose_msg)
+
+        status = {
+            "detected": True,
+            "candidate": True,
+            "stable": bool(source_confirmed),
+            "held": False,
+            "data": result.get("data", ""),
+            "points": result.get("points", []),
+            "center_u": self.round_or_none(result.get("center_u"), 2),
+            "center_v": self.round_or_none(result.get("center_v"), 2),
+            "x": self.round_or_none(result.get("x"), 4),
+            "y": self.round_or_none(result.get("y"), 4),
+            "z": self.round_or_none(result.get("z"), 4),
+            "method": result.get("method", "opencv_qrcode_detector"),
+            "area": self.round_or_none(result.get("area"), 1),
+            "side_px": self.round_or_none(result.get("side_px"), 1),
+            "preprocess": result.get("preprocess"),
+            "reason": "stable_candidate" if source_confirmed else "raw_candidate",
+        }
+        self.candidate_detected_pub.publish(
+            String(data=json.dumps(status, ensure_ascii=False))
+        )
 
     def publish_status(self, result, detected, reason):
         status = {

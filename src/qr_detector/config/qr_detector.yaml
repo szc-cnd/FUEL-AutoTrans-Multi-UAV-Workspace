@@ -2,6 +2,8 @@
 image_topic: /camera/color/image_raw
 depth_topic: /camera/aligned_depth_to_color/image_raw
 camera_info_topic: /camera/color/camera_info
+candidate_pose_topic: /UAV0/vision/qr_candidate_pose_camera
+candidate_detected_topic: /UAV0/vision/qr_candidate_detected
 
 # Runtime performance.
 # 0 means OpenCV default. Use 1-2 on CPU-limited platforms to avoid QR detection

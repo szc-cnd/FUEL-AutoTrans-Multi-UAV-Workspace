@@ -17,7 +17,7 @@ ArUco 码检测器。
 - 发布 JSON 检测状态、`PoseStamped` 位姿和调试图像。
 - 支持连续多帧确认、短时间丢失保持和 EMA 位置滤波。
 - 支持保存检测失败帧，便于后续采集数据训练 YOLO 兜底模型。
-- 原始未确认候选不再单独发布或绘制，只有连续确认后的结果才发布到稳定结果话题，减少误检进入上报链路。
+- 有效候选会发布到机载候选话题供 target_reporting/RViz 观察，但默认不发送到远程端；只有连续确认后的结果才进入稳定上报链路。
 
 ## 编译
 
@@ -71,7 +71,7 @@ roslaunch qr_detector qr_detector.launch
 - `preprocess_mode`：预处理方式，当前为 `gray`。
 - `upscale_factor`：检测前图像放大倍数，当前为 `1.5`。
 - `confirm_frames`：连续检测到多少帧后确认 `detected=true`，当前为 `3`。
-- `draw_raw_candidates`：是否绘制未确认候选，当前为 `false`。
+- `draw_raw_candidates`：是否在二维码调试图像中绘制单帧原始候选，当前为 `false`；RViz 候选标记仍由 target_reporting 单独显示。
 - `lost_hold_time`：短时间丢失后保留上一帧结果的时间，默认 `0.3` 秒。
 - `ema_alpha`：相机坐标 `x,y,z` 的 EMA 滤波系数。
 - `save_failed_frame`：是否保存检测失败帧，默认 `false`。
