@@ -24,12 +24,13 @@ debug_draw_mode: 1
 max_debug_candidates: 3
 max_contours_per_color: 8
 
+# H=0..179 连续覆盖；颜色名称只用于显示和记录，正式目标类型始终为 color_tag。
 colors:
   red:
     draw_bgr: [0, 0, 255]
     ranges:
       - lower: [0, 130, 60]
-        upper: [15, 255, 255]
+        upper: [14, 255, 255]
       - lower: [165, 110, 60]
         upper: [179, 255, 255]
     exclude_ranges:
@@ -44,11 +45,19 @@ colors:
     min_real_width: 0.07
     min_real_height: 0.07
 
+  orange:
+    draw_bgr: [0, 128, 255]
+    ranges:
+      - lower: [15, 90, 70]
+        upper: [22, 255, 255]
+    min_mean_saturation: 100
+    min_mean_value: 75
+
   yellow:
     draw_bgr: [0, 255, 255]
     ranges:
-      - lower: [18, 80, 80]
-        upper: [38, 255, 255]
+      - lower: [23, 80, 80]
+        upper: [37, 255, 255]
     min_mean_saturation: 90
     min_mean_value: 80
 
@@ -57,8 +66,8 @@ colors:
     ranges:
       # 现场图像中的网格/墙面会落入低饱和绿区；颜色标签应更鲜艳。
       - lower: [38, 55, 90]
-        upper: [86, 255, 255]
-    max_mean_hue: 82
+        upper: [85, 255, 255]
+    max_mean_hue: 85
     min_mean_saturation: 65
     min_mean_value: 100
     area_min: 800
@@ -71,8 +80,8 @@ colors:
     draw_bgr: [255, 0, 0]
     ranges:
       - lower: [86, 35, 105]
-        upper: [128, 255, 255]
-    min_mean_hue: 88
+        upper: [127, 255, 255]
+    min_mean_hue: 86
     min_mean_saturation: 45
     min_mean_value: 115
     min_valid_depth_ratio: 0.60
@@ -80,6 +89,15 @@ colors:
     area_max_ratio: 0.08
     max_real_width: 0.50
     max_real_height: 0.50
+
+  purple:
+    # 覆盖紫色、品红色和高饱和粉色；低饱和粉白背景仍由 S/V 门槛排除。
+    draw_bgr: [255, 0, 255]
+    ranges:
+      - lower: [128, 55, 80]
+        upper: [164, 255, 255]
+    min_mean_saturation: 65
+    min_mean_value: 90
 
 area_min: 900
 area_max_ratio: 0.10

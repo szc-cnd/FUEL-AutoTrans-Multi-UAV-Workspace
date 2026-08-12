@@ -35,8 +35,8 @@ DEFAULT_COLORS = {
         # OpenCV HSV uses H in [0, 179]. Red usually wraps around 0, so two
         # ranges are used. Tune S/V first if lighting changes at the venue.
         "ranges": [
-            {"lower": [0, 135, 60], "upper": [10, 255, 255]},
-            {"lower": [170, 115, 60], "upper": [179, 255, 255]},
+            {"lower": [0, 135, 60], "upper": [14, 255, 255]},
+            {"lower": [165, 115, 60], "upper": [179, 255, 255]},
         ],
         "exclude_ranges": [
             {"lower": [0, 20, 70], "upper": [25, 135, 255]},
@@ -44,15 +44,21 @@ DEFAULT_COLORS = {
         "min_mean_saturation": 150,
         "draw_bgr": [0, 0, 255],
     },
+    "orange": {
+        "ranges": [{"lower": [15, 90, 70], "upper": [22, 255, 255]}],
+        "min_mean_saturation": 100,
+        "min_mean_value": 75,
+        "draw_bgr": [0, 128, 255],
+    },
     "yellow": {
-        "ranges": [{"lower": [18, 80, 80], "upper": [38, 255, 255]}],
+        "ranges": [{"lower": [23, 80, 80], "upper": [37, 255, 255]}],
         "min_mean_saturation": 90,
         "min_mean_value": 80,
         "draw_bgr": [0, 255, 255],
     },
     "green": {
-        "ranges": [{"lower": [38, 35, 105], "upper": [84, 255, 255]}],
-        "max_mean_hue": 82,
+        "ranges": [{"lower": [38, 35, 105], "upper": [85, 255, 255]}],
+        "max_mean_hue": 85,
         "min_mean_saturation": 45,
         "min_mean_value": 115,
         "area_max_ratio": 0.06,
@@ -61,14 +67,20 @@ DEFAULT_COLORS = {
         "draw_bgr": [0, 255, 0],
     },
     "blue": {
-        "ranges": [{"lower": [86, 35, 105], "upper": [128, 255, 255]}],
-        "min_mean_hue": 88,
+        "ranges": [{"lower": [86, 35, 105], "upper": [127, 255, 255]}],
+        "min_mean_hue": 86,
         "min_mean_saturation": 45,
         "min_mean_value": 115,
         "area_max_ratio": 0.06,
         "max_bbox_width_ratio": 0.35,
         "max_bbox_height_ratio": 0.35,
         "draw_bgr": [255, 0, 0],
+    },
+    "purple": {
+        "ranges": [{"lower": [128, 55, 80], "upper": [164, 255, 255]}],
+        "min_mean_saturation": 65,
+        "min_mean_value": 90,
+        "draw_bgr": [255, 0, 255],
     },
 }
 

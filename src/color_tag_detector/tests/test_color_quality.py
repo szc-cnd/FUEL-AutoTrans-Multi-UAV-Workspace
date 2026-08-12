@@ -5,6 +5,7 @@ import unittest
 
 import cv2
 import numpy as np
+import yaml
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -18,6 +19,18 @@ except ModuleNotFoundError:
 
 @unittest.skipIf(ColorTagDetector is None, "ROS Python modules are unavailable")
 class ColorQualityTests(unittest.TestCase):
+    def test_configured_hue_ranges_cover_full_opencv_circle(self):
+        config_path = os.path.join(ROOT, "config", "color_thresholds.yaml")
+        with open(config_path, encoding="utf-8") as stream:
+            colors = yaml.safe_load(stream)["colors"]
+        covered = set()
+        for color in colors.values():
+            for hsv_range in color.get("ranges", []):
+                lower = int(hsv_range["lower"][0])
+                upper = int(hsv_range["upper"][0])
+                covered.update(range(lower, upper + 1))
+        self.assertEqual(covered, set(range(180)))
+
     def test_solid_irregular_tag_has_high_color_purity(self):
         mask = np.zeros((100, 100), dtype=np.uint8)
         contour = np.asarray(
