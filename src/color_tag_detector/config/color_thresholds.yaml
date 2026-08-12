@@ -130,8 +130,9 @@ max_depth_std: 0.16
 # 正式上报质量门。超过距离或外观/表面质量不足的色块仍可在本机作为候选
 # 观察，但 stable/confirmable 不会置 true，也不会进入远程正式上报。
 confirmation_depth_max: 2.5
-# 候选按矩形度连续评分；正式确认仍要求基本矩形外观，防止椅背、布料和按钮上报。
+# 候选和正式确认都要求基本矩形外观，防止地面、椅背、布料和按钮产生干扰框。
 preferred_rectangularity: 0.84
+min_candidate_rectangularity: 0.84
 min_confirmation_rectangularity: 0.84
 min_surface_depth_valid_ratio: 0.60
 max_surface_plane_residual_std: 0.05

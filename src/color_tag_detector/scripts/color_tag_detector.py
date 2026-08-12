@@ -158,6 +158,12 @@ class ColorTagDetector(object):
                 rospy.get_param("~min_rectangularity", 0.84),
             )
         )
+        self.min_candidate_rectangularity = float(
+            rospy.get_param(
+                "~min_candidate_rectangularity",
+                rospy.get_param("~min_rectangularity", 0.84),
+            )
+        )
         self.min_confirmation_rectangularity = float(
             rospy.get_param(
                 "~min_confirmation_rectangularity",
@@ -476,6 +482,12 @@ class ColorTagDetector(object):
                     self.min_confirmation_rectangularity,
                 )
             )
+            min_candidate_rectangularity = float(
+                color_cfg.get(
+                    "min_candidate_rectangularity",
+                    self.min_candidate_rectangularity,
+                )
+            )
             rectangularity = self.contour_rectangularity(contour)
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
@@ -533,6 +545,8 @@ class ColorTagDetector(object):
                 reject_reasons.append("solidity")
             if color_purity < min_color_purity:
                 reject_reasons.append("color_purity")
+            if rectangularity < min_candidate_rectangularity:
+                reject_reasons.append("rectangularity")
             if min_mean_h is not None and hsv_stats["mean_h"] < float(min_mean_h):
                 reject_reasons.append("mean_hue_low")
             if max_mean_h is not None and hsv_stats["mean_h"] > float(max_mean_h):
