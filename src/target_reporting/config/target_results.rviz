@@ -82,7 +82,8 @@ Visualization Manager:
           Value: false
       Enabled: true
       Name: 检测图像
-    - Alpha: 0.65
+    # Keep the filtered target cloud visible without hiding the marker/text.
+    - Alpha: 0.25
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
         Max Value: 10
@@ -104,8 +105,8 @@ Visualization Manager:
       Position Transformer: XYZ
       Queue Size: 10
       Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.01
+      Size (Pixels): 2
+      Size (m): 0.006
       Style: Flat Squares
       Topic: /UAV0/target_reporting/detected_object_cloud
       Unreliable: false

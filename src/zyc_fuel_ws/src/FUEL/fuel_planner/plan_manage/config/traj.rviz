@@ -121,7 +121,9 @@ Visualization Manager:
           Transport Hint: raw
           Unreliable: false
           Value: false
-        - Alpha: 0.65
+        # The filtered target cloud is for context only; lower opacity and
+        # smaller cells keep detection markers/text readable in the planner RViz.
+        - Alpha: 0.25
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 10
@@ -143,8 +145,8 @@ Visualization Manager:
           Position Transformer: XYZ
           Queue Size: 10
           Selectable: true
-          Size (Pixels): 3
-          Size (m): 0.01
+          Size (Pixels): 2
+          Size (m): 0.006
           Style: Flat Squares
           Topic: /UAV0/target_reporting/detected_object_cloud
           Unreliable: false

@@ -35,8 +35,10 @@ class TargetRvizMarkerNode:
         "qr_code": (0.1, 1.0, 0.25),          # 绿色
         "thermal_source": (1.0, 0.1, 0.9),   # 紫红色
     }
-    CANDIDATE_ALPHA = 0.55
-    CONFIRMED_ALPHA = 0.95
+    # Display-only alpha values.  Keep the target type color unchanged while
+    # making the marker readable through the filtered point cloud.
+    CANDIDATE_ALPHA = 0.80
+    CONFIRMED_ALPHA = 1.0
 
     def __init__(self):
         self.observation_topic = rospy.get_param(
@@ -49,9 +51,13 @@ class TargetRvizMarkerNode:
         # separate parameter keeps the display adapter usable if the RViz
         # fixed frame is renamed later.
         self.marker_frame = rospy.get_param("~marker_frame", "world")
-        self.sphere_scale = max(0.05, float(rospy.get_param("~sphere_scale", 0.28)))
-        self.text_height = max(0.05, float(rospy.get_param("~text_height", 0.28)))
-        self.text_offset = float(rospy.get_param("~text_offset", 0.35))
+        self.sphere_scale = max(0.05, float(rospy.get_param("~sphere_scale", 0.36)))
+        self.text_height = max(0.05, float(rospy.get_param("~text_height", 0.42)))
+        # Point-cloud cells can surround the actual target center.  These
+        # offsets are only for RViz readability; reported coordinates remain
+        # exactly unchanged in the observation topic.
+        self.sphere_z_offset = float(rospy.get_param("~sphere_z_offset", 0.12))
+        self.text_offset = float(rospy.get_param("~text_offset", 0.80))
         self.candidate_timeout = max(
             0.1, float(rospy.get_param("~candidate_timeout", 0.8))
         )
@@ -401,6 +407,7 @@ class TargetRvizMarkerNode:
         marker.pose.orientation.w = 1.0
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
         if marker_type == Marker.SPHERE:
+            marker.pose.position.z += self.sphere_z_offset
             marker.scale.x = marker.scale.y = marker.scale.z = self.sphere_scale
         else:
             marker.scale.z = self.text_height
