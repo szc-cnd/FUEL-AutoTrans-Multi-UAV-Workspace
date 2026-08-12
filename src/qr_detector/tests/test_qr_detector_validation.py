@@ -38,8 +38,18 @@ class QRDetectorValidationTests(unittest.TestCase):
         detector.qr_eps_y = 0.15
         detector.require_decode_for_confirmation = True
         detector.decode_qr_data = False
+        detector.startup_warmup_seconds = 5.0
+        detector.first_image_wall_time = None
+        detector.startup_warmup_finished = False
         detector.configure_qr_detector()
         return detector
+
+    def test_startup_warmup_blocks_early_confirmation(self):
+        detector = self.make_detector()
+        detector.first_image_wall_time = 100.0
+        self.assertTrue(detector.startup_warmup_active(now=104.9))
+        self.assertFalse(detector.startup_warmup_active(now=105.0))
+        self.assertTrue(detector.startup_warmup_finished)
 
     def test_large_background_quad_is_rejected_by_geometry_limit(self):
         detector = self.make_detector()

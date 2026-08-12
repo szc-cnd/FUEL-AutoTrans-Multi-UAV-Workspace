@@ -73,6 +73,12 @@ class QRDetectorNode(object):
         self.require_decode_for_confirmation = bool(
             rospy.get_param("~require_decode_for_confirmation", True)
         )
+        # RealSense auto-exposure needs a short period after the first color
+        # frame.  Do not let a dark startup frame become a confirmed/uploaded
+        # QR target; raw candidates remain available locally during warm-up.
+        self.startup_warmup_seconds = max(
+            0.0, float(rospy.get_param("~startup_warmup_seconds", 5.0))
+        )
         self.draw_raw_candidates = bool(rospy.get_param("~draw_raw_candidates", False))
         self.confirm_frames = int(rospy.get_param("~confirm_frames", 3))
         self.lost_hold_time = float(rospy.get_param("~lost_hold_time", 0.3))
@@ -116,6 +122,8 @@ class QRDetectorNode(object):
         self.camera_frame_id = ""
 
         self.latest_depth_msg = None
+        self.first_image_wall_time = None
+        self.startup_warmup_finished = self.startup_warmup_seconds <= 0.0
         self.consecutive_detect_count = 0
         self.consecutive_valid_count = 0
         self.last_confirmed_result = None
@@ -199,6 +207,7 @@ class QRDetectorNode(object):
 
     def image_callback(self, image_msg):
         processing_start = time.time()
+        startup_warmup = self.startup_warmup_active()
         try:
             color_bgr = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
         except CvBridgeError as exc:
@@ -217,13 +226,14 @@ class QRDetectorNode(object):
         result = self.build_result(raw_detection, image_msg.header)
         validation_valid = raw_valid and bool(result.get("confirmable", False))
 
-        if validation_valid:
+        if validation_valid and not startup_warmup:
             self.consecutive_valid_count += 1
         else:
             self.consecutive_valid_count = 0
 
         confirmed = (
-            raw_valid
+            not startup_warmup
+            and raw_valid
             and bool(result.get("confirmable", False))
             and self.consecutive_valid_count >= self.confirm_frames
         )
@@ -234,7 +244,13 @@ class QRDetectorNode(object):
         if raw_valid and result.get("z") is not None:
             self.publish_candidate(result, image_msg.header, confirmed)
 
-        if confirmed:
+        if startup_warmup:
+            # Keep candidate geometry local for RViz, but do not publish a
+            # stable result or feed target_reporting during exposure warm-up.
+            publish_result = self.empty_result()
+            publish_detected = False
+            reason = "startup_warmup"
+        elif confirmed:
             self.last_confirmed_result = result
             self.last_confirmed_time = image_msg.header.stamp or rospy.Time.now()
             publish_result = result
@@ -259,6 +275,26 @@ class QRDetectorNode(object):
 
         processing_ms = (time.time() - processing_start) * 1000.0
         rospy.logdebug("QR frame processing time: %.1f ms", processing_ms)
+
+    def startup_warmup_active(self, now=None):
+        """Return whether the camera is still in first-frame exposure warm-up."""
+        if self.startup_warmup_seconds <= 0.0:
+            return False
+        if now is None:
+            now = time.monotonic()
+        if self.first_image_wall_time is None:
+            self.first_image_wall_time = float(now)
+            rospy.loginfo(
+                "QR detector exposure warm-up: %.1f s; candidates stay local",
+                self.startup_warmup_seconds,
+            )
+        elapsed = float(now) - float(self.first_image_wall_time)
+        if elapsed < self.startup_warmup_seconds:
+            return True
+        if not self.startup_warmup_finished:
+            self.startup_warmup_finished = True
+            rospy.loginfo("QR detector exposure warm-up finished")
+        return False
 
     def detect_qr(self, color_bgr):
         gray = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2GRAY)

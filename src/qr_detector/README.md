@@ -20,6 +20,8 @@ ArUco 码检测器。
 - 发布 JSON 检测状态、`PoseStamped` 位姿和调试图像。
 - 支持连续多帧确认、短时间丢失保持和 EMA 位置滤波；未验证候选不会被
   `target_reporting` 累计为确认目标。
+- 针对 D435 启动时自动曝光尚未稳定的问题，首帧后默认预热 5 秒；预热阶段只
+  保留本机候选观察，不会确认或远程上报暗启动帧。
 - 支持保存检测失败帧，便于后续采集数据训练 YOLO 兜底模型。
 - 有效候选会发布到机载候选话题供 target_reporting/RViz 观察，但默认不发送到远程端；只有连续确认后的结果才进入稳定上报链路。
 
@@ -79,6 +81,8 @@ roslaunch qr_detector qr_detector.launch
 - `preprocess_mode`：预处理方式，当前为 `gray`。
 - `upscale_factor`：检测前图像放大倍数，当前为 `1.5`。
 - `confirm_frames`：连续通过真实性和深度校验多少帧后确认 `detected=true`，当前为 `5`。
+- `startup_warmup_seconds`：D435 首帧后的曝光预热时间，默认 `5.0` 秒；预热期间
+  候选仍可在机载 RViz 观察，但不会进入稳定确认和远程上报。
 - `draw_raw_candidates`：是否在二维码调试图像中绘制单帧原始候选，当前为 `false`；RViz 候选标记仍由 target_reporting 单独显示。
 - `lost_hold_time`：短时间丢失后保留上一帧结果的时间，默认 `0.3` 秒。
 - `ema_alpha`：相机坐标 `x,y,z` 的 EMA 滤波系数。

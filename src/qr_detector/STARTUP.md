@@ -54,7 +54,8 @@ Terminator 布局文件为：
 
 当前参数为灰度预处理、`upscale_factor=1.5`、`qr_eps_x/y=0.15`、最短边
 `16px`、边长比例上限 `4`、连续 `5` 帧真实性和深度校验，并关闭调试图像中的
-单帧原始候选框。角点候选仍通过 `/UAV0/vision/qr_candidate_pose_camera` 和
+单帧原始候选框。D435 首帧后默认预热 `5.0` 秒，避免自动曝光尚未稳定时的暗帧
+进入确认和远程上报。角点候选仍通过 `/UAV0/vision/qr_candidate_pose_camera` 和
 `/UAV0/vision/qr_candidate_detected` 供机载 RViz 显示；只有内部解码校验和
 深度一致性通过后，才会累计 `target_reporting` 的确认次数。候选不会发送到
 远程端。
