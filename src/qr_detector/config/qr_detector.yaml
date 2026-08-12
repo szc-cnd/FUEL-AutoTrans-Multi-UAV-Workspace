@@ -13,12 +13,17 @@ publish_debug_image: true
 
 # QR candidate and depth settings.
 depth_window_size: 11
-min_area: 100.0
-min_side_length: 12.0
-max_side_ratio: 8.0
-max_angle_cos: 0.90
-qr_eps_x: 0.25
-qr_eps_y: 0.25
+min_area: 150.0
+min_side_length: 16.0
+# A QR quadrilateral should not be an extremely elongated background shape.
+max_side_ratio: 4.0
+max_angle_cos: 0.80
+max_quad_area_ratio: 0.35
+max_quad_width_ratio: 0.90
+max_quad_height_ratio: 0.90
+# Lower tolerance reduces finder-pattern matches on nets and floor textures.
+qr_eps_x: 0.15
+qr_eps_y: 0.15
 depth_min: 0.15
 depth_max: 8.0
 
@@ -30,13 +35,25 @@ preprocess_mode: gray
 upscale_factor: 1.5
 enable_preprocess_fallbacks: false
 decode_qr_data: false
+# Keep payload output disabled, but require OpenCV decode success internally
+# before a candidate can become stable/reportable. Raw corners remain visible
+# locally as candidates for RViz observation.
+require_decode_for_confirmation: true
 # Only draw a box after the detector has been stable for confirm_frames.
 draw_raw_candidates: false
 
 # Temporal stability.
-confirm_frames: 3
+confirm_frames: 5
 lost_hold_time: 0.3
 ema_alpha: 0.35
+
+# Depth consistency for the center and four QR corners. A mixed net/floor or
+# background quad is not allowed to become a confirmed 3-D target.
+depth_corner_window_size: 7
+min_depth_valid_corners: 3
+min_depth_valid_ratio: 0.55
+max_corner_depth_std: 0.25
+max_corner_depth_range: 0.60
 
 # Save failed color frames for later data collection / YOLO fallback training.
 save_failed_frame: false

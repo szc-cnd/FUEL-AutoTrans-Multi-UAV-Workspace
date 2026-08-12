@@ -216,8 +216,25 @@ class TargetReporterNode:
             self.last_processed_pair[source] = pair
         position = {"x": world.point.x, "y": world.point.y, "z": world.point.z}
         target_type = {"color": "color_tag", "qr": "qr_code", "thermal": "thermal_source"}[source]
+        # Raw QR corners are intentionally observable in RViz, but only a
+        # detector-validated QR may advance the confirmation counter.  This
+        # prevents repeated background quadrilaterals from becoming remote
+        # confirmed targets while preserving the local candidate workflow.
+        allow_confirmation = True
+        if source == "qr":
+            qr_validated = bool(result.pop("_qr_validated", False))
+            allow_confirmation = bool(result.pop("_qr_confirmable", True))
+            # Keep these two display fields in the local observation so RViz
+            # can distinguish a raw corner candidate from a validated one.
+            result["validated"] = qr_validated
+            result["confirmable"] = allow_confirmation
         with self.candidate_lock:
-            candidate, confirmed = self.tracker.update(target_type, result, position)
+            candidate, confirmed = self.tracker.update(
+                target_type,
+                result,
+                position,
+                allow_confirmation=allow_confirmation,
+            )
             candidate_number = candidate["local_number"]
             candidate_hits = candidate["hits"]
             if confirmed:

@@ -52,6 +52,9 @@ class TargetRvizMarkerNode:
         self.sphere_scale = max(0.05, float(rospy.get_param("~sphere_scale", 0.28)))
         self.text_height = max(0.05, float(rospy.get_param("~text_height", 0.28)))
         self.text_offset = float(rospy.get_param("~text_offset", 0.35))
+        self.candidate_timeout = max(
+            0.1, float(rospy.get_param("~candidate_timeout", 0.8))
+        )
 
         # The camera cloud is an input only.  RViz receives a filtered cloud
         # containing points near the currently reported target positions.
@@ -107,11 +110,22 @@ class TargetRvizMarkerNode:
         self.publisher = rospy.Publisher(
             self.marker_topic, MarkerArray, queue_size=1, latch=True
         )
+        # A restarted display node must not inherit stale confirmed/box
+        # markers from a previous mission instance.
+        clear = Marker()
+        clear.action = Marker.DELETEALL
+        clear_array = MarkerArray()
+        clear_array.markers.append(clear)
+        self.publisher.publish(clear_array)
         self.subscription = rospy.Subscriber(
             self.observation_topic, String, self.observation_callback, queue_size=20
         )
         self.states = {name: {"candidate": None, "confirmed": None} for name in self.TARGETS}
         self.visible_ids = set()
+        self._marker_timer = rospy.Timer(
+            rospy.Duration(min(0.2, self.candidate_timeout)),
+            self._marker_timer_callback,
+        )
         rospy.loginfo(
             "target_rviz_marker_node: observation=%s marker=%s frame=%s "
             "cloud=%s filtered_cloud=%s boxes=%s radius=%.2fm",
@@ -163,6 +177,9 @@ class TargetRvizMarkerNode:
                 self.states[target_type]["candidate"] = state
             else:
                 return
+        self.publish_markers()
+
+    def _marker_timer_callback(self, _event):
         self.publish_markers()
 
     @staticmethod
@@ -364,7 +381,10 @@ class TargetRvizMarkerNode:
         if confirmed:
             status = "已确认"
         else:
-            status = "候选 %d/3" % max(0, int(state.get("hits", 0)))
+            if target_type == "qr_code" and result.get("validated") is False:
+                status = "候选(待验证) %d/3" % max(0, int(state.get("hits", 0)))
+            else:
+                status = "候选 %d/3" % max(0, int(state.get("hits", 0)))
         return "%s  %s" % (display_name, status)
 
     def _marker(self, marker_id, namespace, marker_type, state, color, text=""):
@@ -399,7 +419,17 @@ class TargetRvizMarkerNode:
     def publish_markers(self):
         array = MarkerArray()
         desired_ids = set()
+        now = rospy.Time.now().to_sec()
         with self._state_lock:
+            # Candidates are temporary observations.  Do not leave an old raw
+            # QR quadrilateral visible after the detector reports no_qr.
+            for target_type in self.TARGETS:
+                candidate = self.states[target_type].get("candidate")
+                if candidate is None:
+                    continue
+                age = now - float(candidate.get("timestamp", now))
+                if age >= 0.0 and age > self.candidate_timeout:
+                    self.states[target_type]["candidate"] = None
             states = {
                 target_type: dict(self.states[target_type])
                 for target_type in self.TARGETS

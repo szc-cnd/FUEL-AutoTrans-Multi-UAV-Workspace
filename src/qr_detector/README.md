@@ -10,12 +10,16 @@ ArUco 码检测器。
 
 - 订阅 RealSense 彩色图像、对齐深度图和相机内参。
 - 使用 OpenCV `cv2.QRCodeDetector` 检测普通 QR Code。
-- 检测到二维码角点后，即使解码内容为空，也认为发现了二维码目标。
+- 角点检测结果先作为本机候选显示；只有通过内部二维码真实性校验和深度
+  一致性检查后，才允许进入稳定确认和远程上报。二维码内容默认不输出。
 - 根据四个角点计算二维码中心像素坐标。
 - 在中心点附近取深度窗口中位数，避免只依赖单个深度像素。
+- 同时检查中心和四个角点的深度有效率、标准差和深度范围，排除跨越网格、
+  地面和背景的伪四边形。
 - 使用相机内参反投影，输出二维码中心在相机坐标系下的位置。
 - 发布 JSON 检测状态、`PoseStamped` 位姿和调试图像。
-- 支持连续多帧确认、短时间丢失保持和 EMA 位置滤波。
+- 支持连续多帧确认、短时间丢失保持和 EMA 位置滤波；未验证候选不会被
+  `target_reporting` 累计为确认目标。
 - 支持保存检测失败帧，便于后续采集数据训练 YOLO 兜底模型。
 - 有效候选会发布到机载候选话题供 target_reporting/RViz 观察，但默认不发送到远程端；只有连续确认后的结果才进入稳定上报链路。
 
@@ -63,14 +67,18 @@ roslaunch qr_detector qr_detector.launch
 - `depth_topic`：对齐到彩色图的深度图话题。
 - `camera_info_topic`：彩色相机内参话题。
 - `depth_window_size`：中心点附近取深度中位数的窗口大小，默认 `11`。
-- `min_area`：二维码四边形的最小像素面积，当前为 `100`。
-- `min_side_length`：二维码最短边像素阈值，当前为 `12`。
-- `max_side_ratio`：最长边与最短边比例上限，当前为 `8`。
-- `max_angle_cos`：角点直角约束阈值，当前为 `0.90`。
-- `qr_eps_x`、`qr_eps_y`：OpenCV QR 角点扫描容差，当前均为 `0.25`。
+- `min_area`：二维码四边形的最小像素面积，当前为 `150`。
+- `min_side_length`：二维码最短边像素阈值，当前为 `16`。
+- `max_side_ratio`：最长边与最短边比例上限，当前为 `4`。
+- `max_angle_cos`：角点直角约束阈值，当前为 `0.80`。
+- `max_quad_area_ratio`、`max_quad_width_ratio`、`max_quad_height_ratio`：
+  限制候选四边形不能占据整幅背景图。
+- `qr_eps_x`、`qr_eps_y`：OpenCV QR 角点扫描容差，当前均为 `0.15`。
+- `require_decode_for_confirmation`：是否将内部解码成功作为确认门槛，当前为
+  `true`。这只用于真实性校验，`decode_qr_data=false` 时不会对外发布内容。
 - `preprocess_mode`：预处理方式，当前为 `gray`。
 - `upscale_factor`：检测前图像放大倍数，当前为 `1.5`。
-- `confirm_frames`：连续检测到多少帧后确认 `detected=true`，当前为 `3`。
+- `confirm_frames`：连续通过真实性和深度校验多少帧后确认 `detected=true`，当前为 `5`。
 - `draw_raw_candidates`：是否在二维码调试图像中绘制单帧原始候选，当前为 `false`；RViz 候选标记仍由 target_reporting 单独显示。
 - `lost_hold_time`：短时间丢失后保留上一帧结果的时间，默认 `0.3` 秒。
 - `ema_alpha`：相机坐标 `x,y,z` 的 EMA 滤波系数。

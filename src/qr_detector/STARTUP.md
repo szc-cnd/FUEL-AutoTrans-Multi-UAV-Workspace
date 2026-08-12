@@ -52,8 +52,9 @@ Terminator 布局文件为：
 /home/oem/match_ws/src/qr_detector/scripts/terminator_qr_detector.conf
 ```
 
-当前参数为灰度预处理、`upscale_factor=1.5`、`qr_eps_x/y=0.25`、最短边
-`12px`、边长比例上限 `8`、连续 `3` 帧确认，并关闭调试图像中的单帧原始候选框。
-有效候选仍通过 `/UAV0/vision/qr_candidate_pose_camera` 和
-`/UAV0/vision/qr_candidate_detected` 供机载 RViz 显示；稳定结果使用
-`/UAV0/vision/qr_detected` 和 `/UAV0/vision/qr_pose_camera`。候选不会发送到远程端。
+当前参数为灰度预处理、`upscale_factor=1.5`、`qr_eps_x/y=0.15`、最短边
+`16px`、边长比例上限 `4`、连续 `5` 帧真实性和深度校验，并关闭调试图像中的
+单帧原始候选框。角点候选仍通过 `/UAV0/vision/qr_candidate_pose_camera` 和
+`/UAV0/vision/qr_candidate_detected` 供机载 RViz 显示；只有内部解码校验和
+深度一致性通过后，才会累计 `target_reporting` 的确认次数。候选不会发送到
+远程端。

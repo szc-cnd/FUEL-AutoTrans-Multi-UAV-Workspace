@@ -5,12 +5,14 @@
 OpenCV QR Code detector baseline for a ROS1 / RealSense D435 pipeline.
 
 This node is deliberately small and explicit:
-  - cv2.QRCodeDetector handles ordinary QR Code detection.
+  - cv2.QRCodeDetector supplies immediate geometric candidates and an internal
+    decode gate prevents background quadrilaterals from being confirmed.
   - Aligned depth near the QR center gives the center point in camera frame.
   - JSON status and a debug image make field tuning quick.
 
 The QR detection section is isolated so a later YOLO fallback can be inserted
 without changing the ROS IO, depth, projection, or temporal filtering code.
+The payload is hidden by default; internal decode is only an authenticity gate.
 """
 
 import json
@@ -46,6 +48,15 @@ class QRDetectorNode(object):
         self.min_side_length = float(rospy.get_param("~min_side_length", 12.0))
         self.max_side_ratio = float(rospy.get_param("~max_side_ratio", 8.0))
         self.max_angle_cos = float(rospy.get_param("~max_angle_cos", 0.90))
+        self.max_quad_area_ratio = float(
+            rospy.get_param("~max_quad_area_ratio", 0.35)
+        )
+        self.max_quad_width_ratio = float(
+            rospy.get_param("~max_quad_width_ratio", 0.90)
+        )
+        self.max_quad_height_ratio = float(
+            rospy.get_param("~max_quad_height_ratio", 0.90)
+        )
         self.qr_eps_x = float(rospy.get_param("~qr_eps_x", 0.25))
         self.qr_eps_y = float(rospy.get_param("~qr_eps_y", 0.25))
         self.depth_min = float(rospy.get_param("~depth_min", 0.15))
@@ -56,10 +67,32 @@ class QRDetectorNode(object):
             rospy.get_param("~enable_preprocess_fallbacks", False)
         )
         self.decode_qr_data = bool(rospy.get_param("~decode_qr_data", False))
+        # The QR payload is not part of the competition result, but decoding
+        # is used internally as a strong authenticity gate.  Raw corner
+        # candidates remain available for local RViz observation.
+        self.require_decode_for_confirmation = bool(
+            rospy.get_param("~require_decode_for_confirmation", True)
+        )
         self.draw_raw_candidates = bool(rospy.get_param("~draw_raw_candidates", False))
         self.confirm_frames = int(rospy.get_param("~confirm_frames", 3))
         self.lost_hold_time = float(rospy.get_param("~lost_hold_time", 0.3))
         self.ema_alpha = float(rospy.get_param("~ema_alpha", 0.35))
+
+        self.depth_corner_window_size = int(
+            rospy.get_param("~depth_corner_window_size", 7)
+        )
+        self.min_depth_valid_corners = int(
+            rospy.get_param("~min_depth_valid_corners", 3)
+        )
+        self.min_depth_valid_ratio = float(
+            rospy.get_param("~min_depth_valid_ratio", 0.55)
+        )
+        self.max_corner_depth_std = float(
+            rospy.get_param("~max_corner_depth_std", 0.25)
+        )
+        self.max_corner_depth_range = float(
+            rospy.get_param("~max_corner_depth_range", 0.60)
+        )
 
         self.save_failed_frame = bool(rospy.get_param("~save_failed_frame", False))
         self.failed_frame_dir = os.path.expanduser(
@@ -84,6 +117,7 @@ class QRDetectorNode(object):
 
         self.latest_depth_msg = None
         self.consecutive_detect_count = 0
+        self.consecutive_valid_count = 0
         self.last_confirmed_result = None
         self.last_confirmed_time = None
         self.filtered_xyz = None
@@ -181,10 +215,22 @@ class QRDetectorNode(object):
             self.consecutive_detect_count = 0
 
         result = self.build_result(raw_detection, image_msg.header)
-        confirmed = raw_valid and self.consecutive_detect_count >= self.confirm_frames
+        validation_valid = raw_valid and bool(result.get("confirmable", False))
 
-        # 有效角点和深度一出现就发布本机候选，供 target_reporting 在 RViz
-        # 显示观察位姿；稳定结果仍由下面的 confirmed 分支负责正式上报。
+        if validation_valid:
+            self.consecutive_valid_count += 1
+        else:
+            self.consecutive_valid_count = 0
+
+        confirmed = (
+            raw_valid
+            and bool(result.get("confirmable", False))
+            and self.consecutive_valid_count >= self.confirm_frames
+        )
+
+        # 原始角点和深度一出现就发布本机候选，供 target_reporting 在 RViz
+        # 显示观察位姿；候选是否可确认由 validated/confirmable 门控，稳定
+        # 结果仍由下面的 confirmed 分支负责正式上报。
         if raw_valid and result.get("z") is not None:
             self.publish_candidate(result, image_msg.header, confirmed)
 
@@ -234,8 +280,11 @@ class QRDetectorNode(object):
                 continue
             tried_modes.append(mode)
             processed, scale = self.preprocess_for_qr(gray, mode)
-            data, points = self.run_qr_detector(processed)
-            points = self.normalize_points(points, scale)
+            detection = self.run_qr_detector(processed)
+            points = self.normalize_points(detection.get("points"), scale)
+            decoded_points = self.normalize_points(
+                detection.get("decoded_points"), scale
+            )
             if points is not None:
                 used_mode = mode
                 break
@@ -247,16 +296,40 @@ class QRDetectorNode(object):
         if area < self.min_area:
             return None
 
-        ok, side_px = self.is_reasonable_quad(points)
+        ok, side_px = self.is_reasonable_quad(
+            points, image_w=color_bgr.shape[1], image_h=color_bgr.shape[0]
+        )
         if not ok:
             return None
+
+        # Prefer the decoder's own corners after validation.  For an
+        # unvalidated raw candidate, retain detect() corners so the candidate
+        # can still be shown locally in RViz without entering the report chain.
+        if detection.get("decoded_valid") and decoded_points is not None:
+            points = decoded_points
+            area = abs(float(cv2.contourArea(points.astype(np.float32))))
+            ok, side_px = self.is_reasonable_quad(
+                points, image_w=color_bgr.shape[1], image_h=color_bgr.shape[0]
+            )
+            if not ok:
+                return None
+
+        validated = bool(detection.get("decoded_valid", False))
+        validation_reason = "decoded" if validated else "decode_not_verified"
+        if not self.require_decode_for_confirmation:
+            # This compatibility mode keeps the old detection-only behavior,
+            # while still applying the stricter quad geometry checks above.
+            validated = True
+            validation_reason = "geometry_only"
 
         center_u = float(np.mean(points[:, 0]))
         center_v = float(np.mean(points[:, 1]))
 
         return {
             "detected": True,
-            "data": data or "",
+            # Keep the payload private unless explicitly requested.  It is
+            # only used above as an internal authenticity check by default.
+            "data": detection.get("decoded_data", "") if self.decode_qr_data else "",
             "points": points,
             "center_u": center_u,
             "center_v": center_v,
@@ -264,6 +337,8 @@ class QRDetectorNode(object):
             "side_px": side_px,
             "method": "opencv_qrcode_detector",
             "preprocess": used_mode,
+            "validated": validated,
+            "validation_reason": validation_reason,
         }
 
     def preprocess_for_qr(self, gray, mode):
@@ -299,37 +374,41 @@ class QRDetectorNode(object):
         return work, scale
 
     def run_qr_detector(self, image):
-        data = ""
-        points = None
+        detected_points = None
+        decoded_data = ""
+        decoded_points = None
 
-        # Some embedded OpenCV builds are compiled without QUIRC. In that case
-        # detectAndDecode prints noisy warnings and cannot decode payloads, but
-        # corner detection still works. The competition only needs target type
-        # and position, so detection-only is the default.
-        if not self.decode_qr_data:
-            try:
-                ok, detected_points = self.qr_detector.detect(image)
-                if ok:
-                    points = detected_points
-            except cv2.error as exc:
-                rospy.logwarn_throttle(1.0, "QRCodeDetector detect failed: %s", exc)
-            return data, points
-
+        # detect() provides the immediate geometric candidate for RViz.  It is
+        # deliberately not treated as proof of a QR code.
         try:
-            data, points, _ = self.qr_detector.detectAndDecode(image)
+            ok, candidate_points = self.qr_detector.detect(image)
+            if ok:
+                detected_points = candidate_points
         except cv2.error as exc:
-            rospy.logwarn_throttle(1.0, "QRCodeDetector detectAndDecode failed: %s", exc)
+            rospy.logwarn_throttle(1.0, "QRCodeDetector detect failed: %s", exc)
 
-        # OpenCV can sometimes detect corner points even when decoding fails.
-        if points is None or len(points) == 0:
+        # The payload is not exported by default.  detectAndDecode is run only
+        # as an internal authenticity gate, so a background quadrilateral is
+        # not allowed to become a confirmed target.
+        if self.require_decode_for_confirmation or self.decode_qr_data:
             try:
-                ok, detected_points = self.qr_detector.detect(image)
-                if ok:
-                    points = detected_points
+                decoded_data, decoded_points, _ = self.qr_detector.detectAndDecode(
+                    image
+                )
             except cv2.error as exc:
-                rospy.logwarn_throttle(1.0, "QRCodeDetector detect failed: %s", exc)
+                rospy.logwarn_throttle(
+                    1.0, "QRCodeDetector detectAndDecode failed: %s", exc
+                )
 
-        return data or "", points
+        if detected_points is None and decoded_points is not None:
+            detected_points = decoded_points
+
+        return {
+            "points": detected_points,
+            "decoded_points": decoded_points,
+            "decoded_data": decoded_data or "",
+            "decoded_valid": bool(decoded_data and decoded_points is not None),
+        }
 
     def normalize_points(self, points, scale=1.0):
         if points is None:
@@ -370,7 +449,7 @@ class QRDetectorNode(object):
         ordered[3] = pts[np.argmax(diffs)]
         return ordered
 
-    def is_reasonable_quad(self, points):
+    def is_reasonable_quad(self, points, image_w=None, image_h=None):
         pts = np.asarray(points, dtype=np.float32)
         if not cv2.isContourConvex(pts):
             return False, 0.0
@@ -387,6 +466,17 @@ class QRDetectorNode(object):
             return False, min_side
         if max_side / max(min_side, 1e-6) > self.max_side_ratio:
             return False, min_side
+
+        if image_w is not None and image_h is not None:
+            image_area = float(max(int(image_w) * int(image_h), 1))
+            quad_area = abs(float(cv2.contourArea(pts)))
+            x, y, width, height = cv2.boundingRect(pts)
+            if quad_area / image_area > self.max_quad_area_ratio:
+                return False, min_side
+            if float(width) / float(max(image_w, 1)) > self.max_quad_width_ratio:
+                return False, min_side
+            if float(height) / float(max(image_h, 1)) > self.max_quad_height_ratio:
+                return False, min_side
 
         # Reject extremely skinny or self-inconsistent quadrilaterals. Perspective
         # can skew a QR code, so this is intentionally permissive.
@@ -410,6 +500,13 @@ class QRDetectorNode(object):
             return self.empty_result()
 
         x = y = z = None
+        depth_quality = {
+            "validated": False,
+            "valid_corners": 0,
+            "valid_ratio": 0.0,
+            "std": None,
+            "range": None,
+        }
         depth_msg = self.latest_depth_msg
         if depth_msg is not None:
             try:
@@ -419,6 +516,13 @@ class QRDetectorNode(object):
                 z = self.depth_from_window(
                     depth_raw,
                     depth_msg.encoding,
+                    detection["center_u"],
+                    detection["center_v"],
+                )
+                depth_quality = self.depth_quality_from_quad(
+                    depth_raw,
+                    depth_msg.encoding,
+                    detection["points"],
                     detection["center_u"],
                     detection["center_v"],
                 )
@@ -444,6 +548,25 @@ class QRDetectorNode(object):
             "area": detection["area"],
             "side_px": detection.get("side_px"),
             "preprocess": detection.get("preprocess"),
+            "validated": bool(detection.get("validated", False)),
+            "validation_reason": detection.get("validation_reason", ""),
+            "depth_validated": bool(depth_quality["validated"]),
+            "depth_valid_corners": int(depth_quality["valid_corners"]),
+            "depth_valid_ratio": round(float(depth_quality["valid_ratio"]), 3),
+            "depth_corner_std": (
+                round(float(depth_quality["std"]), 4)
+                if depth_quality["std"] is not None
+                else None
+            ),
+            "depth_corner_range": (
+                round(float(depth_quality["range"]), 4)
+                if depth_quality["range"] is not None
+                else None
+            ),
+            "confirmable": bool(
+                detection.get("validated", False)
+                and depth_quality["validated"]
+            ),
             "stamp": header.stamp.to_sec() if header.stamp else None,
         }
 
@@ -460,17 +583,88 @@ class QRDetectorNode(object):
             "method": "opencv_qrcode_detector",
         }
 
-    def depth_from_window(self, depth_raw, depth_encoding, center_u, center_v):
+    def depth_quality_from_quad(
+        self, depth_raw, depth_encoding, points, center_u, center_v
+    ):
+        """Check that the QR corners lie on one reliable depth surface.
+
+        A false quadrilateral assembled from a net, floor, or background often
+        spans several depth layers.  The center depth alone cannot detect that
+        case, so confirmation uses the center and all four corners while the
+        center value remains available for local candidate visualization.
+        """
+        result = {
+            "validated": False,
+            "valid_corners": 0,
+            "valid_ratio": 0.0,
+            "std": None,
+            "range": None,
+        }
         if depth_raw is None:
-            return None
+            return result
+
+        try:
+            quad = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+        except (TypeError, ValueError):
+            return result
+        if quad.shape[0] < 4:
+            return result
+
+        samples = [(float(center_u), float(center_v))]
+        samples.extend((float(point[0]), float(point[1])) for point in quad[:4])
+        center_values = []
+        corner_values = []
+        ratios = []
+        for index, (u, v) in enumerate(samples):
+            stats = self.depth_stats_from_window(
+                depth_raw,
+                depth_encoding,
+                u,
+                v,
+                self.depth_corner_window_size,
+            )
+            if stats[0] is not None:
+                if index == 0:
+                    center_values.append(float(stats[0]))
+                else:
+                    corner_values.append(float(stats[0]))
+            ratios.append(float(stats[1]))
+
+        result["valid_corners"] = len(corner_values)
+        result["valid_ratio"] = float(np.mean(ratios)) if ratios else 0.0
+        values = center_values + corner_values
+        if not values:
+            return result
+
+        values_array = np.asarray(values, dtype=np.float32)
+        result["std"] = float(np.std(values_array))
+        result["range"] = float(np.max(values_array) - np.min(values_array))
+        result["validated"] = bool(
+            result["valid_corners"] >= self.min_depth_valid_corners
+            and result["valid_ratio"] >= self.min_depth_valid_ratio
+            and result["std"] <= self.max_corner_depth_std
+            and result["range"] <= self.max_corner_depth_range
+        )
+        return result
+
+    def depth_from_window(self, depth_raw, depth_encoding, center_u, center_v):
+        return self.depth_stats_from_window(
+            depth_raw, depth_encoding, center_u, center_v, self.depth_window_size
+        )[0]
+
+    def depth_stats_from_window(
+        self, depth_raw, depth_encoding, center_u, center_v, window_size
+    ):
+        if depth_raw is None:
+            return None, 0.0, None
 
         h, w = depth_raw.shape[:2]
         u = int(round(center_u))
         v = int(round(center_v))
         if u < 0 or u >= w or v < 0 or v >= h:
-            return None
+            return None, 0.0, None
 
-        half = self.depth_window_size // 2
+        half = max(1, int(window_size) // 2)
         x0 = max(0, u - half)
         x1 = min(w, u + half + 1)
         y0 = max(0, v - half)
@@ -483,9 +677,14 @@ class QRDetectorNode(object):
         valid &= depth_m <= self.depth_max
 
         valid_values = depth_m[valid]
+        valid_ratio = float(valid_values.size) / float(max(depth_m.size, 1))
         if valid_values.size == 0:
-            return None
-        return float(np.median(valid_values))
+            return None, valid_ratio, None
+        return (
+            float(np.median(valid_values)),
+            valid_ratio,
+            float(np.std(valid_values)),
+        )
 
     def depth_samples_to_meters(self, samples, depth_encoding):
         arr = np.asarray(samples)
@@ -556,6 +755,7 @@ class QRDetectorNode(object):
         self.pose_pub.publish(pose_msg)
 
     def publish_candidate(self, result, header, source_confirmed):
+        confirmable = bool(source_confirmed and result.get("confirmable", False))
         pose_msg = PoseStamped()
         pose_msg.header.stamp = header.stamp
         pose_msg.header.frame_id = self.camera_frame_id or header.frame_id
@@ -569,6 +769,8 @@ class QRDetectorNode(object):
             "detected": True,
             "candidate": True,
             "stable": bool(source_confirmed),
+            "validated": bool(result.get("validated", False)),
+            "confirmable": confirmable,
             "held": False,
             "data": result.get("data", ""),
             "points": result.get("points", []),
@@ -581,7 +783,17 @@ class QRDetectorNode(object):
             "area": self.round_or_none(result.get("area"), 1),
             "side_px": self.round_or_none(result.get("side_px"), 1),
             "preprocess": result.get("preprocess"),
-            "reason": "stable_candidate" if source_confirmed else "raw_candidate",
+            "validation_reason": result.get("validation_reason", ""),
+            "depth_validated": bool(result.get("depth_validated", False)),
+            "reason": (
+                "stable_candidate"
+                if source_confirmed
+                else (
+                    "validated_candidate"
+                    if result.get("validated", False)
+                    else "raw_candidate_waiting_validation"
+                )
+            ),
         }
         self.candidate_detected_pub.publish(
             String(data=json.dumps(status, ensure_ascii=False))
@@ -602,6 +814,9 @@ class QRDetectorNode(object):
             "area": self.round_or_none(result.get("area"), 1),
             "side_px": self.round_or_none(result.get("side_px"), 1),
             "preprocess": result.get("preprocess"),
+            "validated": bool(result.get("validated", False)),
+            "confirmable": bool(result.get("confirmable", False)),
+            "depth_validated": bool(result.get("depth_validated", False)),
             "reason": reason,
         }
         self.detected_pub.publish(String(data=json.dumps(status, ensure_ascii=False)))

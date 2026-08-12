@@ -7,6 +7,7 @@
   <arg name="object_cloud_topic" default="/UAV0/target_reporting/detected_object_cloud" />
   <arg name="object_box_topic" default="/UAV0/target_reporting/detected_object_boxes" />
   <arg name="object_cloud_radius" default="0.25" />
+  <arg name="candidate_timeout" default="0.8" />
   <arg name="open_rviz" default="true" />
 
   <node pkg="target_reporting" type="target_rviz_marker_node.py" name="target_rviz_marker" output="screen">
@@ -17,6 +18,7 @@
     <param name="object_cloud_topic" value="$(arg object_cloud_topic)" />
     <param name="object_box_topic" value="$(arg object_box_topic)" />
     <param name="object_cloud_radius" value="$(arg object_cloud_radius)" />
+    <param name="candidate_timeout" value="$(arg candidate_timeout)" />
   </node>
 
   <node if="$(arg open_rviz)" pkg="rviz" type="rviz" name="target_results_rviz"

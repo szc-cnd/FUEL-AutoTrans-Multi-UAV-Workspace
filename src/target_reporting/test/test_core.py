@@ -128,6 +128,31 @@ class CoreTests(unittest.TestCase):
             '{"detected":true,"held":true,"data":""}'
         ))
 
+    def test_qr_raw_candidate_is_visible_but_cannot_confirm(self):
+        result, _ = parse_qr_status(
+            '{"detected":true,"candidate":true,"stable":false,'
+            '"validated":false,"confirmable":false,"data":"",'
+            '"center_u":100,"center_v":80}'
+        )
+        self.assertFalse(result["_qr_validated"])
+        self.assertFalse(result["_qr_confirmable"])
+
+        tracker = CandidateTracker(distance_m=0.3, confirm_hits=3)
+        position = {"x": 1.0, "y": 0.0, "z": 2.0}
+        for _ in range(5):
+            candidate, confirmed = tracker.update(
+                "qr_code", {"content": ""}, position, allow_confirmation=False
+            )
+            self.assertFalse(confirmed)
+            self.assertEqual(0, candidate["hits"])
+
+        for index in range(3):
+            candidate, confirmed = tracker.update(
+                "qr_code", {"content": ""}, position, allow_confirmation=True
+            )
+            self.assertEqual(index + 1, candidate["hits"])
+        self.assertTrue(confirmed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,7 +39,19 @@ def parse_qr_status(text):
     if not data.get("detected") or data.get("held"):
         return None
     result = {"content": str(data.get("data", ""))}
-    return _copy_geometry(data, result), None
+    result = _copy_geometry(data, result)
+    # QR raw corners are useful for local RViz observation, but they must not
+    # enter CandidateTracker confirmation until the detector has independently
+    # validated the QR structure and depth.  Legacy messages without these
+    # fields are treated as already-confirmed for backward compatibility.
+    if any(
+        field in data for field in ("candidate", "stable", "validated", "confirmable")
+    ):
+        result["_qr_validated"] = bool(data.get("validated", False))
+        result["_qr_confirmable"] = bool(
+            data.get("confirmable", data.get("stable", False))
+        )
+    return result, None
 
 
 def parse_thermal_status(detected):

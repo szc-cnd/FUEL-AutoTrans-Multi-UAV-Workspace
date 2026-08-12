@@ -9,6 +9,7 @@ class CandidateTracker:
         "depth", "area", "side_px", "score", "stable_count", "reason",
         "point_camera", "real_width", "real_height", "valid_depth_ratio",
         "depth_std", "pixel_area", "fill_ratio", "method", "preprocess",
+        "validated", "confirmable",
     }
 
     def __init__(self, distance_m=0.30, confirm_hits=3):
@@ -27,7 +28,7 @@ class CandidateTracker:
             )
         )
 
-    def update(self, target_type, result, position):
+    def update(self, target_type, result, position, allow_confirmation=True):
         key = self._result_key(result)
         best = None
         best_distance = None
@@ -49,6 +50,15 @@ class CandidateTracker:
                 "local_number": number,
             }
             self._items.append(best)
+        if not allow_confirmation:
+            # Keep the candidate position available for RViz, but do not let
+            # unvalidated observations accumulate toward a confirmation.
+            if not best["reported"]:
+                best["hits"] = 0
+            for axis in ("x", "y", "z"):
+                best["position"][axis] = float(position[axis])
+            return best, False
+
         best["hits"] += 1
         alpha = 1.0 / best["hits"]
         for axis in ("x", "y", "z"):
