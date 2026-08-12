@@ -190,7 +190,6 @@ namespace PayloadMPC
 			}
 			if (!rc_mode_available)
 			{
-				takeoff_prestream_start_ = ros::Time(0);
 				break;
 			}
 			if (auto_land_lockout_)
@@ -204,22 +203,17 @@ namespace PayloadMPC
 			{
 				takeoff_requested_ = false;
 				takeoff_request_latched_ = false;
-				takeoff_prestream_start_ = ros::Time(0);
 				last_takeoff_precondition_reason_.clear();
 				break;
 			}
-			if (takeoff_prestream_start_.isZero())
-			{
-				takeoff_prestream_start_ = now_time;
-				ROS_INFO("[AUTO_TAKEOFF] CH8 低位：开始发送 OFFBOARD 安全预流，至少持续 1.0 s。");
-			}
+			// CH8 低位期间每个控制周期持续发布安全 setpoint；不设置固定等待时间，
+			// PX4 是否进入 OFFBOARD 以及其余起飞条件由 takeoffPreconditions() 独立确认。
 			publishTakeoffPrestream(now_time);
-			if ((now_time - takeoff_prestream_start_).toSec() < 1.0)
-				break;
 			if (!takeoff_request_latched_)
 			{
 				takeoff_request_latched_ = true;
 				takeoff_requested_ = true;
+				ROS_INFO("[AUTO_TAKEOFF] CH8 低位：持续发送 OFFBOARD 安全预流，等待操作者切换 OFFBOARD。");
 			}
 			if (takeoff_requested_)
 			{
@@ -1263,7 +1257,6 @@ namespace PayloadMPC
 		clearAutonomousState();
 		// CH8 仍在低位时不自动重新起飞，必须先离开低位再重新进入。
 		takeoff_request_latched_ = true;
-		takeoff_prestream_start_ = ros::Time(0);
 		fsm_state = MANUAL_CTRL;
 		ROS_WARN("[安全] PX4 已退出 OFFBOARD：已清空自动目标并停止 NMPC 和 setpoint。");
 	}

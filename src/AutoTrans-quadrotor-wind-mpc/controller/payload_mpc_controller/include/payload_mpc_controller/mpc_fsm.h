@@ -118,7 +118,6 @@ namespace PayloadMPC
 		std::string last_takeoff_precondition_reason_;
 		bool hover_offboard_wait_reported_{false};
 		bool cmd_offboard_wait_reported_{false};
-		ros::Time takeoff_prestream_start_{0};
 		bool odom_failsafe_active_{false};
 		ros::Time odom_failsafe_start_{0};
 		// 最近一次经过有限值检查和限幅的 MAVROS/PX4 控制量；里程计失效后最多保持 0.3 s。
