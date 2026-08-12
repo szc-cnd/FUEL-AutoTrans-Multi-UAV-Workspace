@@ -3,8 +3,9 @@
 
 The planner does not subscribe to this topic.  It is deliberately a display
 adapter only: target_reporting has already transformed detector points into
-the configured report frame, and this node renders those coordinates plus a
-small filtered PointCloud2 and 3D wire boxes around the reported targets.
+the configured report frame, and this node renders those coordinates.  The
+filtered PointCloud2 and 3D wire boxes are optional diagnostics and are off by
+default because the planner occupancy cloud can hide them in RViz.
 """
 
 import json
@@ -61,6 +62,9 @@ class TargetRvizMarkerNode:
         self.candidate_timeout = max(
             0.1, float(rospy.get_param("~candidate_timeout", 0.8))
         )
+        self.enable_object_cloud = bool(
+            rospy.get_param("~enable_object_cloud", False)
+        )
 
         # The camera cloud is an input only.  RViz receives a filtered cloud
         # containing points near the currently reported target positions.
@@ -101,15 +105,19 @@ class TargetRvizMarkerNode:
         )
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-        self.cloud_publisher = rospy.Publisher(
-            self.object_cloud_topic, PointCloud2, queue_size=1
-        )
-        self.box_publisher = rospy.Publisher(
-            self.object_box_topic, MarkerArray, queue_size=1
-        )
-        self.cloud_subscription = rospy.Subscriber(
-            self.cloud_topic, PointCloud2, self.cloud_callback, queue_size=1
-        )
+        self.cloud_publisher = None
+        self.box_publisher = None
+        self.cloud_subscription = None
+        if self.enable_object_cloud:
+            self.cloud_publisher = rospy.Publisher(
+                self.object_cloud_topic, PointCloud2, queue_size=1
+            )
+            self.box_publisher = rospy.Publisher(
+                self.object_box_topic, MarkerArray, queue_size=1
+            )
+            self.cloud_subscription = rospy.Subscriber(
+                self.cloud_topic, PointCloud2, self.cloud_callback, queue_size=1
+            )
         self._state_lock = threading.RLock()
         self._last_cloud_process = rospy.Time(0)
 
@@ -134,10 +142,11 @@ class TargetRvizMarkerNode:
         )
         rospy.loginfo(
             "target_rviz_marker_node: observation=%s marker=%s frame=%s "
-            "cloud=%s filtered_cloud=%s boxes=%s radius=%.2fm",
+            "object_cloud=%s cloud=%s filtered_cloud=%s boxes=%s radius=%.2fm",
             self.observation_topic,
             self.marker_topic,
             self.marker_frame,
+            self.enable_object_cloud,
             self.cloud_topic,
             self.object_cloud_topic,
             self.object_box_topic,
@@ -180,7 +189,11 @@ class TargetRvizMarkerNode:
                 self.states[target_type]["confirmed"] = state
                 self.states[target_type]["candidate"] = None
             elif bool(observation.get("candidate", False)):
-                self.states[target_type]["candidate"] = state
+                # Each competition target type is registered once.  Detector
+                # frames may keep publishing candidates after confirmation;
+                # do not draw a second sphere over the confirmed target.
+                if self.states[target_type]["confirmed"] is None:
+                    self.states[target_type]["candidate"] = state
             else:
                 return
         self.publish_markers()
