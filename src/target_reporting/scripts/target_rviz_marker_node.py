@@ -54,12 +54,10 @@ class TargetRvizMarkerNode:
         # fixed frame is renamed later.
         self.marker_frame = rospy.get_param("~marker_frame", "world")
         self.sphere_scale = max(0.05, float(rospy.get_param("~sphere_scale", 0.36)))
-        self.text_height = max(0.05, float(rospy.get_param("~text_height", 0.42)))
         # Point-cloud cells can surround the actual target center.  These
         # offsets are only for RViz readability; reported coordinates remain
         # exactly unchanged in the observation topic.
         self.sphere_z_offset = float(rospy.get_param("~sphere_z_offset", 0.12))
-        self.text_offset = float(rospy.get_param("~text_offset", 0.80))
         self.candidate_timeout = max(
             0.1, float(rospy.get_param("~candidate_timeout", 0.8))
         )
@@ -377,44 +375,20 @@ class TargetRvizMarkerNode:
             array.markers.append(marker)
         self.box_publisher.publish(array)
 
-    def _label(self, target_type, state, confirmed):
-        _, display_name = self.TARGETS[target_type]
-        result = state.get("result") or {}
-        detail = result.get("data") or result.get("color") or ""
-        if isinstance(detail, (dict, list)):
-            detail = ""
-        detail = str(detail).strip()
-        if detail:
-            display_name = "%s(%s)" % (display_name, detail)
-        if confirmed:
-            status = "已确认"
-        else:
-            if not bool(result.get("detector_confirmable", False)):
-                status = "候选(待检测器确认)"
-            else:
-                status = "候选"
-        return "%s  %s" % (display_name, status)
-
-    def _marker(self, marker_id, namespace, marker_type, state, color, text=""):
+    def _sphere_marker(self, marker_id, namespace, state, color):
         marker = Marker()
         marker.header.frame_id = self.marker_frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = namespace
         marker.id = marker_id
         marker.action = Marker.ADD
-        marker.type = marker_type
+        marker.type = Marker.SPHERE
         marker.pose.position.x = state["x"]
         marker.pose.position.y = state["y"]
-        marker.pose.position.z = state["z"]
+        marker.pose.position.z = state["z"] + self.sphere_z_offset
         marker.pose.orientation.w = 1.0
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
-        if marker_type == Marker.SPHERE:
-            marker.pose.position.z += self.sphere_z_offset
-            marker.scale.x = marker.scale.y = marker.scale.z = self.sphere_scale
-        else:
-            marker.scale.z = self.text_height
-            marker.pose.position.z += self.text_offset
-            marker.text = text
+        marker.scale.x = marker.scale.y = marker.scale.z = self.sphere_scale
         return marker
 
     @staticmethod
@@ -448,55 +422,33 @@ class TargetRvizMarkerNode:
             candidate = target_states["candidate"]
             confirmed = target_states["confirmed"]
             if candidate is not None:
-                sphere_id, text_id = index, 20 + index
+                sphere_id = index
                 candidate_color = self._type_color(
                     target_type, self.CANDIDATE_ALPHA
                 )
                 array.markers.append(
-                    self._marker(
+                    self._sphere_marker(
                         sphere_id,
                         "target_reporting/candidate",
-                        Marker.SPHERE,
                         candidate,
                         candidate_color,
                     )
                 )
-                array.markers.append(
-                    self._marker(
-                        text_id,
-                        "target_reporting/candidate_text",
-                        Marker.TEXT_VIEW_FACING,
-                        candidate,
-                        self._type_color(target_type),
-                        self._label(target_type, candidate, False),
-                    )
-                )
-                desired_ids.update((sphere_id, text_id))
+                desired_ids.add(sphere_id)
             if confirmed is not None:
-                sphere_id, text_id = 10 + index, 30 + index
+                sphere_id = 10 + index
                 confirmed_color = self._type_color(
                     target_type, self.CONFIRMED_ALPHA
                 )
                 array.markers.append(
-                    self._marker(
+                    self._sphere_marker(
                         sphere_id,
                         "target_reporting/confirmed",
-                        Marker.SPHERE,
                         confirmed,
                         confirmed_color,
                     )
                 )
-                array.markers.append(
-                    self._marker(
-                        text_id,
-                        "target_reporting/confirmed_text",
-                        Marker.TEXT_VIEW_FACING,
-                        confirmed,
-                        self._type_color(target_type),
-                        self._label(target_type, confirmed, True),
-                    )
-                )
-                desired_ids.update((sphere_id, text_id))
+                desired_ids.add(sphere_id)
 
         for marker_id in self.visible_ids - desired_ids:
             namespace = (
@@ -504,10 +456,6 @@ class TargetRvizMarkerNode:
                 if marker_id < 10
                 else "target_reporting/confirmed"
             )
-            if 20 <= marker_id < 30:
-                namespace = "target_reporting/candidate_text"
-            elif marker_id >= 30:
-                namespace = "target_reporting/confirmed_text"
             array.markers.append(self._delete(marker_id, namespace))
         self.visible_ids = desired_ids
         self.publisher.publish(array)
