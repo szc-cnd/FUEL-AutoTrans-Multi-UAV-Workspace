@@ -5,17 +5,19 @@
 OpenCV QR Code detector baseline for a ROS1 / RealSense D435 pipeline.
 
 This node is deliberately small and explicit:
-  - cv2.QRCodeDetector supplies immediate geometric candidates and an internal
-    decode gate prevents background quadrilaterals from being confirmed.
+  - cv2.QRCodeDetector supplies immediate geometric candidates. One successful
+    decode authenticates a short, spatially continuous track so motion blur in
+    later frames does not reset confirmation unnecessarily.
   - Aligned depth near the QR center gives the center point in camera frame.
   - JSON status and a debug image make field tuning quick.
 
 The QR detection section is isolated so a later YOLO fallback can be inserted
 without changing the ROS IO, depth, projection, or temporal filtering code.
-The payload is hidden by default; internal decode is only an authenticity gate.
+The decoded payload can be displayed/reported without changing planner inputs.
 """
 
 import json
+import math
 import os
 import time
 
@@ -66,12 +68,27 @@ class QRDetectorNode(object):
         self.enable_preprocess_fallbacks = bool(
             rospy.get_param("~enable_preprocess_fallbacks", False)
         )
-        self.decode_qr_data = bool(rospy.get_param("~decode_qr_data", False))
+        self.decode_qr_data = bool(rospy.get_param("~decode_qr_data", True))
         # The QR payload is not part of the competition result, but decoding
         # is used internally as a strong authenticity gate.  Raw corner
         # candidates remain available for local RViz observation.
         self.require_decode_for_confirmation = bool(
             rospy.get_param("~require_decode_for_confirmation", True)
+        )
+        # A single successful decode authenticates the same nearby QR track
+        # for a short period. Subsequent frames still need valid geometry and
+        # depth, but do not all need to decode under flight vibration.
+        self.decode_verification_hold_seconds = max(
+            0.0,
+            float(rospy.get_param("~decode_verification_hold_seconds", 2.0)),
+        )
+        self.decode_verification_max_center_shift_px = max(
+            1.0,
+            float(
+                rospy.get_param(
+                    "~decode_verification_max_center_shift_px", 120.0
+                )
+            ),
         )
         # RealSense auto-exposure needs a short period after the first color
         # frame.  Do not let a dark startup frame become a confirmed/uploaded
@@ -126,6 +143,9 @@ class QRDetectorNode(object):
         self.startup_warmup_finished = self.startup_warmup_seconds <= 0.0
         self.consecutive_detect_count = 0
         self.consecutive_valid_count = 0
+        self.last_decode_verification_time = None
+        self.last_decode_center = None
+        self.last_decoded_data = ""
         self.last_confirmed_result = None
         self.last_confirmed_time = None
         self.filtered_xyz = None
@@ -350,22 +370,22 @@ class QRDetectorNode(object):
             if not ok:
                 return None
 
-        validated = bool(detection.get("decoded_valid", False))
-        validation_reason = "decoded" if validated else "decode_not_verified"
+        center_u = float(np.mean(points[:, 0]))
+        center_v = float(np.mean(points[:, 1]))
+
+        validated, validation_reason, verified_data = self.apply_decode_verification(
+            detection, center_u, center_v
+        )
         if not self.require_decode_for_confirmation:
             # This compatibility mode keeps the old detection-only behavior,
             # while still applying the stricter quad geometry checks above.
             validated = True
             validation_reason = "geometry_only"
 
-        center_u = float(np.mean(points[:, 0]))
-        center_v = float(np.mean(points[:, 1]))
-
         return {
             "detected": True,
-            # Keep the payload private unless explicitly requested.  It is
-            # only used above as an internal authenticity check by default.
-            "data": detection.get("decoded_data", "") if self.decode_qr_data else "",
+            # Payload publication is independent from the authenticity gate.
+            "data": verified_data if self.decode_qr_data else "",
             "points": points,
             "center_u": center_u,
             "center_v": center_v,
@@ -376,6 +396,43 @@ class QRDetectorNode(object):
             "validated": validated,
             "validation_reason": validation_reason,
         }
+
+    def apply_decode_verification(
+        self, detection, center_u, center_v, now=None
+    ):
+        """Authenticate one spatially continuous QR track with one decode."""
+        decoded_data = str(detection.get("decoded_data", "") or "")
+        decoded_valid = bool(detection.get("decoded_valid", False))
+        current_center = (float(center_u), float(center_v))
+        current_time = time.monotonic() if now is None else float(now)
+
+        if decoded_valid:
+            self.last_decode_verification_time = current_time
+            self.last_decode_center = current_center
+            self.last_decoded_data = decoded_data
+            return True, "decoded", decoded_data
+
+        verified_time = getattr(self, "last_decode_verification_time", None)
+        verified_center = getattr(self, "last_decode_center", None)
+        if verified_time is None or verified_center is None:
+            return False, "decode_not_verified", ""
+
+        age = current_time - float(verified_time)
+        max_age = float(getattr(self, "decode_verification_hold_seconds", 0.0))
+        shift_limit = float(
+            getattr(self, "decode_verification_max_center_shift_px", 1.0)
+        )
+        center_shift = math.hypot(
+            current_center[0] - float(verified_center[0]),
+            current_center[1] - float(verified_center[1]),
+        )
+        if 0.0 <= age <= max_age and center_shift <= shift_limit:
+            return (
+                True,
+                "recent_decode",
+                str(getattr(self, "last_decoded_data", "") or ""),
+            )
+        return False, "decode_not_verified", ""
 
     def preprocess_for_qr(self, gray, mode):
         scale = self.upscale_factor

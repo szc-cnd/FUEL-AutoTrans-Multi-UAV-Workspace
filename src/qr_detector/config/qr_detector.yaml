@@ -34,11 +34,13 @@ depth_max: 8.0
 preprocess_mode: gray
 upscale_factor: 1.5
 enable_preprocess_fallbacks: false
-decode_qr_data: false
-# Keep payload output disabled, but require OpenCV decode success internally
-# before a candidate can become stable/reportable. Raw corners remain visible
-# locally as candidates for RViz observation.
+decode_qr_data: true
+# One successful non-empty decode authenticates the same nearby QR track. The
+# following frames still require valid corners and depth, but may finish the
+# stable confirmation during brief motion blur without decoding again.
 require_decode_for_confirmation: true
+decode_verification_hold_seconds: 2.0
+decode_verification_max_center_shift_px: 120.0
 # D435 自动曝光在首帧后需要短暂稳定时间。预热期间仍可在本机 RViz 观察候选，
 # 但不会发布稳定二维码，也不会触发 target_reporting 远程上报。
 startup_warmup_seconds: 5.0

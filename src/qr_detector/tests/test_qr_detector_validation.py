@@ -37,12 +37,45 @@ class QRDetectorValidationTests(unittest.TestCase):
         detector.qr_eps_x = 0.15
         detector.qr_eps_y = 0.15
         detector.require_decode_for_confirmation = True
-        detector.decode_qr_data = False
+        detector.decode_qr_data = True
+        detector.decode_verification_hold_seconds = 2.0
+        detector.decode_verification_max_center_shift_px = 120.0
+        detector.last_decode_verification_time = None
+        detector.last_decode_center = None
+        detector.last_decoded_data = ""
         detector.startup_warmup_seconds = 5.0
         detector.first_image_wall_time = None
         detector.startup_warmup_finished = False
         detector.configure_qr_detector()
         return detector
+
+    def test_one_decode_authenticates_nearby_frames_only(self):
+        detector = self.make_detector()
+        decoded = {"decoded_valid": True, "decoded_data": "competition-qr"}
+        undecoded = {"decoded_valid": False, "decoded_data": ""}
+
+        valid, reason, data = detector.apply_decode_verification(
+            decoded, 500.0, 300.0, now=100.0
+        )
+        self.assertTrue(valid)
+        self.assertEqual(reason, "decoded")
+        self.assertEqual(data, "competition-qr")
+
+        valid, reason, data = detector.apply_decode_verification(
+            undecoded, 520.0, 310.0, now=101.0
+        )
+        self.assertTrue(valid)
+        self.assertEqual(reason, "recent_decode")
+        self.assertEqual(data, "competition-qr")
+
+        valid, _, _ = detector.apply_decode_verification(
+            undecoded, 800.0, 300.0, now=101.0
+        )
+        self.assertFalse(valid)
+        valid, _, _ = detector.apply_decode_verification(
+            undecoded, 520.0, 310.0, now=102.1
+        )
+        self.assertFalse(valid)
 
     def test_startup_warmup_blocks_early_confirmation(self):
         detector = self.make_detector()

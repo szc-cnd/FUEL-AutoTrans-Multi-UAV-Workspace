@@ -77,7 +77,14 @@ roslaunch qr_detector qr_detector.launch
   限制候选四边形不能占据整幅背景图。
 - `qr_eps_x`、`qr_eps_y`：OpenCV QR 角点扫描容差，当前均为 `0.15`。
 - `require_decode_for_confirmation`：是否将内部解码成功作为确认门槛，当前为
-  `true`。这只用于真实性校验，`decode_qr_data=false` 时不会对外发布内容。
+  `true`。同一空间连续目标只需成功解码一帧，随后可在短时缓存内依靠角点、
+  深度和连续帧完成确认。
+- `decode_qr_data`：是否在调试图、检测结果和上报记录中携带解码内容，当前为
+  `true`。
+- `decode_verification_hold_seconds`：单帧成功解码对同一目标的验证有效期，当前
+  为 `2.0` 秒。
+- `decode_verification_max_center_shift_px`：复用单帧解码验证时允许的图像中心
+  位移，当前为 `120` 像素，避免将验证结果误用于远处的其他四边形。
 - `preprocess_mode`：预处理方式，当前为 `gray`。
 - `upscale_factor`：检测前图像放大倍数，当前为 `1.5`。
 - `confirm_frames`：连续通过真实性和深度校验多少帧后确认 `detected=true`，当前为 `5`。
