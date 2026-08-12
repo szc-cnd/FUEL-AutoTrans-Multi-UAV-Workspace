@@ -27,6 +27,16 @@ class TargetRvizMarkerNode:
         "qr_code": (1, "二维码"),
         "thermal_source": (2, "热源"),
     }
+    # RViz 中颜色统一表示目标类型；候选/确认状态由透明度和文字表示。
+    # 这些 RGB 值同时用于目标球、目标文字和三维包围盒，避免同一目标出现
+    # “球是绿色、框是橙色”的歧义。
+    TARGET_COLORS = {
+        "color_tag": (1.0, 0.35, 0.05),       # 橙色
+        "qr_code": (0.1, 1.0, 0.25),          # 绿色
+        "thermal_source": (1.0, 0.1, 0.9),   # 紫红色
+    }
+    CANDIDATE_ALPHA = 0.55
+    CONFIRMED_ALPHA = 0.95
 
     def __init__(self):
         self.observation_topic = rospy.get_param(
@@ -293,13 +303,14 @@ class TargetRvizMarkerNode:
             (maximum[0] + padding, maximum[1] + padding, maximum[2] + padding),
         )
 
-    @staticmethod
-    def _box_color(target_type):
-        return {
-            "color_tag": (1.0, 0.35, 0.05, 1.0),
-            "qr_code": (0.1, 1.0, 0.25, 1.0),
-            "thermal_source": (1.0, 0.1, 0.9, 1.0),
-        }.get(target_type, (1.0, 1.0, 1.0, 1.0))
+    @classmethod
+    def _type_color(cls, target_type, alpha=1.0):
+        rgb = cls.TARGET_COLORS.get(target_type, (1.0, 1.0, 1.0))
+        return rgb + (float(alpha),)
+
+    @classmethod
+    def _box_color(cls, target_type):
+        return cls._type_color(target_type, 1.0)
 
     def publish_object_boxes(self, cloud, target_entries, points_by_target):
         array = MarkerArray()
@@ -399,13 +410,16 @@ class TargetRvizMarkerNode:
             confirmed = target_states["confirmed"]
             if candidate is not None:
                 sphere_id, text_id = index, 20 + index
+                candidate_color = self._type_color(
+                    target_type, self.CANDIDATE_ALPHA
+                )
                 array.markers.append(
                     self._marker(
                         sphere_id,
                         "target_reporting/candidate",
                         Marker.SPHERE,
                         candidate,
-                        (1.0, 0.75, 0.0, 0.95),
+                        candidate_color,
                     )
                 )
                 array.markers.append(
@@ -414,20 +428,23 @@ class TargetRvizMarkerNode:
                         "target_reporting/candidate_text",
                         Marker.TEXT_VIEW_FACING,
                         candidate,
-                        (1.0, 0.85, 0.1, 1.0),
+                        self._type_color(target_type),
                         self._label(target_type, candidate, False),
                     )
                 )
                 desired_ids.update((sphere_id, text_id))
             if confirmed is not None:
                 sphere_id, text_id = 10 + index, 30 + index
+                confirmed_color = self._type_color(
+                    target_type, self.CONFIRMED_ALPHA
+                )
                 array.markers.append(
                     self._marker(
                         sphere_id,
                         "target_reporting/confirmed",
                         Marker.SPHERE,
                         confirmed,
-                        (0.1, 1.0, 0.2, 0.95),
+                        confirmed_color,
                     )
                 )
                 array.markers.append(
@@ -436,7 +453,7 @@ class TargetRvizMarkerNode:
                         "target_reporting/confirmed_text",
                         Marker.TEXT_VIEW_FACING,
                         confirmed,
-                        (0.2, 1.0, 0.3, 1.0),
+                        self._type_color(target_type),
                         self._label(target_type, confirmed, True),
                     )
                 )
