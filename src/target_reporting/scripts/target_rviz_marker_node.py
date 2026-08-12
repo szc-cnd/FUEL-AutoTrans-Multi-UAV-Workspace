@@ -23,9 +23,11 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 class TargetRvizMarkerNode:
     TARGETS = {
-        "color_tag": (0, "颜色标签"),
-        "qr_code": (1, "二维码"),
-        "thermal_source": (2, "热源"),
+        # Use ASCII in 3-D RViz text: the default MovableText font often lacks
+        # CJK glyphs, while the detector image and JSON keep their full data.
+        "color_tag": (0, "COLOR_TAG"),
+        "qr_code": (1, "QR_CODE"),
+        "thermal_source": (2, "THERMAL"),
     }
     # RViz 中颜色统一表示目标类型；候选/确认状态由透明度和文字表示。
     # 这些 RGB 值同时用于目标球、目标文字和三维包围盒，避免同一目标出现
