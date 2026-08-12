@@ -1679,9 +1679,11 @@ namespace PayloadMPC
 		bodyrates << predicted_input(INPUT_BODYRATE::kRateX), predicted_input(INPUT_BODYRATE::kRateY),
 			predicted_input(INPUT_BODYRATE::kRateZ);
 
-		msg.body_rate.x = std::max(-params_.max_bodyrate_xy_, std::min(bodyrates[0], params_.max_bodyrate_xy_));
-		msg.body_rate.y = std::max(-params_.max_bodyrate_xy_, std::min(bodyrates[1], params_.max_bodyrate_xy_));
-		msg.body_rate.z = std::max(-params_.max_bodyrate_z_, std::min(bodyrates[2], params_.max_bodyrate_z_));
+		const double max_bodyrate_xy = static_cast<double>(params_.max_bodyrate_xy_);
+		const double max_bodyrate_z = static_cast<double>(params_.max_bodyrate_z_);
+		msg.body_rate.x = std::max(-max_bodyrate_xy, std::min(bodyrates[0], max_bodyrate_xy));
+		msg.body_rate.y = std::max(-max_bodyrate_xy, std::min(bodyrates[1], max_bodyrate_xy));
+		msg.body_rate.z = std::max(-max_bodyrate_z, std::min(bodyrates[2], max_bodyrate_z));
 
 		// body_rate.x/y/z 是发送给 MAVROS/PX4 的机体系角速度命令，单位通常为 rad/s。
 		// AttitudeTarget.thrust 是 PX4 归一化推力命令，不是 NMPC 内部的牛顿推力 T。
