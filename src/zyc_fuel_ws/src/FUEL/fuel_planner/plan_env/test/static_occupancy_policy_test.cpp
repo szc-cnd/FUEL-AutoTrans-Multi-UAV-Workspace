@@ -26,7 +26,7 @@ int main() {
   transient.observe(true);
   assert(transient.applyMiss());
 
-  const StructuredRetentionConfig config{/*temporary_hits=*/3,
+  const StructuredRetentionConfig config{/*temporary_hits=*/6,
                                          /*static_hits=*/6,
                                          /*single_view_static_hits=*/10,
                                          /*release_misses=*/12};
@@ -38,17 +38,20 @@ int main() {
                                          false, config).status;
   assert(isolated.state == RetentionState::NONE);
 
-  // 三帧结构化命中进入临时保护；盲区内miss既不清图，也不降低证据。
+  // 六帧结构化命中才进入临时保护；近场临时障碍仍按miss衰减。
   StructuredRetentionStatus structured;
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 5; ++i)
     structured = updateStructuredRetention(structured, true, true, false, false,
                                            false, config).status;
+  assert(structured.state == RetentionState::NONE);
+  structured = updateStructuredRetention(structured, true, true, false, false,
+                                         false, config).status;
   assert(structured.state == RetentionState::TEMPORARY);
   const auto near_miss = updateStructuredRetention(
       structured, false, true, false, true, false, config);
-  assert(!near_miss.apply_observation);
-  assert(near_miss.status.state == RetentionState::TEMPORARY);
-  assert(near_miss.status.hit_evidence == structured.hit_evidence);
+  assert(near_miss.apply_observation);
+  assert(near_miss.status.state == RetentionState::NONE);
+  assert(near_miss.status.hit_evidence == structured.hit_evidence - 1);
 
   // 离开盲区后的自由观测正常降级临时障碍，避免噪声永久残留。
   const auto far_miss = updateStructuredRetention(
@@ -62,6 +65,13 @@ int main() {
     multiview = updateStructuredRetention(multiview, true, true, i >= 1, false,
                                           false, config).status;
   assert(multiview.state == RetentionState::STATIC);
+
+  // 只有已确认的静态障碍在0.35m近场忽略miss。
+  const auto static_near_miss = updateStructuredRetention(
+      multiview, false, true, true, true, false, config);
+  assert(!static_near_miss.apply_observation);
+  assert(static_near_miss.status.state == RetentionState::STATIC);
+
   StructuredRetentionStatus single_view;
   for (int i = 0; i < 6; ++i)
     single_view = updateStructuredRetention(single_view, true, true, false, false,

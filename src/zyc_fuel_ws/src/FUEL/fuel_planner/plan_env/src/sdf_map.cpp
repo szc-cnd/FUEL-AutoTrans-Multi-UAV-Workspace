@@ -50,7 +50,7 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   mp_->static_retention_required_hits_ = std::max(2, mp_->static_retention_required_hits_);
   nh.param("sdf_map/structured_retention_enabled", mp_->structured_retention_enabled_, false);
   nh.param("sdf_map/structured_retention_temporary_hits",
-           mp_->structured_temporary_hits_, 3);
+           mp_->structured_temporary_hits_, 6);
   nh.param("sdf_map/structured_retention_static_hits",
            mp_->structured_static_hits_, 6);
   nh.param("sdf_map/structured_retention_single_view_hits",

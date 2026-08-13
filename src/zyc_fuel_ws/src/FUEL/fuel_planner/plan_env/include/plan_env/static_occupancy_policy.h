@@ -40,7 +40,7 @@ enum class RetentionState : uint8_t {
 };
 
 struct StructuredRetentionConfig {
-  unsigned short temporary_hits{3};
+  unsigned short temporary_hits{6};
   unsigned short static_hits{6};
   unsigned short single_view_static_hits{10};
   unsigned short release_misses{12};
@@ -86,8 +86,8 @@ inline StructuredRetentionUpdate updateStructuredRetention(
     return update;
   }
 
-  if (update.status.state != RetentionState::NONE && within_near_field) {
-    // 雷达盲区内的自由射线不代表真实自由空间，不能降低证据或累计解除票数。
+  if (update.status.state == RetentionState::STATIC && within_near_field) {
+    // 雷达盲区内的自由射线不足以解除已确认静态障碍；临时障碍仍按miss衰减。
     update.apply_observation = false;
     return update;
   }
