@@ -221,6 +221,46 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(confirmed)
         self.assertEqual(1, candidate["hits"])
 
+    def test_thermal_source_requires_continuous_world_stability(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits=1,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.25},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        for stamp in (10.0, 10.05):
+            candidate, confirmed = tracker.update(
+                "thermal_source",
+                {"detected": True},
+                position,
+                timestamp=stamp,
+            )
+            self.assertFalse(confirmed)
+        candidate, confirmed = tracker.update(
+            "thermal_source",
+            {"detected": True},
+            position,
+            timestamp=10.10,
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(3, candidate["hits"])
+
+    def test_thermal_confirmation_resets_after_observation_gap(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.25},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        tracker.update("thermal_source", {}, position, timestamp=10.0)
+        tracker.update("thermal_source", {}, position, timestamp=10.05)
+        candidate, confirmed = tracker.update(
+            "thermal_source", {}, position, timestamp=10.50
+        )
+        self.assertFalse(confirmed)
+        self.assertEqual(1, candidate["hits"])
+
 
 if __name__ == "__main__":
     unittest.main()

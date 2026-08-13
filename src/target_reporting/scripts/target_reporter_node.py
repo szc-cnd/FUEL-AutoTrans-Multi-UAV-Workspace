@@ -67,7 +67,16 @@ class TargetReporterNode:
             mission_id=self.mission_id,
         )
         self.tracker = CandidateTracker(
-            rospy.get_param("~dedup_distance_m", 0.30), rospy.get_param("~confirm_hits", 1)
+            rospy.get_param("~dedup_distance_m", 0.30),
+            rospy.get_param("~confirm_hits", 1),
+            confirm_hits_by_type={
+                "thermal_source": rospy.get_param("~thermal_confirm_hits", 20)
+            },
+            confirmation_max_gap_s_by_type={
+                "thermal_source": rospy.get_param(
+                    "~thermal_confirmation_max_gap_s", 0.25
+                )
+            },
         )
         self.images = TimestampedImageCache(rospy.get_param("~image_cache_items", 40))
         host = rospy.get_param("~remote_host", "192.168.10.100")
@@ -322,6 +331,7 @@ class TargetReporterNode:
                 result,
                 position,
                 allow_confirmation=detector_confirmable,
+                timestamp=event_stamp,
             )
             candidate_number = candidate["local_number"]
             candidate_hits = candidate["hits"]

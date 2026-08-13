@@ -106,6 +106,7 @@ class RosPackageLayoutTest(unittest.TestCase):
             "stable_max_len: 3",
             "stable_min_hits: 2",
             "stable_max_pixel_jump: 25",
+            "reject_roi_border_touching: true",
         ):
             self.assertIn(expected, config)
 
