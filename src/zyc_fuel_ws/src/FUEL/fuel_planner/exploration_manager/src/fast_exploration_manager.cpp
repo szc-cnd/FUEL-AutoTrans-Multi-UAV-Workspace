@@ -307,7 +307,9 @@ bool FastExplorationManager::isKnownSafeHorizontalCorridor(
   const int ring_samples = 12;
   for (double along = 0.0; along <= distance + 1e-6; along += sample_step) {
     Vector3d center = start + along * unit;
-    if (!planner_manager_->isPositionSafe(center)) return false;
+    if (!pointAvoidsRememberedSplitObstacles(center) ||
+        !planner_manager_->isPositionSafe(center))
+      return false;
     for (double z_offset : {-0.06, 0.0, 0.06}) {
       for (int sample = 0; sample < ring_samples; ++sample) {
         const double angle = 2.0 * M_PI * static_cast<double>(sample) /
@@ -346,7 +348,8 @@ bool FastExplorationManager::isKnownSafeVerticalPath(const Vector3d& start,
       return false;
     path.push_back(point);
   }
-  return planner_manager_->isPathSafe(path);
+  return pathAvoidsRememberedSplitObstacles(path) &&
+         planner_manager_->isPathSafe(path);
 }
 
 bool FastExplorationManager::isLowProbeCorridorSafe(
@@ -367,7 +370,8 @@ bool FastExplorationManager::isLowProbeCorridorSafe(
       return false;
     path.push_back(point);
   }
-  return planner_manager_->isPathSafe(path);
+  return pathAvoidsRememberedSplitObstacles(path) &&
+         planner_manager_->isPathSafe(path);
 }
 
 bool FastExplorationManager::buildVerticalDetourFallback(
@@ -463,7 +467,8 @@ bool FastExplorationManager::buildVerticalDetourFallback(
         if (planner_manager_->path_finder_->search(pos, candidate) != Astar::REACH_END)
           continue;
         const auto path = planner_manager_->path_finder_->getPath();
-        if (!planner_manager_->isPathSafe(path) ||
+        if (!pathAvoidsRememberedSplitObstacles(path) ||
+            !planner_manager_->isPathSafe(path) ||
             (task_search_manager_ &&
              !task_search_manager_->isRecoveryPathAllowed(path, false)))
           continue;
@@ -734,6 +739,156 @@ bool FastExplorationManager::hasLowVerticalSupport(
   return false;
 }
 
+void FastExplorationManager::rememberSplitObstacle(
+    const Vector3d& center, const Vector3d& travel,
+    double half_lateral_extent) {
+  if (!remembered_split_obstacle_enabled_ || travel.head<2>().norm() < 1e-3)
+    return;
+
+  RememberedSplitObstacle observed;
+  observed.travel = Vector3d(travel.x(), travel.y(), 0.0).normalized();
+  observed.lateral = Vector3d(-observed.travel.y(), observed.travel.x(), 0.0);
+  observed.center = center;
+  observed.center.z() = 0.0;
+  observed.half_forward_extent = remembered_split_forward_half_extent_;
+  observed.half_lateral_extent =
+      std::max(0.05, half_lateral_extent + remembered_split_lateral_margin_);
+
+  for (auto& remembered : remembered_split_obstacles_) {
+    const Vector3d delta = observed.center - remembered.center;
+    const double alignment = std::fabs(observed.travel.dot(remembered.travel));
+    if (alignment < std::cos(30.0 * M_PI / 180.0) ||
+        delta.head<2>().norm() > remembered_split_match_distance_)
+      continue;
+
+    // 连续帧可能只看到同一障碍的不同片段；对新旧矩形取并集，禁止记忆区随点云抖动收缩。
+    const double center_forward = delta.dot(remembered.travel);
+    const double center_lateral = delta.dot(remembered.lateral);
+    const double projected_forward_half =
+        std::fabs(observed.travel.dot(remembered.travel)) *
+            observed.half_forward_extent +
+        std::fabs(observed.lateral.dot(remembered.travel)) *
+            observed.half_lateral_extent;
+    const double projected_lateral_half =
+        std::fabs(observed.travel.dot(remembered.lateral)) *
+            observed.half_forward_extent +
+        std::fabs(observed.lateral.dot(remembered.lateral)) *
+            observed.half_lateral_extent;
+    const double min_forward =
+        std::min(-remembered.half_forward_extent,
+                 center_forward - projected_forward_half);
+    const double max_forward =
+        std::max(remembered.half_forward_extent,
+                 center_forward + projected_forward_half);
+    const double min_lateral =
+        std::min(-remembered.half_lateral_extent,
+                 center_lateral - projected_lateral_half);
+    const double max_lateral =
+        std::max(remembered.half_lateral_extent,
+                 center_lateral + projected_lateral_half);
+    remembered.center += 0.5 * (min_forward + max_forward) * remembered.travel +
+                         0.5 * (min_lateral + max_lateral) * remembered.lateral;
+    remembered.center.z() = 0.0;
+    remembered.half_forward_extent = 0.5 * (max_forward - min_forward);
+    remembered.half_lateral_extent = 0.5 * (max_lateral - min_lateral);
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[split_memory] update central obstacle center=(%.2f,%.2f), "
+        "half_extent=(forward %.2f, lateral %.2f); keep full-height no-cross zone.",
+        remembered.center.x(), remembered.center.y(),
+        remembered.half_forward_extent, remembered.half_lateral_extent);
+    return;
+  }
+
+  remembered_split_obstacles_.push_back(observed);
+  ROS_ERROR(
+      "[split_memory] remember central obstacle #%zu center=(%.2f,%.2f), "
+      "half_extent=(forward %.2f, lateral %.2f); later point loss cannot reopen it.",
+      remembered_split_obstacles_.size(), observed.center.x(), observed.center.y(),
+      observed.half_forward_extent, observed.half_lateral_extent);
+}
+
+const FastExplorationManager::RememberedSplitObstacle*
+FastExplorationManager::findRelevantRememberedSplitObstacle(
+    const Vector3d& pos, const Vector3d& travel) const {
+  if (!remembered_split_obstacle_enabled_ ||
+      remembered_split_obstacles_.empty() || travel.head<2>().norm() < 1e-3)
+    return nullptr;
+
+  const Vector3d unit_travel(travel.head<2>().normalized().x(),
+                             travel.head<2>().normalized().y(), 0.0);
+  const Vector3d unit_lateral(-unit_travel.y(), unit_travel.x(), 0.0);
+  const RememberedSplitObstacle* best = nullptr;
+  double best_ahead = std::numeric_limits<double>::infinity();
+  for (const auto& remembered : remembered_split_obstacles_) {
+    if (std::fabs(unit_travel.dot(remembered.travel)) <
+        std::cos(35.0 * M_PI / 180.0))
+      continue;
+    const Vector3d delta = remembered.center - pos;
+    const double ahead = delta.dot(unit_travel);
+    const double side = std::fabs(delta.dot(unit_lateral));
+    if (ahead < -remembered.half_forward_extent - 0.20 ||
+        ahead > wide_side_bypass_max_lookahead_ + 0.50 ||
+        side > wide_side_bypass_lateral_range_ + remembered.half_lateral_extent)
+      continue;
+    if (ahead < best_ahead) {
+      best = &remembered;
+      best_ahead = ahead;
+    }
+  }
+  return best;
+}
+
+bool FastExplorationManager::pointAvoidsRememberedSplitObstacles(
+    const Vector3d& point) const {
+  if (!remembered_split_obstacle_enabled_) return true;
+  for (const auto& remembered : remembered_split_obstacles_) {
+    Vector3d delta = point - remembered.center;
+    delta.z() = 0.0;
+    if (std::fabs(delta.dot(remembered.travel)) <=
+            remembered.half_forward_extent + 1e-6 &&
+        std::fabs(delta.dot(remembered.lateral)) <=
+            remembered.half_lateral_extent + 1e-6)
+      return false;
+  }
+  return true;
+}
+
+bool FastExplorationManager::pathAvoidsRememberedSplitObstacles(
+    const vector<Vector3d>& path) const {
+  if (!remembered_split_obstacle_enabled_ || remembered_split_obstacles_.empty())
+    return true;
+  if (path.empty() || !pointAvoidsRememberedSplitObstacles(path.front())) return false;
+  for (size_t segment = 1; segment < path.size(); ++segment) {
+    const Vector3d delta = path[segment] - path[segment - 1];
+    const int samples =
+        std::max(1, static_cast<int>(std::ceil(delta.norm() / 0.05)));
+    for (int sample = 1; sample <= samples; ++sample) {
+      const Vector3d point = path[segment - 1] +
+          delta * static_cast<double>(sample) / static_cast<double>(samples);
+      if (!pointAvoidsRememberedSplitObstacles(point)) return false;
+    }
+  }
+  return true;
+}
+
+bool FastExplorationManager::currentTrajectoryAvoidsRememberedSplitObstacles(
+    double sample_dt) const {
+  if (!remembered_split_obstacle_enabled_ || remembered_split_obstacles_.empty())
+    return true;
+  if (!planner_manager_ || planner_manager_->local_data_.duration_ <= 1e-6)
+    return false;
+  const double duration = planner_manager_->local_data_.duration_;
+  for (double t = 0.0; t <= duration + 1e-6;
+       t += std::max(0.01, sample_dt)) {
+    const double sample_time = std::min(t, duration);
+    if (!pointAvoidsRememberedSplitObstacles(
+            planner_manager_->local_data_.position_traj_.evaluateDeBoorT(sample_time)))
+      return false;
+  }
+  return true;
+}
+
 bool FastExplorationManager::buildWideSideBypass(
     const Vector3d& pos, double cur_yaw, const Vector3d& forward,
     Vector3d& next_pos, double& next_yaw, bool& split_obstacle_detected) {
@@ -752,6 +907,7 @@ bool FastExplorationManager::buildWideSideBypass(
 
   struct SplitEvidence {
     bool valid{false};
+    bool from_memory{false};
     double forward_distance{0.0};
     double obstacle_min_offset{0.0};
     double obstacle_max_offset{0.0};
@@ -820,6 +976,77 @@ bool FastExplorationManager::buildWideSideBypass(
     break;
   }
 
+  // 只有落地障碍左右两边都曾达到最小净宽，才确认它位于通道中间并写入世界坐标记忆。
+  // 这避免把贴墙箱体或单边死路误记成必须永久左右分流的障碍。
+  const bool live_two_lane_split =
+      split.valid && split.left_width >= wide_side_bypass_min_lane_width_ &&
+      split.right_width >= wide_side_bypass_min_lane_width_;
+  if (live_two_lane_split) {
+    const double obstacle_center_offset =
+        0.5 * (split.obstacle_min_offset + split.obstacle_max_offset);
+    const double obstacle_half_width =
+        0.5 * (split.obstacle_max_offset - split.obstacle_min_offset) +
+        0.5 * sample_step;
+    rememberSplitObstacle(pos + split.forward_distance * travel +
+                              obstacle_center_offset * lateral,
+                          travel, obstacle_half_width);
+  }
+
+  // 点云后来丢失或只剩残片时，从世界坐标记忆重建同一横截面。左右净宽仍按当前
+  // 已知FREE计算，因此不会盲飞进未知区域，但障碍物原位置始终保持禁穿。
+  const RememberedSplitObstacle* remembered =
+      findRelevantRememberedSplitObstacle(pos, travel);
+  if (remembered && !live_two_lane_split) {
+    const Vector3d delta = remembered->center - pos;
+    const double center_offset = delta.dot(lateral);
+    const double projected_half_width =
+        std::fabs(remembered->lateral.dot(lateral)) *
+            remembered->half_lateral_extent +
+        std::fabs(remembered->travel.dot(lateral)) *
+            remembered->half_forward_extent;
+    const double obstacle_min_offset = center_offset - projected_half_width;
+    const double obstacle_max_offset = center_offset + projected_half_width;
+    const int obstacle_min_idx = std::max(
+        -side_samples,
+        static_cast<int>(std::floor(obstacle_min_offset / sample_step)));
+    const int obstacle_max_idx = std::min(
+        side_samples,
+        static_cast<int>(std::ceil(obstacle_max_offset / sample_step)));
+    const double sample_forward = std::max(0.0, delta.dot(travel));
+
+    if (obstacle_min_idx <= obstacle_max_idx) {
+      split = SplitEvidence();
+      split.valid = true;
+      split.from_memory = true;
+      split.forward_distance = sample_forward;
+      split.obstacle_min_offset = obstacle_min_idx * sample_step;
+      split.obstacle_max_offset = obstacle_max_idx * sample_step;
+      int left_count = 0;
+      for (int idx = obstacle_min_idx - 1; idx >= -side_samples; --idx) {
+        if (!knownFree(sample_forward, idx * sample_step)) break;
+        ++left_count;
+      }
+      int right_count = 0;
+      for (int idx = obstacle_max_idx + 1; idx <= side_samples; ++idx) {
+        if (!knownFree(sample_forward, idx * sample_step)) break;
+        ++right_count;
+      }
+      split.left_width = left_count * sample_step;
+      split.right_width = right_count * sample_step;
+      split.left_free_max = split.obstacle_min_offset - sample_step;
+      split.left_free_min = split.left_free_max -
+                            std::max(0, left_count - 1) * sample_step;
+      split.right_free_min = split.obstacle_max_offset + sample_step;
+      split.right_free_max = split.right_free_min +
+                             std::max(0, right_count - 1) * sample_step;
+      ROS_WARN_THROTTLE(
+          0.5,
+          "[split_memory] live points incomplete; retain central no-cross zone at %.2fm "
+          "and evaluate only left/right lanes (known width %.2f/%.2fm).",
+          sample_forward, split.left_width, split.right_width);
+    }
+  }
+
   split_obstacle_detected = split.valid;
   if (!split.valid && suspended_obstacle_seen) {
     ROS_INFO_THROTTLE(
@@ -879,6 +1106,7 @@ bool FastExplorationManager::buildWideSideBypass(
                           ? task_search_manager_->clampSearchHeight(pos.z())
                           : pos.z();
       if (!pointInsideWorkspaceLock(candidate) ||
+          !pointAvoidsRememberedSplitObstacles(candidate) ||
           !planner_manager_->isPositionSafe(candidate) ||
           sdf_map_->getOccupancy(candidate) == SDFMap::UNKNOWN ||
           (task_search_manager_ &&
@@ -889,7 +1117,9 @@ bool FastExplorationManager::buildWideSideBypass(
       if (planner_manager_->path_finder_->search(pos, candidate) != Astar::REACH_END)
         continue;
       const auto path = planner_manager_->path_finder_->getPath();
-      if (!pathInsideWorkspaceLock(path) || !planner_manager_->isPathSafe(path) ||
+      if (!pathInsideWorkspaceLock(path) ||
+          !pathAvoidsRememberedSplitObstacles(path) ||
+          !planner_manager_->isPathSafe(path) ||
           (task_search_manager_ &&
            !task_search_manager_->isRecoveryPathAllowed(path, false)))
         continue;
@@ -913,9 +1143,10 @@ bool FastExplorationManager::buildWideSideBypass(
     ROS_WARN_THROTTLE(
         0.5,
         "[wide_side_bypass] split obstacle at %.2fm; widths left=%.2fm right=%.2fm, "
-        "preferred %s side has no safe horizontal step yet.",
+        "preferred %s side has no safe horizontal step yet%s.",
         split.forward_distance, split.left_width, split.right_width,
-        choose_right ? "right" : "left");
+        choose_right ? "right" : "left",
+        split.from_memory ? " (persistent memory active)" : "");
     return false;
   }
 
@@ -926,10 +1157,11 @@ bool FastExplorationManager::buildWideSideBypass(
   recovery_side_dir_ = side_sign * lateral;
   if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
   ROS_WARN(
-      "[wide_side_bypass] split obstacle at %.2fm, widths left=%.2fm right=%.2fm; "
+      "[wide_side_bypass] split obstacle at %.2fm%s, widths left=%.2fm right=%.2fm; "
       "choose %s lane (%.2fm vs %.2fm), horizontal shift=%.2fm forward=%.2fm "
       "target=(%.2f,%.2f,%.2f), path_clearance=%.2fm, keep yaw=%.1fdeg.",
-      split.forward_distance, split.left_width, split.right_width,
+      split.forward_distance, split.from_memory ? " (remembered)" : "",
+      split.left_width, split.right_width,
       choose_right ? "right" : "left", chosen_width, other_width,
       std::fabs(best.lateral_offset), best.forward_step, next_pos.x(), next_pos.y(),
       next_pos.z(), best.path_clearance, next_yaw * 180.0 / M_PI);
@@ -1127,7 +1359,8 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
         continue;
       }
       // 2026-07-13: 恢复点不能只检查中心栅格，必须容纳 0.15m 膨胀外的完整 Iris 足迹。
-      if (!planner_manager_->isPositionSafe(candidate) ||
+      if (!pointAvoidsRememberedSplitObstacles(candidate) ||
+          !planner_manager_->isPositionSafe(candidate) ||
           sdf_map_->getOccupancy(candidate) == SDFMap::UNKNOWN) {
         ++rejected_position;
         continue;
@@ -1159,6 +1392,7 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
         }
       }
       if (!backtrack_clearance_safe || !pathInsideWorkspaceLock(candidate_path) ||
+          !pathAvoidsRememberedSplitObstacles(candidate_path) ||
           !planner_manager_->isPathSafe(candidate_path) ||
           (task_search_manager_ &&
            !task_search_manager_->isRecoveryPathAllowed(candidate_path, short_backtrack))) {
@@ -1410,7 +1644,9 @@ bool FastExplorationManager::planInflationHistoryEscape(
     if (candidate.path.size() == 2)
       candidate.path.insert(candidate.path.begin() + 1,
                             0.5 * (candidate.path.front() + candidate.path.back()));
-    if (!planner_manager_->isPathSafe(candidate.path, true)) continue;
+    if (!pathAvoidsRememberedSplitObstacles(candidate.path) ||
+        !planner_manager_->isPathSafe(candidate.path, true))
+      continue;
     Vector3d escape_vel = Vector3d::Zero();
     const Vector3d escape_direction =
         (candidate.path[1] - candidate.path.front()).normalized();
@@ -1418,6 +1654,7 @@ bool FastExplorationManager::planInflationHistoryEscape(
     escape_vel = std::min(0.20, outward_speed) * escape_direction;
     if (!planner_manager_->planExploreTraj(candidate.path, escape_vel, acc, 0.0) ||
         !planner_manager_->isTrajectorySafe(0.03, true) ||
+        !currentTrajectoryAvoidsRememberedSplitObstacles(0.03) ||
         !planner_manager_->trajectoryClearsInflation(max_distance, 0.02, true))
       continue;
 
@@ -1532,6 +1769,14 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
            wide_side_bypass_low_support_height_, 0.20);
   nh.param("mission/wide_side_bypass/min_vertical_support_layers",
            wide_side_bypass_min_vertical_support_layers_, 2);
+  nh.param("mission/wide_side_bypass/remembered_obstacle_enabled",
+           remembered_split_obstacle_enabled_, true);
+  nh.param("mission/wide_side_bypass/remembered_forward_half_extent",
+           remembered_split_forward_half_extent_, 0.15);
+  nh.param("mission/wide_side_bypass/remembered_lateral_margin",
+           remembered_split_lateral_margin_, 0.18);
+  nh.param("mission/wide_side_bypass/remembered_match_distance",
+           remembered_split_match_distance_, 0.60);
   inflation_history_escape_max_distance_ =
       std::max(0.10, std::min(0.45, inflation_history_escape_max_distance_));
   inflation_history_escape_sample_step_ =
@@ -1564,6 +1809,12 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
       std::max(0.10, wide_side_bypass_low_support_height_);
   wide_side_bypass_min_vertical_support_layers_ =
       std::max(1, wide_side_bypass_min_vertical_support_layers_);
+  remembered_split_forward_half_extent_ =
+      std::max(0.10, remembered_split_forward_half_extent_);
+  remembered_split_lateral_margin_ =
+      std::max(0.0, remembered_split_lateral_margin_);
+  remembered_split_match_distance_ =
+      std::max(0.20, remembered_split_match_distance_);
   nh.param("mission/vertical_detour/enabled", vertical_detour_enabled_, true);
   nh.param("mission/vertical_detour/low_height", vertical_detour_low_height_, 0.10);
   nh.param("mission/vertical_detour/forward_check_distance",
@@ -2103,6 +2354,31 @@ int FastExplorationManager::planExploreMotion(
   } else if (!use_forced_entry_target)
     ROS_ERROR("Empty destination.");
 
+  // 2026-08-13: 中间左右分流障碍必须在普通A*之前主动观察并锁存，不能只等远目标
+  // 搜索失败后才进入fallback。这样即使当前点云还足以让A*自然绕开，障碍的世界位置
+  // 也已经进入持久禁穿记忆，后续低位点云丢失不会把原位置重新开放。
+  const bool corridor_yaw_lock_scope =
+      !use_forced_entry_target && !use_stage3_target && task_search_manager_ &&
+      task_search_manager_->enabled() && !task_search_manager_->stage3Active();
+  const bool allow_proactive_split_bypass =
+      corridor_yaw_lock_scope && !task_search_manager_->exitTransitActive() &&
+      !task_search_manager_->finalExitFrontierGuardActive() &&
+      !task_search_manager_->exitVerificationActive();
+  if (allow_proactive_split_bypass) {
+    const Vector3d recovery_forward =
+        task_search_manager_->recoveryForwardDirection(yaw[0]);
+    Vector3d side_target;
+    double side_yaw = yaw[0];
+    bool split_obstacle_detected = false;
+    if (buildWideSideBypass(pos, yaw[0], recovery_forward, side_target,
+                            side_yaw, split_obstacle_detected)) {
+      next_pos = side_target;
+      next_yaw = side_yaw;
+      ROS_WARN("[split_memory] central split takes priority over remote frontier; "
+               "publish one left/right side step first.");
+    }
+  }
+
   // 2026-07-16: 比赛使用360度Mid360时航向直接对准运动方向；相机模式保留原始viewpoint航向接口。
   const Eigen::Vector2d motion_delta = next_pos.head<2>() - pos.head<2>();
   if (!use_camera_viewpoint_yaw_ && motion_delta.norm() > 0.15)
@@ -2112,9 +2388,6 @@ int FastExplorationManager::planExploreMotion(
   // 默认直段小幅快扫、转弯关闭附加扫描、新障碍物才做一次6秒全向扫描。
   bool camera_head_sweep_active = false;
   bool camera_continuous_rotation_active = false;
-  const bool corridor_yaw_lock_scope =
-      !use_forced_entry_target && !use_stage3_target && task_search_manager_ &&
-      task_search_manager_->enabled() && !task_search_manager_->stage3Active();
   const bool mapped_turn_yaw_eligible = corridor_yaw_lock_scope;
   double camera_rotation_rate =
       camera_head_scan_direction_ * 2.0 * M_PI / camera_head_sweep_period_;
@@ -2274,8 +2547,19 @@ int FastExplorationManager::planExploreMotion(
     if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);
     return FAIL;
   }
+  auto currentAstarPathAvoidsRememberedObstacle = [&](const Vector3d& goal) {
+    vector<Vector3d> path = planner_manager_->path_finder_->getPath();
+    if (path.empty() || (path.front() - pos).norm() >= 1e-3)
+      path.insert(path.begin(), pos);
+    if ((path.back() - goal).norm() >= 1e-3) path.push_back(goal);
+    return pathAvoidsRememberedSplitObstacles(path);
+  };
   planner_manager_->path_finder_->reset();
-  if (planner_manager_->path_finder_->search(pos, next_pos) != Astar::REACH_END) {
+  const bool astar_reached =
+      planner_manager_->path_finder_->search(pos, next_pos) == Astar::REACH_END;
+  const bool astar_crosses_remembered_obstacle =
+      astar_reached && !currentAstarPathAvoidsRememberedObstacle(next_pos);
+  if (!astar_reached || astar_crosses_remembered_obstacle) {
     // 2026-07-27: 远frontier跨越尚未建成的已知连通域时，先在当前前向扇区找安全短步；
     // 不再立即切换另一个远目标并触发长时间safety hold，让雷达随局部推进逐段补齐拐弯地图。
     Vector3d local_recovery_pos;
@@ -2284,29 +2568,44 @@ int FastExplorationManager::planExploreMotion(
         !use_forced_entry_target && !use_stage3_target && !exit_transit_active;
     if (allow_local_recovery &&
         buildMissionForwardFallback(pos, yaw[0], local_recovery_pos, local_recovery_yaw)) {
-      ROS_WARN("[task_route] remote goal (%.2f,%.2f,%.2f) disconnected; use connected "
-               "local step (%.2f,%.2f,%.2f).",
-               next_pos.x(), next_pos.y(), next_pos.z(), local_recovery_pos.x(),
-               local_recovery_pos.y(), local_recovery_pos.z());
+      ROS_WARN("[task_route] remote goal (%.2f,%.2f,%.2f) %s; use connected "
+               "left/right local step (%.2f,%.2f,%.2f).",
+               next_pos.x(), next_pos.y(), next_pos.z(),
+               astar_crosses_remembered_obstacle
+                   ? "crosses remembered central obstacle"
+                   : "is disconnected",
+               local_recovery_pos.x(), local_recovery_pos.y(),
+               local_recovery_pos.z());
       next_pos = local_recovery_pos;
       next_yaw = local_recovery_yaw;
       // 2026-07-27: 碰撞反馈必须冷却实际发布的局部目标，不能继续指向已被替换的远frontier。
       last_requested_goal_ = next_pos;
       planner_manager_->path_finder_->reset();
-      if (planner_manager_->path_finder_->search(pos, next_pos) != Astar::REACH_END) {
+      if (planner_manager_->path_finder_->search(pos, next_pos) != Astar::REACH_END ||
+          !currentAstarPathAvoidsRememberedObstacle(next_pos)) {
         ROS_ERROR_THROTTLE(
-            1.0, "Connected local recovery became unavailable before trajectory generation");
+            1.0, "Connected local recovery became unavailable or crossed remembered obstacle");
         if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);
         return FAIL;
       }
     } else {
       // 2026-07-16: Astar内部会区分TIMEOUT和DISCONNECTED；这里只保留1Hz汇总，禁止失败时百Hz刷屏。
-      ROS_ERROR_THROTTLE(1.0, "No path to next viewpoint");
+      ROS_ERROR_THROTTLE(
+          1.0, astar_crosses_remembered_obstacle
+                   ? "A* path crosses remembered central obstacle and no side step is ready"
+                   : "No path to next viewpoint");
       if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);
       return FAIL;
     }
   }
   ed_->path_next_goal_ = planner_manager_->path_finder_->getPath();
+  if (!pathAvoidsRememberedSplitObstacles(ed_->path_next_goal_)) {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[split_memory] reject A* path through remembered central obstacle; only left/right lanes are allowed.");
+    if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);
+    return FAIL;
+  }
   // 2026-07-14: 起点和目标落在同一 A* 栅格时 getPath() 可能只返回一个点；去重并显式保留真实目标。
   vector<Vector3d> normalized_path;
   normalized_path.reserve(ed_->path_next_goal_.size() + 1);
@@ -2378,7 +2677,8 @@ int FastExplorationManager::planExploreMotion(
     return FAIL;
   }
   // 2026-07-13: 几何路径在缩短前按完整机体足迹复核，避免优化器把中心安全路径贴到障碍物上。
-  if (!planner_manager_->isPathSafe(ed_->path_next_goal_)) {
+  if (!pathAvoidsRememberedSplitObstacles(ed_->path_next_goal_) ||
+      !planner_manager_->isPathSafe(ed_->path_next_goal_)) {
     // 2026-07-14: 路径失败会反馈给任务层更换出口接近点，不再以 100 Hz 输出同一错误。
     ROS_ERROR_THROTTLE(1.0,
                        "[footprint_safety] reject A* path whose Iris footprint intersects obstacles.");
@@ -2387,7 +2687,8 @@ int FastExplorationManager::planExploreMotion(
   }
   shortenPath(ed_->path_next_goal_);
   // 2026-07-14: shortenPath 会用中心射线删除 A* 转折点，删除后必须重新做完整机体足迹检查。
-  if (!planner_manager_->isPathSafe(ed_->path_next_goal_)) {
+  if (!pathAvoidsRememberedSplitObstacles(ed_->path_next_goal_) ||
+      !planner_manager_->isPathSafe(ed_->path_next_goal_)) {
     ROS_ERROR_THROTTLE(
         1.0, "[footprint_safety] reject shortened path whose Iris footprint intersects obstacles.");
     if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);
@@ -2459,7 +2760,8 @@ int FastExplorationManager::planExploreMotion(
     ROS_ERROR("Lower bound not satified!");
 
   // 2026-07-14: 优化后的 B-spline 可能切入柱体/墙面；发布前拒绝并切换任务目标，而不是交给控制器反复急停。
-  if (!planner_manager_->isTrajectorySafe()) {
+  if (!planner_manager_->isTrajectorySafe() ||
+      !currentTrajectoryAvoidsRememberedSplitObstacles()) {
     // 2026-07-16: 远目标平滑轨迹切弯失败时，沿已经通过足迹检查的A*路径先走0.8m安全前缀。
     // 比赛中宁可分段推进并重规划，也不能在宽通道对同一远目标永久FAIL/悬停。
     constexpr double conservative_advance = 0.80;
@@ -2482,9 +2784,11 @@ int FastExplorationManager::planExploreMotion(
       safe_prefix.insert(safe_prefix.begin() + 1, 0.5 * (safe_prefix[0] + safe_prefix[1]));
 
     const bool prefix_generated = safe_prefix.size() >= 3 &&
+                                  pathAvoidsRememberedSplitObstacles(safe_prefix) &&
                                   planner_manager_->isPathSafe(safe_prefix) &&
                                   planner_manager_->planExploreTraj(safe_prefix, vel, acc, 0.0);
-    if (!prefix_generated || !planner_manager_->isTrajectorySafe()) {
+    if (!prefix_generated || !planner_manager_->isTrajectorySafe() ||
+        !currentTrajectoryAvoidsRememberedSplitObstacles()) {
       ROS_ERROR_THROTTLE(1.0,
                          "[stuck_recovery] full trajectory and 0.8m safe-prefix trajectory both failed.");
       if (task_search_manager_) task_search_manager_->reportGoalFailure(next_pos);

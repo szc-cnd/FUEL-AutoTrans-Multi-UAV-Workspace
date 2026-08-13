@@ -115,6 +115,20 @@ private:
   double wide_side_bypass_forward_step_{0.20};
   double wide_side_bypass_low_support_height_{0.20};
   int wide_side_bypass_min_vertical_support_layers_{2};
+  // 中间障碍一旦由落地占据和左右可行通道共同确认，就在世界坐标中保留全高度禁穿区。
+  // 后续点云短暂丢失时仍只能从左右绕行，不能把障碍物原位置误判成可下降/穿越空间。
+  struct RememberedSplitObstacle {
+    Vector3d center{0.0, 0.0, 0.0};
+    Vector3d travel{1.0, 0.0, 0.0};
+    Vector3d lateral{0.0, 1.0, 0.0};
+    double half_forward_extent{0.15};
+    double half_lateral_extent{0.25};
+  };
+  bool remembered_split_obstacle_enabled_{true};
+  double remembered_split_forward_half_extent_{0.15};
+  double remembered_split_lateral_margin_{0.18};
+  double remembered_split_match_distance_{0.60};
+  vector<RememberedSplitObstacle> remembered_split_obstacles_;
   // 可选的一次性短回撤；比赛窄通道默认关闭。
   bool short_backtrack_enabled_{false};
   bool short_backtrack_latched_{false};
@@ -205,6 +219,13 @@ private:
   bool buildWideSideBypass(const Vector3d& pos, double cur_yaw,
                            const Vector3d& forward, Vector3d& next_pos,
                            double& next_yaw, bool& split_obstacle_detected);
+  void rememberSplitObstacle(const Vector3d& center, const Vector3d& travel,
+                             double half_lateral_extent);
+  const RememberedSplitObstacle* findRelevantRememberedSplitObstacle(
+      const Vector3d& pos, const Vector3d& travel) const;
+  bool pointAvoidsRememberedSplitObstacles(const Vector3d& point) const;
+  bool pathAvoidsRememberedSplitObstacles(const vector<Vector3d>& path) const;
+  bool currentTrajectoryAvoidsRememberedSplitObstacles(double sample_dt = 0.03) const;
   bool occupiedNearHeight(const Vector3d& point, double height) const;
   bool hasLowVerticalSupport(const Vector3d& point,
                              double current_height) const;
