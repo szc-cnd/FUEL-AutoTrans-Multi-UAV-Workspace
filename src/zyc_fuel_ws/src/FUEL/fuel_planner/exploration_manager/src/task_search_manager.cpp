@@ -1469,11 +1469,14 @@ bool TaskSearchManager::isTaskPathAllowed(
 }
 
 bool TaskSearchManager::isRecoveryPathAllowed(
-    const std::vector<Eigen::Vector3d>& path, bool allow_initial_reverse) const {
+    const std::vector<Eigen::Vector3d>& path, bool allow_initial_reverse,
+    bool allow_staged_vertical_motion) const {
   // 2026-08-13: 普通搜索/恢复路径不得把障碍物下方因遮挡而暂时清空的体素当成
   // 可下穿通道。目标高度限制本身挡不住A*中间节点下探，因此逐点限制相对规划
   // 起点的最大下降量；确需改变高度只能走显式、可复核的专用状态机。
-  if (!path.empty()) {
+  // 专用上下绕行状态机固定XY分阶段下降、低位复核、短步前进和原地回升；
+  // 只有该状态机可以显式豁免普通路径下降限制。
+  if (!allow_staged_vertical_motion && !path.empty()) {
     const double minimum_path_height =
         std::max(min_search_height_, path.front().z() - std::max(0.0, max_goal_descent_));
     for (const auto& point : path) {

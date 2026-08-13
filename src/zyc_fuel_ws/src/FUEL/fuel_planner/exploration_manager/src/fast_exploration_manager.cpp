@@ -2315,7 +2315,8 @@ int FastExplorationManager::planExploreMotion(
   // 否则CROSS_EXIT会在门口被“completed route”永久拒绝。
   if (task_search_manager_ && !exit_transit_active &&
       !task_search_manager_->isRecoveryPathAllowed(ed_->path_next_goal_,
-                                                   pending_short_backtrack_)) {
+                                                   pending_short_backtrack_,
+                                                   use_vertical_detour_target)) {
     ROS_ERROR_THROTTLE(1.0,
                        "[entrance_plane_reject] A* path crosses the locked entrance boundary; "
                        "cool down goal and select another frontier.");
@@ -2384,7 +2385,8 @@ int FastExplorationManager::planExploreMotion(
   // 2026-07-23: shortenPath后只对普通探索路径再次做禁回头判定，任务出口路径由门状态机约束方向。
   if (task_search_manager_ && !exit_transit_active &&
       !task_search_manager_->isRecoveryPathAllowed(ed_->path_next_goal_,
-                                                   pending_short_backtrack_)) {
+                                                   pending_short_backtrack_,
+                                                   use_vertical_detour_target)) {
     ROS_ERROR_THROTTLE(1.0,
                        "[entrance_plane_reject] shortened path crosses the locked entrance boundary; "
                        "cool down goal and select another frontier.");
