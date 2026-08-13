@@ -4,10 +4,10 @@
 
 传感器和节点不会自动解锁，也不会自动切换 `OFFBOARD`。确认数据正常后，再按现场飞行流程操作。
 
-## 前六步一键启动（Terminator 六分屏）
+## 前七步一键启动（Terminator 七分屏）
 
-如果希望把第 1～6 步集中到一个 Terminator 窗口中，可只执行下面的入口；不需要
-再手动重复执行第 1～6 节中的命令：
+如果希望把第 1～7 步集中到一个 Terminator 窗口中，可只执行下面的入口；不需要
+再手动重复执行第 1～7 节中的命令：
 
 ```bash
 cd ~/match_ws
@@ -18,7 +18,7 @@ bash shfiles/start_uav0_first_six_terminator.sh
 
 ```text
 上排：1 MAVROS       | 2 MID360       | 3 FAST-LIO
-下排：4 视觉位姿回传 | 5 检测/TF/上报 | 6 FUEL 规划器/RViz
+下排：4 视觉位姿回传 | 5 检测/TF/上报 | 6 FUEL 规划器/RViz | 7 简单控制器
 ```
 
 六个分屏会同时打开，但每个分屏会等待自己的前置话题：MID360 等待 ROS master，
@@ -26,10 +26,12 @@ FAST-LIO 等待 `/UAV0/livox/lidar` 和 `/UAV0/livox/imu`，其余分屏等待
 `/UAV0/fast_lio/Odometry`；因此不需要人工按照时间估计启动间隔。每个分屏会把
 启动失败或等待超时直接显示在自己的终端中，并在命令退出后保持窗口打开。
 
-默认使用方案 A（启动 D435、关闭热成像）。已接入热成像相机时使用：
+默认启动 D435 和热成像相机，直接执行上述命令即可。当前热成像到 D435 尚未标定，
+因此只运行热成像二维检测，默认关闭深度融合，避免产生错误的三维坐标。没有接入
+热成像相机时使用：
 
 ```bash
-bash shfiles/start_uav0_first_six_terminator.sh --thermal
+bash shfiles/start_uav0_first_six_terminator.sh --no-thermal
 ```
 
 如果 FAST-LIO 实际发布的是无前缀话题 `/Odometry`，使用：
@@ -45,8 +47,9 @@ bash shfiles/start_uav0_first_six_terminator.sh stop
 ```
 
 该入口包含第 5 步的 `enable_target_reporting:=true`，因此机载端上报客户端会一同
-启动；Windows 接收服务器仍需在远程端单独启动。第 7 步控制器不在六分屏内，也不会
-自动解锁、切换 `OFFBOARD` 或起飞。各 ROS 节点仍写入默认的 `~/.ros/log/`，六分屏
+启动；Windows 接收服务器仍需在远程端单独启动。第 7 步简单控制器会等待规划器
+`/UAV0/planning/pos_cmd` 出现后启动，但不会自动解锁、切换 `OFFBOARD` 或起飞。
+各 ROS 节点仍写入默认的 `~/.ros/log/`，七分屏
 自身的启动错误记录在 `/tmp/uav0_first_six_terminator_<用户ID>.log`。
 
 ## 1. 启动 UAV0 MAVROS
@@ -120,8 +123,10 @@ python3 laser_mid360.py iris 0 fastlio off
 ~/match_ws/src/uav0_competition_bringup
 ```
 
-根据热成像相机是否接入，选择以下一种统一启动方式。两种方式都会启动 D435、
-D435 原始点云、颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
+默认使用方案 B，同时启动 D435 和热成像。两种方式都会启动 D435、D435 原始点云、
+颜色标签、二维码、相机外参 TF 和目标上报；方案 B 另外启动热成像检测。
+D435 彩色图和深度图固定为 `1280×720`，深度对齐到彩色图；热成像到 D435 的
+标定和比赛运行必须保持这组参数不变。
 相机外参 TF 使用 `~/handeye_calibration/body_camera_03.yaml`，不需要
 再单独执行 `camera_body_tf.launch` 或 `target_reporting.launch`。
 统一入口默认将该外参发布为 `UAV0/body -> camera_link`，与当前 FAST-LIO 的
@@ -134,7 +139,7 @@ D435 原始点云、颜色标签、二维码、相机外参 TF 和目标上报�
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
-# 方案 A：启动 D435，关闭热成像（当前电脑使用此方案）
+# 方案 A：仅启动 D435，无热成像硬件时使用
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=false \
@@ -145,10 +150,11 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 ```
 
 ```bash
-# 方案 B：D435 和热成像都启动（已接入热成像相机时使用）
+# 方案 B：D435 和热成像都启动（默认）
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
   enable_thermal:=true \
+  enable_thermal_d435_fusion:=false \
   realsense_enable_pointcloud:=true \
   enable_camera_body_tf:=true \
   enable_target_reporting:=true \
@@ -165,8 +171,8 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 ~/.ros/log/<本次运行ID>/
 ```
 
-最近一次运行也可以通过 `~/.ros/log/latest/` 查看。未接热成像相机时使用
-方案 A，避免热成像设备打开失败；接入并确认设备正常后再使用方案 B。
+最近一次运行也可以通过 `~/.ros/log/latest/` 查看。默认使用方案 B；未接热成像
+相机时使用方案 A，避免热成像设备打开失败。
 
 过滤点云默认保留目标中心周围 0.25 m 内的点；只需调试显示范围时，可在规划器
 启动文件的 `target_rviz_marker` 节点中调整 `object_cloud_radius`。
@@ -281,7 +287,7 @@ mission_id: "auto"  # 自动使用当天的 onboard_test_YYYYMMDD
 
 ### UAV0 精确降落（已纳入第 5 屏）
 
-六分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0 精确
+七分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0 精确
 降落节点。手动执行统一入口时使用：
 
 ```bash
@@ -375,7 +381,7 @@ bash shfiles/stop_all_ros.sh
 ```
 
 该脚本先执行 `rosnode kill -a`，再清理残留启动进程，并自动对仍未退出的进程发送
-`SIGKILL`；默认同时关闭本仓库六分屏入口打开的 Terminator 窗口，但不会执行降落或上锁。
+`SIGKILL`；默认同时关闭本仓库七分屏入口打开的 Terminator 窗口，但不会执行降落或上锁。
 
 执行前只查看候选进程、不发送信号：
 

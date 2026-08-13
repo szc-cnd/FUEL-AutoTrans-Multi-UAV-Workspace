@@ -6,8 +6,16 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MATCH_WS=$(dirname -- "$SCRIPT_DIR")
 . "$MATCH_WS/devel/setup.sh"
 
-sudo chmod 777 /dev/ttyACM0
-sleep 2
+FCU_DEVICE=/dev/ttyACM0
+if [ ! -e "$FCU_DEVICE" ]; then
+    echo "[UAV0 MAVROS][错误] 未发现飞控串口：$FCU_DEVICE"
+    exit 1
+fi
+if [ ! -r "$FCU_DEVICE" ] || [ ! -w "$FCU_DEVICE" ]; then
+    echo "[UAV0 MAVROS][错误] 当前用户无权读写 $FCU_DEVICE；请确认用户属于 dialout 组。"
+    exit 1
+fi
+
 roslaunch cxr_ego_ctrl mavros_uav.launch vehicle_ns:=UAV0 &
 
 # 等待 UAV0 MAVROS 的 command service 和 FCU 连接可用，避免串口尚未连接时频率请求失败。

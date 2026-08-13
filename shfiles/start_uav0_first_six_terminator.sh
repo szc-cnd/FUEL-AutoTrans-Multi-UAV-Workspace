@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# UAV0 比赛流程前六步的 Terminator 六分屏入口。
-# 该脚本只负责启动机载端六个步骤，不启动控制器、不自动解锁，也不启动 Windows 接收端。
+# UAV0 比赛流程前七步的 Terminator 七分屏入口。
+# 该脚本只负责启动机载端七个步骤，不自动解锁，也不启动 Windows 接收端。
 
 set -o pipefail
 
@@ -21,7 +21,7 @@ TERMINATOR_PID_FILE="${UAV0_FIRST_SIX_TERMINATOR_PID_FILE:-/tmp/uav0_first_six_t
 START_LOCK_FILE="${UAV0_FIRST_SIX_START_LOCK_FILE:-/tmp/uav0_first_six_start.lock}"
 RUNTIME_CONFIG="${UAV0_FIRST_SIX_RUNTIME_CONFIG:-/tmp/uav0_first_six_terminator_${RUN_ID}.conf}"
 
-THERMAL="${UAV0_FIRST_SIX_THERMAL:-false}"
+THERMAL="${UAV0_FIRST_SIX_THERMAL:-true}"
 ODOM_TOPIC="${UAV0_FIRST_SIX_ODOM_TOPIC:-/UAV0/fast_lio/Odometry}"
 PANE=""
 SHOW_HELP=false
@@ -37,15 +37,15 @@ usage() {
   bash shfiles/start_uav0_first_six_terminator.sh [选项]
 
 选项：
-  --thermal                 第 5 屏同时启用热成像；默认关闭
-  --no-thermal              第 5 屏关闭热成像（默认）
+  --thermal                 第 5 屏同时启用热成像（默认）
+  --no-thermal              第 5 屏关闭热成像
   --odom-topic TOPIC        FAST-LIO 里程计话题，默认 /UAV0/fast_lio/Odometry
   stop                      只关闭本脚本打开的 Terminator 窗口，不停止 ROS 节点
   -h, --help                显示帮助
 
 示例：
   bash shfiles/start_uav0_first_six_terminator.sh
-  bash shfiles/start_uav0_first_six_terminator.sh --thermal
+  bash shfiles/start_uav0_first_six_terminator.sh --no-thermal
   bash shfiles/start_uav0_first_six_terminator.sh --odom-topic /Odometry
 EOF
 }
@@ -257,6 +257,11 @@ run_detection_pane() {
   rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
     enable_realsense:=true \
     enable_thermal:="${THERMAL}" \
+    enable_thermal_d435_fusion:=false \
+    realsense_color_width:=1280 \
+    realsense_color_height:=720 \
+    realsense_depth_width:=1280 \
+    realsense_depth_height:=720 \
     realsense_enable_pointcloud:=true \
     enable_camera_body_tf:=true \
     enable_camera_body_odom_tf:=false \
@@ -287,6 +292,18 @@ run_planner_pane() {
   keep_pane_open
 }
 
+run_controller_pane() {
+  pane_init 7
+  wait_for_topic /UAV0/planning/pos_cmd 240 || keep_pane_open
+  printf '[启动] UAV0 简单控制器\n'
+  printf '[安全] 控制器不会自动解锁、切换 OFFBOARD 或起飞。\n'
+  roslaunch exploration_control simple_controller.launch \
+    vehicle_ns:=UAV0 \
+    node_name:=UAV0_controller
+  printf '[退出] 简单控制器分屏，返回码=%s\n' "$?"
+  keep_pane_open
+}
+
 run_pane() {
   case "${PANE}" in
     mavros) run_mavros_pane ;;
@@ -295,6 +312,7 @@ run_pane() {
     pose) run_pose_pane ;;
     detection) run_detection_pane ;;
     planner) run_planner_pane ;;
+    controller) run_controller_pane ;;
     *)
       log "未知分屏：${PANE}"
       keep_pane_open
@@ -306,7 +324,7 @@ while (($# > 0)); do
   case "$1" in
     --pane)
       if [[ $# -lt 2 ]]; then
-        log '--pane 需要指定 mavros/mid360/fastlio/pose/detection/planner'
+        log '--pane 需要指定 mavros/mid360/fastlio/pose/detection/planner/controller'
         exit 2
       fi
       PANE="$2"
@@ -373,7 +391,7 @@ if [[ -n "${PANE}" ]]; then
 fi
 
 if ! command -v terminator >/dev/null 2>&1; then
-  log '未安装 terminator；请先安装后再使用六分屏入口'
+  log '未安装 terminator；请先安装后再使用七分屏入口'
   exit 1
 fi
 if [[ ! -f "${LAYOUT_CONFIG}" ]]; then
@@ -385,23 +403,23 @@ if [[ ! -f "${MATCH_WS}/devel/setup.bash" ]]; then
   exit 1
 fi
 if terminator_window_running; then
-  log 'UAV0 前六步 Terminator 窗口已经运行，跳过重复启动'
+  log 'UAV0 前七步 Terminator 窗口已经运行，跳过重复启动'
   exit 0
 fi
 if ! prepare_graphical_terminal; then
   exit 1
 fi
 
-# 避免两个终端同时执行入口时打开两个六分屏窗口。
+# 避免两个终端同时执行入口时打开两个七分屏窗口。
 if command -v flock >/dev/null 2>&1; then
   exec 9>"${START_LOCK_FILE}"
   if ! flock -n 9; then
-    log '另一个六分屏启动正在进行，跳过本次重复启动'
+    log '另一个七分屏启动正在进行，跳过本次重复启动'
     exit 0
   fi
 fi
 if terminator_window_running; then
-  log '检测到六分屏窗口已经在启动，跳过重复启动'
+  log '检测到七分屏窗口已经在启动，跳过重复启动'
   exit 0
 fi
 
@@ -412,9 +430,9 @@ export UAV0_FIRST_SIX_ODOM_TOPIC="${ODOM_TOPIC}"
 sed "s|__UAV0_FIRST_SIX_SCRIPT__|${SCRIPT_PATH}|g" \
   "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
 
-log '打开 UAV0 前六步 Terminator 六分屏'
+log '打开 UAV0 前七步 Terminator 七分屏'
 log '上排：1 MAVROS | 2 MID360 | 3 FAST-LIO'
-log '下排：4 视觉位姿 | 5 检测/上报 | 6 FUEL 规划器/RViz'
+log '下排：4 视觉位姿 | 5 检测/上报 | 6 FUEL 规划器/RViz | 7 简单控制器'
 log "检测参数：thermal=${THERMAL}, odom=${ODOM_TOPIC}"
 log "Terminator 启动日志：${TERMINATOR_LOG}"
 
