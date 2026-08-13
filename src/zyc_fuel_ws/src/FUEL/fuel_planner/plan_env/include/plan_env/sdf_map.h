@@ -67,6 +67,10 @@ private:
   void clearAndInflateLocalMap();
   void inflatePoint(const Eigen::Vector3i& pt, int step, vector<Eigen::Vector3i>& pts);
   void setCacheOccupancy(const int& adr, const int& occ);
+  void addressToIndex(int address, Eigen::Vector3i& index);
+  bool hasStructuredStaticSupport(const Eigen::Vector3i& index);
+  bool observerBaselineReached(int observer_address,
+                               const Eigen::Vector3d& camera_pos);
   Eigen::Vector3d closetPointInMap(const Eigen::Vector3d& pt, const Eigen::Vector3d& camera_pt);
   template <typename F_get_val, typename F_set_val>
   void fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end, int dim);
@@ -101,6 +105,16 @@ struct MapParam {
   double max_ray_length_;
   bool static_retention_enabled_;
   int static_retention_required_hits_;
+  bool structured_retention_enabled_;
+  int structured_temporary_hits_;
+  int structured_static_hits_;
+  int structured_single_view_hits_;
+  int structured_release_misses_;
+  int structured_min_neighbors_;
+  int structured_min_vertical_layers_;
+  int structured_support_min_hits_;
+  double structured_observer_baseline_;
+  double structured_near_field_radius_;
   bool inflation_noise_filter_enabled_;
   int inflation_min_hit_evidence_;
   int inflation_min_neighbors_;
@@ -121,7 +135,11 @@ struct MapData {
   // data for updating
   vector<short> count_hit_, count_miss_, count_hit_and_miss_;
   vector<unsigned short> static_hit_evidence_;
-  vector<char> static_occupancy_locked_;
+  vector<unsigned short> static_free_evidence_;
+  vector<char> static_retention_state_;
+  vector<char> static_observation_flags_;
+  vector<int> static_first_hit_observer_;
+  vector<int> static_first_free_observer_;
   vector<char> flag_rayend_, flag_visited_;
   char raycast_num_;
   queue<int> cache_voxel_;

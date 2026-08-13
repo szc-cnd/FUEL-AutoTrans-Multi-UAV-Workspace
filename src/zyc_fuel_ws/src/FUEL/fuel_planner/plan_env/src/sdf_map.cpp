@@ -48,6 +48,44 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   nh.param("sdf_map/static_retention_enabled", mp_->static_retention_enabled_, false);
   nh.param("sdf_map/static_retention_required_hits", mp_->static_retention_required_hits_, 6);
   mp_->static_retention_required_hits_ = std::max(2, mp_->static_retention_required_hits_);
+  nh.param("sdf_map/structured_retention_enabled", mp_->structured_retention_enabled_, false);
+  nh.param("sdf_map/structured_retention_temporary_hits",
+           mp_->structured_temporary_hits_, 3);
+  nh.param("sdf_map/structured_retention_static_hits",
+           mp_->structured_static_hits_, 6);
+  nh.param("sdf_map/structured_retention_single_view_hits",
+           mp_->structured_single_view_hits_, 10);
+  nh.param("sdf_map/structured_retention_release_misses",
+           mp_->structured_release_misses_, 12);
+  nh.param("sdf_map/structured_retention_min_neighbors",
+           mp_->structured_min_neighbors_, 2);
+  nh.param("sdf_map/structured_retention_min_vertical_layers",
+           mp_->structured_min_vertical_layers_, 2);
+  nh.param("sdf_map/structured_retention_support_min_hits",
+           mp_->structured_support_min_hits_, 2);
+  nh.param("sdf_map/structured_retention_observer_baseline",
+           mp_->structured_observer_baseline_, 0.25);
+  nh.param("sdf_map/structured_retention_near_field_radius",
+           mp_->structured_near_field_radius_, 0.35);
+  mp_->structured_temporary_hits_ = std::max(2, mp_->structured_temporary_hits_);
+  mp_->structured_static_hits_ =
+      std::max(mp_->structured_temporary_hits_, mp_->structured_static_hits_);
+  mp_->structured_single_view_hits_ =
+      std::max(mp_->structured_static_hits_, mp_->structured_single_view_hits_);
+  mp_->structured_release_misses_ = std::max(2, mp_->structured_release_misses_);
+  mp_->structured_min_neighbors_ = std::max(1, mp_->structured_min_neighbors_);
+  mp_->structured_min_vertical_layers_ =
+      std::max(2, mp_->structured_min_vertical_layers_);
+  mp_->structured_support_min_hits_ =
+      std::max(1, mp_->structured_support_min_hits_);
+  mp_->structured_observer_baseline_ =
+      std::max(mp_->resolution_, mp_->structured_observer_baseline_);
+  mp_->structured_near_field_radius_ =
+      std::max(mp_->resolution_, mp_->structured_near_field_radius_);
+  if (mp_->static_retention_enabled_ && mp_->structured_retention_enabled_) {
+    ROS_WARN("[sdf_map] legacy permanent retention overrides structured retention; "
+             "disable static_retention_enabled to use reversible filtering.");
+  }
   nh.param("sdf_map/inflation_noise_filter_enabled", mp_->inflation_noise_filter_enabled_, false);
   nh.param("sdf_map/inflation_min_hit_evidence", mp_->inflation_min_hit_evidence_, 2);
   nh.param("sdf_map/inflation_min_neighbors", mp_->inflation_min_neighbors_, 2);
@@ -71,6 +109,15 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
            mp_->inflation_noise_filter_enabled_ ? "true" : "false",
            mp_->inflation_min_hit_evidence_, mp_->inflation_min_neighbors_,
            mp_->inflation_vertical_radius_);
+  ROS_INFO("[sdf_map] structured retention=%s temp/static/single=%d/%d/%d "
+           "support(neighbors=%d vertical_layers=%d min_hits=%d) near=%.2fm "
+           "observer_baseline=%.2fm release_misses=%d",
+           mp_->structured_retention_enabled_ ? "true" : "false",
+           mp_->structured_temporary_hits_, mp_->structured_static_hits_,
+           mp_->structured_single_view_hits_, mp_->structured_min_neighbors_,
+           mp_->structured_min_vertical_layers_, mp_->structured_support_min_hits_,
+           mp_->structured_near_field_radius_, mp_->structured_observer_baseline_,
+           mp_->structured_release_misses_);
 
   // Initialize data buffer of map
   int buffer_size = mp_->map_voxel_num_(0) * mp_->map_voxel_num_(1) * mp_->map_voxel_num_(2);
@@ -80,7 +127,11 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   md_->distance_buffer_ = vector<double>(buffer_size, mp_->default_dist_);
   md_->count_hit_and_miss_ = vector<short>(buffer_size, 0);
   md_->static_hit_evidence_ = vector<unsigned short>(buffer_size, 0);
-  md_->static_occupancy_locked_ = vector<char>(buffer_size, 0);
+  md_->static_free_evidence_ = vector<unsigned short>(buffer_size, 0);
+  md_->static_retention_state_ = vector<char>(buffer_size, 0);
+  md_->static_observation_flags_ = vector<char>(buffer_size, 0);
+  md_->static_first_hit_observer_ = vector<int>(buffer_size, -1);
+  md_->static_first_free_observer_ = vector<int>(buffer_size, -1);
   md_->count_hit_ = vector<short>(buffer_size, 0);
   md_->count_miss_ = vector<short>(buffer_size, 0);
   md_->flag_rayend_ = vector<char>(buffer_size, -1);
@@ -273,6 +324,65 @@ void SDFMap::setCacheOccupancy(const int& adr, const int& occ) {
   //   md_->cache_voxel_.push(adr);
 }
 
+void SDFMap::addressToIndex(int address, Eigen::Vector3i& index) {
+  const int yz_size = mp_->map_voxel_num_(1) * mp_->map_voxel_num_(2);
+  index.x() = address / yz_size;
+  const int remainder = address % yz_size;
+  index.y() = remainder / mp_->map_voxel_num_(2);
+  index.z() = remainder % mp_->map_voxel_num_(2);
+}
+
+bool SDFMap::hasStructuredStaticSupport(const Eigen::Vector3i& index) {
+  int occupied_neighbors = 0;
+  int vertical_layers = 1;  // 当前命中体素本身算一层。
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dz = -1; dz <= 1; ++dz) {
+        if (dx == 0 && dy == 0 && dz == 0) continue;
+        const Eigen::Vector3i neighbor = index + Eigen::Vector3i(dx, dy, dz);
+        if (!isInMap(neighbor)) continue;
+        const int address = toAddress(neighbor);
+        if (getOccupancy(neighbor) == OCCUPIED &&
+            (md_->static_hit_evidence_[address] >=
+                 mp_->structured_support_min_hits_ ||
+             md_->static_retention_state_[address] !=
+                 static_cast<char>(occupancy_policy::RetentionState::NONE))) {
+          ++occupied_neighbors;
+        }
+      }
+    }
+  }
+
+  // 细柱在水平截面内可能只有一个体素，所以单独检查竖直连续层数。
+  for (int sign : {-1, 1}) {
+    for (int dz = 1; dz < mp_->structured_min_vertical_layers_; ++dz) {
+      const Eigen::Vector3i vertical = index + Eigen::Vector3i(0, 0, sign * dz);
+      if (!isInMap(vertical)) break;
+      const int address = toAddress(vertical);
+      if (getOccupancy(vertical) != OCCUPIED ||
+          (md_->static_hit_evidence_[address] <
+               mp_->structured_support_min_hits_ &&
+           md_->static_retention_state_[address] ==
+               static_cast<char>(occupancy_policy::RetentionState::NONE)))
+        break;
+      ++vertical_layers;
+    }
+  }
+  return occupied_neighbors >= mp_->structured_min_neighbors_ ||
+         vertical_layers >= mp_->structured_min_vertical_layers_;
+}
+
+bool SDFMap::observerBaselineReached(
+    int observer_address, const Eigen::Vector3d& camera_pos) {
+  if (observer_address < 0) return false;
+  Eigen::Vector3i observer_index;
+  addressToIndex(observer_address, observer_index);
+  Eigen::Vector3d observer_position;
+  indexToPos(observer_index, observer_position);
+  return (observer_position - camera_pos).norm() >=
+         mp_->structured_observer_baseline_;
+}
+
 void SDFMap::inputPointCloud(
     const pcl::PointCloud<pcl::PointXYZ>& points, const int& point_num,
     const Eigen::Vector3d& camera_pos) {
@@ -346,32 +456,146 @@ void SDFMap::inputPointCloud(
     md_->update_max_[k] = max(update_max[k], md_->update_max_[k]);
   }
 
+  int temporary_confirmed = 0;
+  int static_confirmed = 0;
+  int static_released = 0;
+  int near_field_misses_ignored = 0;
+  const occupancy_policy::StructuredRetentionConfig retention_config{
+      static_cast<unsigned short>(mp_->structured_temporary_hits_),
+      static_cast<unsigned short>(mp_->structured_static_hits_),
+      static_cast<unsigned short>(mp_->structured_single_view_hits_),
+      static_cast<unsigned short>(mp_->structured_release_misses_)};
+  constexpr char kHitMultiviewConfirmed = 1;
+  constexpr char kFreeMultiviewConfirmed = 2;
   while (!md_->cache_voxel_.empty()) {
     int adr = md_->cache_voxel_.front();
     md_->cache_voxel_.pop();
     const bool observed_hit = md_->count_hit_[adr] >= md_->count_miss_[adr];
-    const int evidence_limit = std::max(
-        mp_->static_retention_enabled_ ? mp_->static_retention_required_hits_ : 0,
-        mp_->inflation_noise_filter_enabled_ ? mp_->inflation_min_hit_evidence_ : 0);
-    if (evidence_limit > 0 && !md_->static_occupancy_locked_[adr]) {
-      const unsigned short required = static_cast<unsigned short>(evidence_limit);
-      md_->static_hit_evidence_[adr] = occupancy_policy::updateEvidence(
-          md_->static_hit_evidence_[adr], observed_hit, required);
-      if (mp_->static_retention_enabled_ &&
-          md_->static_hit_evidence_[adr] >= mp_->static_retention_required_hits_)
-        md_->static_occupancy_locked_[adr] = 1;
-    }
-    const bool ignore_miss = mp_->static_retention_enabled_ &&
-                             md_->static_occupancy_locked_[adr] && !observed_hit;
     double log_odds_update = observed_hit ? mp_->prob_hit_log_ : mp_->prob_miss_log_;
     md_->count_hit_[adr] = md_->count_miss_[adr] = 0;
-    if (ignore_miss) continue;
+
+    if (mp_->static_retention_enabled_) {
+      // 保留旧接口供对照实验：达到阈值后永久忽略miss。比赛默认不启用。
+      const int evidence_limit = std::max(
+          mp_->static_retention_required_hits_,
+          mp_->inflation_noise_filter_enabled_ ? mp_->inflation_min_hit_evidence_ : 0);
+      if (md_->static_retention_state_[adr] ==
+          static_cast<char>(occupancy_policy::RetentionState::NONE)) {
+        md_->static_hit_evidence_[adr] = occupancy_policy::updateEvidence(
+            md_->static_hit_evidence_[adr], observed_hit,
+            static_cast<unsigned short>(evidence_limit));
+        if (md_->static_hit_evidence_[adr] >=
+            mp_->static_retention_required_hits_) {
+          md_->static_retention_state_[adr] =
+              static_cast<char>(occupancy_policy::RetentionState::STATIC);
+        }
+      }
+      if (!observed_hit && md_->static_retention_state_[adr] ==
+                               static_cast<char>(occupancy_policy::RetentionState::STATIC))
+        continue;
+    } else if (mp_->structured_retention_enabled_) {
+      Eigen::Vector3i voxel_index;
+      addressToIndex(adr, voxel_index);
+      Eigen::Vector3d voxel_position;
+      indexToPos(voxel_index, voxel_position);
+      const bool within_near_field =
+          (voxel_position - camera_pos).norm() <=
+          mp_->structured_near_field_radius_;
+
+      if (observed_hit) {
+        md_->static_first_free_observer_[adr] = -1;
+        md_->static_observation_flags_[adr] &= ~kFreeMultiviewConfirmed;
+        if (md_->static_first_hit_observer_[adr] < 0) {
+          Eigen::Vector3i camera_index;
+          posToIndex(camera_pos, camera_index);
+          boundIndex(camera_index);
+          md_->static_first_hit_observer_[adr] = toAddress(camera_index);
+        } else if (observerBaselineReached(md_->static_first_hit_observer_[adr],
+                                           camera_pos)) {
+          md_->static_observation_flags_[adr] |= kHitMultiviewConfirmed;
+        }
+      } else if (!within_near_field &&
+                 md_->static_retention_state_[adr] ==
+                     static_cast<char>(occupancy_policy::RetentionState::STATIC)) {
+        if (md_->static_first_free_observer_[adr] < 0) {
+          Eigen::Vector3i camera_index;
+          posToIndex(camera_pos, camera_index);
+          boundIndex(camera_index);
+          md_->static_first_free_observer_[adr] = toAddress(camera_index);
+        } else if (observerBaselineReached(md_->static_first_free_observer_[adr],
+                                           camera_pos)) {
+          md_->static_observation_flags_[adr] |= kFreeMultiviewConfirmed;
+        }
+      }
+
+      const auto previous_state = static_cast<occupancy_policy::RetentionState>(
+          md_->static_retention_state_[adr]);
+      const bool has_structure =
+          observed_hit && hasStructuredStaticSupport(voxel_index);
+      occupancy_policy::StructuredRetentionStatus status{
+          previous_state, md_->static_hit_evidence_[adr],
+          md_->static_free_evidence_[adr]};
+      const auto retention_update = occupancy_policy::updateStructuredRetention(
+          status, observed_hit, has_structure,
+          (md_->static_observation_flags_[adr] & kHitMultiviewConfirmed) != 0,
+          within_near_field,
+          (md_->static_observation_flags_[adr] & kFreeMultiviewConfirmed) != 0,
+          retention_config);
+      md_->static_retention_state_[adr] =
+          static_cast<char>(retention_update.status.state);
+      md_->static_hit_evidence_[adr] = retention_update.status.hit_evidence;
+      md_->static_free_evidence_[adr] = retention_update.status.free_evidence;
+
+      if (previous_state == occupancy_policy::RetentionState::NONE &&
+          retention_update.status.state ==
+              occupancy_policy::RetentionState::TEMPORARY)
+        ++temporary_confirmed;
+      if (previous_state != occupancy_policy::RetentionState::STATIC &&
+          retention_update.status.state == occupancy_policy::RetentionState::STATIC)
+        ++static_confirmed;
+      if (!observed_hit && within_near_field &&
+          !retention_update.apply_observation)
+        ++near_field_misses_ignored;
+      if (retention_update.clear_occupancy) {
+        md_->occupancy_buffer_[adr] = mp_->clamp_min_log_;
+        md_->static_observation_flags_[adr] = 0;
+        md_->static_first_hit_observer_[adr] = -1;
+        md_->static_first_free_observer_[adr] = -1;
+        ++static_released;
+        continue;
+      }
+      if (retention_update.status.state == occupancy_policy::RetentionState::NONE &&
+          retention_update.status.hit_evidence == 0) {
+        md_->static_observation_flags_[adr] = 0;
+        md_->static_first_hit_observer_[adr] = -1;
+        md_->static_first_free_observer_[adr] = -1;
+      }
+      if (!retention_update.apply_observation) continue;
+    } else {
+      const int evidence_limit =
+          mp_->inflation_noise_filter_enabled_ ? mp_->inflation_min_hit_evidence_ : 0;
+      if (evidence_limit > 0) {
+        md_->static_hit_evidence_[adr] = occupancy_policy::updateEvidence(
+            md_->static_hit_evidence_[adr], observed_hit,
+            static_cast<unsigned short>(evidence_limit));
+      }
+    }
+
     if (md_->occupancy_buffer_[adr] < mp_->clamp_min_log_ - 1e-3)
       md_->occupancy_buffer_[adr] = mp_->min_occupancy_log_;
 
     md_->occupancy_buffer_[adr] = std::min(
         std::max(md_->occupancy_buffer_[adr] + log_odds_update, mp_->clamp_min_log_),
         mp_->clamp_max_log_);
+  }
+  if (temporary_confirmed > 0 || static_confirmed > 0 || static_released > 0 ||
+      near_field_misses_ignored > 0) {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[structured_retention] temporary=%d static=%d released=%d "
+        "near_field_miss_ignored=%d (this cloud).",
+        temporary_confirmed, static_confirmed, static_released,
+        near_field_misses_ignored);
   }
 }
 
