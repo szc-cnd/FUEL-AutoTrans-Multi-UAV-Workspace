@@ -959,6 +959,13 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
                           split_obstacle_detected))
     return true;
+  // 2026-08-13: 当前高度障碍没有落地支撑、且低位地图已明确可通行时，必须先
+  // 原地下降复核。不能让普通3D远目标抢先生成一条跨障碍轨迹，再由发布门控反复
+  // 否决，表现成“有路径却不敢走”。明确的水平分流仍保持左右绕行优先。
+  if (!split_obstacle_detected &&
+      buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos,
+                                  next_yaw, true))
+    return true;
   if (recovery_side_latched_ &&
       (pos - recovery_side_origin_).head<2>().norm() >= recovery_side_release_distance_) {
     recovery_side_latched_ = false;
