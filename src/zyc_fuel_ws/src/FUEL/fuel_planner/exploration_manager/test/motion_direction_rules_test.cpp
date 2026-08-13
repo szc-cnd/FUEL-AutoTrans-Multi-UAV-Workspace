@@ -65,6 +65,21 @@ int main() {
   assert(fast_planner::task_search::holdYawForLateralTranslation(0.70));
   assert(!fast_planner::task_search::holdYawForLateralTranslation(0.71));
 
+  // 分流障碍首次选定一侧后，即使另一侧短时测得更宽，也保持原世界方向。
+  assert(fast_planner::task_search::chooseRightWideSideLane(
+      false, 0.0, 0.60, 0.70));
+  assert(fast_planner::task_search::chooseRightWideSideLane(
+      true, 1.0, 0.80, 0.40));
+  assert(!fast_planner::task_search::chooseRightWideSideLane(
+      true, -1.0, 0.40, 0.80));
+  // 只走够距离不解锁；必须同时确认分流障碍已经消失。
+  assert(!fast_planner::task_search::shouldReleaseRecoverySide(
+      true, true, 0.60, 0.20));
+  assert(!fast_planner::task_search::shouldReleaseRecoverySide(
+      true, false, 0.19, 0.20));
+  assert(fast_planner::task_search::shouldReleaseRecoverySide(
+      true, false, 0.20, 0.20));
+
   // 拐角近场允许只有外墙连续；远场还会单独要求新方向重新形成稳定双墙。
   assert(fast_planner::task_search::mappedContourSupportsTurn(true, 3, 0, 2));
   assert(fast_planner::task_search::mappedContourSupportsTurn(true, 0, 3, 2));

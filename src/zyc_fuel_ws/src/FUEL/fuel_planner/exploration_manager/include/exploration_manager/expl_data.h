@@ -29,6 +29,7 @@ struct FSMParam {
   double replan_thresh2_;
   double replan_thresh3_;
   double replan_time_;  // second
+  double min_execution_before_near_end_replan_;
   // 2026-07-13: 实际里程计偏离样条过大时先悬停重规划，避免轨迹安全但机体跟踪误差导致擦碰。
   double max_tracking_error_xy_;
   double max_tracking_error_z_;

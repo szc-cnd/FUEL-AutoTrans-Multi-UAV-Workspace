@@ -20,8 +20,11 @@ inline bool shouldBrakePublishedTrajectory(bool published_trajectory_active,
   return published_trajectory_active && collision_predicted && !brake_already_requested;
 }
 
-inline bool shouldReplanNearTrajectoryEnd(double time_to_end, double threshold) {
-  return threshold >= 0.0 && time_to_end < threshold;
+inline bool shouldReplanNearTrajectoryEnd(double trajectory_time, double time_to_end,
+                                          double threshold,
+                                          double minimum_execution_time) {
+  return trajectory_time >= minimum_execution_time && threshold >= 0.0 &&
+         time_to_end < threshold;
 }
 
 inline bool shouldPeriodicReplan(double trajectory_time, double threshold,

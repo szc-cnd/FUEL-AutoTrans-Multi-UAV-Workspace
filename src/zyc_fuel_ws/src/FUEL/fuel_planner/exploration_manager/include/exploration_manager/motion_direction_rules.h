@@ -78,6 +78,22 @@ inline bool holdYawInCorridor(bool corridor_search_active,
   return corridor_search_active && !mapped_turn_detected;
 }
 
+inline bool chooseRightWideSideLane(bool side_latched,
+                                    double latched_right_alignment,
+                                    double left_width, double right_width) {
+  if (side_latched && std::fabs(latched_right_alignment) >= 0.50)
+    return latched_right_alignment > 0.0;
+  return right_width > left_width;
+}
+
+inline bool shouldReleaseRecoverySide(bool side_latched,
+                                      bool split_obstacle_detected,
+                                      double progress,
+                                      double release_distance) {
+  return side_latched && !split_obstacle_detected &&
+         progress + 1e-6 >= std::max(0.0, release_distance);
+}
+
 inline bool longRangeTurnViewSupported(
     double farthest_free_depth, int free_sections,
     double farthest_left_wall_depth, int left_wall_sections,

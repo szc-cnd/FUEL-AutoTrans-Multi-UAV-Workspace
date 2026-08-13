@@ -831,9 +831,26 @@ bool FastExplorationManager::buildWideSideBypass(
                           wide_side_bypass_min_lane_width_)
     return false;
 
-  const bool choose_right = split.right_width > split.left_width;
+  const double latched_right_alignment =
+      recovery_side_latched_
+          ? recovery_side_dir_.head<2>().dot(lateral.head<2>())
+          : 0.0;
+  const bool keep_latched_side =
+      recovery_side_latched_ && std::fabs(latched_right_alignment) >= 0.50;
+  const bool choose_right = task_search::chooseRightWideSideLane(
+      recovery_side_latched_, latched_right_alignment,
+      split.left_width, split.right_width);
   const double chosen_width = choose_right ? split.right_width : split.left_width;
   const double other_width = choose_right ? split.left_width : split.right_width;
+  if (chosen_width < wide_side_bypass_min_lane_width_) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[wide_side_bypass] keep latched %s lane; current width %.2fm is below "
+        "minimum %.2fm, wait for map update instead of switching sides.",
+        choose_right ? "right" : "left", chosen_width,
+        wide_side_bypass_min_lane_width_);
+    return false;
+  }
   const double lane_min = choose_right ? split.right_free_min : split.left_free_min;
   const double lane_max = choose_right ? split.right_free_max : split.left_free_max;
   const double lane_center = 0.5 * (lane_min + lane_max);
@@ -921,9 +938,11 @@ bool FastExplorationManager::buildWideSideBypass(
 
   next_pos = best.target;
   next_yaw = cur_yaw;
-  recovery_side_latched_ = true;
-  recovery_side_origin_ = pos;
-  recovery_side_dir_ = side_sign * lateral;
+  if (!keep_latched_side) {
+    recovery_side_latched_ = true;
+    recovery_side_origin_ = pos;
+    recovery_side_dir_ = side_sign * lateral;
+  }
   if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
   ROS_WARN(
       "[wide_side_bypass] split obstacle at %.2fm, widths left=%.2fm right=%.2fm; "
@@ -959,8 +978,11 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
                           split_obstacle_detected))
     return true;
-  if (recovery_side_latched_ &&
-      (pos - recovery_side_origin_).head<2>().norm() >= recovery_side_release_distance_) {
+  const double recovery_side_progress =
+      (pos - recovery_side_origin_).head<2>().norm();
+  if (task_search::shouldReleaseRecoverySide(
+          recovery_side_latched_, split_obstacle_detected,
+          recovery_side_progress, recovery_side_release_distance_)) {
     recovery_side_latched_ = false;
     ROS_WARN("[mission_exploration] side recovery released after %.2fm progress; "
              "straight-forward priority restored.", recovery_side_release_distance_);
