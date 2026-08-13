@@ -109,6 +109,19 @@ class RosPackageLayoutTest(unittest.TestCase):
         ):
             self.assertIn(expected, config)
 
+    def test_fusion_publishes_d435_mapping_debug_image(self):
+        source = (ROOT / "thermal_d435_fusion_node.py").read_text(encoding="utf-8")
+        config = (ROOT / "config" / "thermal_d435_fusion.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("d435_debug_image_pub", source)
+        self.assertIn("publish_d435_debug_image", source)
+        self.assertIn("d435_color_topic: /camera/color/image_raw", config)
+        self.assertIn(
+            "d435_debug_image_topic: /UAV0/thermal/d435_debug_image",
+            config,
+        )
+
     def test_ros_package_guide_documents_both_workflows(self):
         guide = (ROOT / "README_ROS_PACKAGE.md").read_text(encoding="utf-8")
         for command in (

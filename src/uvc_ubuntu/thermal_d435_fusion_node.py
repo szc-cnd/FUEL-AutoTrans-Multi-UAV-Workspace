@@ -47,6 +47,12 @@ class ThermalD435FusionNode:
         self.d435_depth_topic = self.get_param(
             "d435_depth_topic", "/camera/aligned_depth_to_color/image_raw"
         )
+        self.d435_color_topic = self.get_param(
+            "d435_color_topic", "/camera/color/image_raw"
+        )
+        self.d435_debug_image_topic = self.get_param(
+            "d435_debug_image_topic", "/UAV0/thermal/d435_debug_image"
+        )
 
         self.homography = np.array(
             self.get_param(
@@ -79,6 +85,8 @@ class ThermalD435FusionNode:
         self.depth_image = None
         self.depth_encoding = None
         self.depth_stamp = rospy.Time(0)
+        self.color_image = None
+        self.color_header = None
 
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -96,6 +104,9 @@ class ThermalD435FusionNode:
             "/UAV0/thermal/target_channel_position", PointStamped, queue_size=1
         )
         self.fusion_valid_pub = rospy.Publisher("/UAV0/thermal/fusion_valid", Bool, queue_size=1)
+        self.d435_debug_image_pub = rospy.Publisher(
+            self.d435_debug_image_topic, Image, queue_size=1
+        )
 
         rospy.Subscriber(self.thermal_target_detected_topic, Bool, self.detected_callback)
         rospy.Subscriber(self.thermal_target_pixel_topic, rospy.AnyMsg, self.pixel_callback)
@@ -111,6 +122,7 @@ class ThermalD435FusionNode:
         )
         rospy.Subscriber(self.d435_camera_info_topic, CameraInfo, self.camera_info_callback)
         rospy.Subscriber(self.d435_depth_topic, Image, self.depth_callback, queue_size=1)
+        rospy.Subscriber(self.d435_color_topic, Image, self.color_callback, queue_size=1)
 
         period = 1.0 / self.publish_rate if self.publish_rate > 0 else 0.05
         self.timer = rospy.Timer(rospy.Duration(period), self.timer_callback)
@@ -191,6 +203,17 @@ class ThermalD435FusionNode:
             self.depth_encoding = msg.encoding
             self.depth_stamp = msg.header.stamp
 
+    def color_callback(self, msg):
+        try:
+            color = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, "Failed to convert D435 color image: %s", exc)
+            return
+
+        with self.lock:
+            self.color_image = np.array(color, copy=True)
+            self.color_header = msg.header
+
     def publish_valid(self, valid):
         self.fusion_valid_pub.publish(Bool(data=bool(valid)))
 
@@ -257,6 +280,89 @@ class ThermalD435FusionNode:
         point.point.z = depth
         return point
 
+    def publish_d435_debug_image(
+        self,
+        color_image,
+        color_header,
+        detected,
+        thermal_pixel_msg,
+        candidate_detected,
+        candidate_pixel_msg,
+        depth_image,
+        depth_encoding,
+    ):
+        if color_image is None:
+            return
+
+        debug_image = color_image.copy()
+        source = None
+        status = "NO THERMAL TARGET"
+        if detected and thermal_pixel_msg is not None and thermal_pixel_msg.point.z > 0.0:
+            source = thermal_pixel_msg
+            status = "CONFIRMED"
+        elif (
+            candidate_detected
+            and candidate_pixel_msg is not None
+            and candidate_pixel_msg.point.z > 0.0
+        ):
+            source = candidate_pixel_msg
+            status = "CANDIDATE"
+
+        if source is None:
+            cv2.putText(
+                debug_image,
+                status,
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 255),
+                2,
+            )
+        else:
+            u_t = float(source.point.x)
+            v_t = float(source.point.y)
+            u_d, v_d = self.map_thermal_to_d435(u_t, v_t)
+            depth = None
+            if depth_image is not None and depth_encoding is not None:
+                depth = self.lookup_depth(depth_image, u_d, v_d, depth_encoding)
+
+            height, width = debug_image.shape[:2]
+            in_image = 0 <= u_d < width and 0 <= v_d < height
+            color = (0, 255, 0) if depth is not None and in_image else (0, 0, 255)
+            if in_image:
+                cv2.circle(
+                    debug_image,
+                    (u_d, v_d),
+                    max(1, self.depth_search_radius),
+                    color,
+                    2,
+                )
+                cv2.drawMarker(
+                    debug_image,
+                    (u_d, v_d),
+                    color,
+                    markerType=cv2.MARKER_CROSS,
+                    markerSize=24,
+                    thickness=2,
+                )
+
+            depth_text = "invalid" if depth is None else "%.3f m" % depth
+            cv2.putText(
+                debug_image,
+                "%s thermal=(%.1f,%.1f) d435=(%d,%d) depth=%s"
+                % (status, u_t, v_t, u_d, v_d, depth_text),
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                color,
+                2,
+            )
+
+        debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8")
+        if color_header is not None:
+            debug_msg.header = color_header
+        self.d435_debug_image_pub.publish(debug_msg)
+
     def build_camera_point(self, thermal_pixel_msg, camera_info, depth_image, depth_encoding):
         """Fuse one thermal pixel with the latest D435 depth, without TF."""
         if (
@@ -284,6 +390,19 @@ class ThermalD435FusionNode:
             camera_info = self.camera_info
             depth_image = None if self.depth_image is None else self.depth_image.copy()
             depth_encoding = self.depth_encoding
+            color_image = None if self.color_image is None else self.color_image.copy()
+            color_header = self.color_header
+
+        self.publish_d435_debug_image(
+            color_image,
+            color_header,
+            detected,
+            thermal_pixel_msg,
+            candidate_detected,
+            candidate_pixel_msg,
+            depth_image,
+            depth_encoding,
+        )
 
         # Candidate fusion is independent of the package's stable 2/3-frame
         # stream. It only requires a valid raw hotspot pixel and valid depth;

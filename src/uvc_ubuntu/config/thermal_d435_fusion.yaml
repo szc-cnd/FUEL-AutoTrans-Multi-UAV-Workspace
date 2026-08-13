@@ -1,9 +1,8 @@
-thermal_target_detected_topic: "/UAV0/thermal/target_detected"
-thermal_target_pixel_topic: "/UAV0/thermal/target_pixel"
-thermal_candidate_detected_topic: "/UAV0/thermal/target_candidate_detected"
-thermal_candidate_pixel_topic: "/UAV0/thermal/target_candidate_pixel"
-thermal_candidate_camera_point_topic: "/UAV0/thermal/target_candidate_camera_point"
-
+thermal_target_detected_topic: /UAV0/thermal/target_detected
+thermal_target_pixel_topic: /UAV0/thermal/target_pixel
+thermal_candidate_detected_topic: /UAV0/thermal/target_candidate_detected
+thermal_candidate_pixel_topic: /UAV0/thermal/target_candidate_pixel
+thermal_candidate_camera_point_topic: /UAV0/thermal/target_candidate_camera_point
 thermal_width: 384
 thermal_height: 288
 uvc_offset_fix: 0
@@ -11,23 +10,26 @@ shift_x: 0
 shift_y: 0
 roi_margin_x: 30
 roi_margin_y: 20
-
-d435_camera_info_topic: "/camera/color/camera_info"
-d435_depth_topic: "/camera/aligned_depth_to_color/image_raw"
-
+d435_camera_info_topic: /camera/color/camera_info
+d435_depth_topic: /camera/aligned_depth_to_color/image_raw
+d435_color_topic: /camera/color/image_raw
+d435_debug_image_topic: /UAV0/thermal/d435_debug_image
 thermal_to_d435_homography:
-  - [1.0, 0.0, 0.0]
-  - [0.0, 1.0, 0.0]
-  - [0.0, 0.0, 1.0]
-
+- - -4.615697040877843
+  - -1.738495685465599
+  - 768.6640498749101
+- - -2.457342089652756
+  - -2.336072846581869
+  - 638.7137281865845
+- - -0.005792884226996139
+  - -0.002996992664678714
+  - 1.0
 depth_scale: 0.001
 depth_search_radius: 5
 min_valid_depth: 0.2
 max_valid_depth: 5.0
-
-target_frame: "odom"
-d435_optical_frame: "camera_color_optical_frame"
+target_frame: odom
+d435_optical_frame: camera_color_optical_frame
 use_tf: true
-
 publish_rate: 20
 debug: true
