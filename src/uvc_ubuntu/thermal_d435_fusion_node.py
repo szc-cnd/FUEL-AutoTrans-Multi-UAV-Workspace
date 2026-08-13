@@ -3,6 +3,7 @@ import json
 import math
 import os
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -80,6 +81,9 @@ class ThermalD435FusionNode:
         self.use_tf = bool(self.get_param("use_tf", True))
         self.publish_rate = float(self.get_param("publish_rate", 20))
         self.debug = bool(self.get_param("debug", True))
+        self.d435_exposure_warmup_seconds = max(
+            0.0, float(self.get_param("d435_exposure_warmup_seconds", 5.0))
+        )
 
         self.target_detected = False
         self.thermal_pixel_msg = None
@@ -92,6 +96,10 @@ class ThermalD435FusionNode:
         self.depth_stamp = rospy.Time(0)
         self.color_image = None
         self.color_header = None
+        self.first_color_wall_time = None
+        self.d435_exposure_warmup_finished = (
+            self.d435_exposure_warmup_seconds <= 0.0
+        )
 
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -238,6 +246,29 @@ class ThermalD435FusionNode:
         with self.lock:
             self.color_image = np.array(color, copy=True)
             self.color_header = msg.header
+            if self.first_color_wall_time is None:
+                self.first_color_wall_time = time.monotonic()
+                if self.d435_exposure_warmup_seconds > 0.0:
+                    rospy.loginfo(
+                        "D435 mapping image exposure warm-up: %.1f s",
+                        self.d435_exposure_warmup_seconds,
+                    )
+
+    def d435_exposure_ready(self, now=None):
+        """Return true after D435 auto exposure has had time to settle."""
+        if self.d435_exposure_warmup_seconds <= 0.0:
+            return True
+        if self.first_color_wall_time is None:
+            return False
+        current_time = time.monotonic() if now is None else float(now)
+        ready = (
+            current_time - float(self.first_color_wall_time)
+            >= self.d435_exposure_warmup_seconds
+        )
+        if ready and not self.d435_exposure_warmup_finished:
+            self.d435_exposure_warmup_finished = True
+            rospy.loginfo("D435 mapping image exposure warm-up finished")
+        return ready
 
     def publish_valid(self, valid):
         self.fusion_valid_pub.publish(Bool(data=bool(valid)))
@@ -459,18 +490,22 @@ class ThermalD435FusionNode:
             color_image = None if self.color_image is None else self.color_image.copy()
             color_header = self.color_header
 
-        self.publish_d435_debug_image(
-            color_image,
-            color_header,
-            detected,
-            thermal_pixel_msg,
-            candidate_detected,
-            candidate_pixel_msg,
-            candidate_thermal_bbox,
-            camera_info,
-            depth_image,
-            depth_encoding,
-        )
+        # The RealSense color sensor starts with a few dark auto-exposure
+        # frames.  Keep fusion/depth processing active, but do not put those
+        # frames into the RViz mapping panel or saved/remote evidence.
+        if self.d435_exposure_ready():
+            self.publish_d435_debug_image(
+                color_image,
+                color_header,
+                detected,
+                thermal_pixel_msg,
+                candidate_detected,
+                candidate_pixel_msg,
+                candidate_thermal_bbox,
+                camera_info,
+                depth_image,
+                depth_encoding,
+            )
 
         # Candidate fusion is independent of the package's stable 2/3-frame
         # stream. It only requires a valid raw hotspot pixel and valid depth;

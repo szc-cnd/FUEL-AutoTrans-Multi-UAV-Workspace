@@ -116,6 +116,7 @@ class RosPackageLayoutTest(unittest.TestCase):
         )
         self.assertIn("d435_debug_image_pub", source)
         self.assertIn("publish_d435_debug_image", source)
+        self.assertIn("d435_exposure_ready", source)
         self.assertIn("map_thermal_bbox_to_d435", source)
         self.assertIn("D435 XYZ=", source)
         self.assertIn(
@@ -127,6 +128,7 @@ class RosPackageLayoutTest(unittest.TestCase):
             "d435_debug_image_topic: /UAV0/thermal/d435_debug_image",
             config,
         )
+        self.assertIn("d435_exposure_warmup_seconds: 5.0", config)
 
     def test_ros_package_guide_documents_both_workflows(self):
         guide = (ROOT / "README_ROS_PACKAGE.md").read_text(encoding="utf-8")

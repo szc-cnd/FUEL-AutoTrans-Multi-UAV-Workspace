@@ -15,6 +15,7 @@ d435_camera_info_topic: /camera/color/camera_info
 d435_depth_topic: /camera/aligned_depth_to_color/image_raw
 d435_color_topic: /camera/color/image_raw
 d435_debug_image_topic: /UAV0/thermal/d435_debug_image
+d435_exposure_warmup_seconds: 5.0
 thermal_to_d435_homography:
 - - 2.4897923765304046
   - -0.01717057274582905
