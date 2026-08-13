@@ -12,7 +12,8 @@
   <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
   <arg name="battery_topic" default="/UAV1/mavros/battery"/>
   <arg name="esc_status_topic" default="/UAV1/mavros/esc_status"/>
-  <arg name="setpoint_topic" default="/UAV1/mavros/setpoint_raw/attitude"/>
+  <!-- 经降落仲裁器转发，禁止控制器与精确降落同时直连 MAVROS。 -->
+  <arg name="setpoint_topic" default="/UAV1/control/attitude_setpoint"/>
   <!-- AUTO.LAND ??????? UAV1 ? MAVROS ??? -->
   <arg name="set_mode_service" default="/UAV1/mavros/set_mode"/>
   <arg name="reboot_service" default="/UAV1/mavros/cmd/command"/>

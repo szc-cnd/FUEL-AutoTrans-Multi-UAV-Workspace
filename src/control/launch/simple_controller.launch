@@ -1,0 +1,15 @@
+<launch>
+  <!-- 简单控制器先发内部话题，由降落仲裁器唯一转发到 MAVROS。 -->
+  <arg name="vehicle_ns" default="UAV0"/>
+  <arg name="node_name" default="simple_controller"/>
+  <arg name="topic_prefix" default="$(eval '/' + arg('vehicle_ns').strip('/'))"/>
+  <arg name="planner_enable_height" default="0.5"/>
+
+  <node pkg="exploration_control" type="cxr_egoctrl_v1"
+        name="$(arg node_name)" output="screen" required="true">
+    <param name="vehicle_ns" value="$(arg topic_prefix)"/>
+    <param name="planner_enable_height" value="$(arg planner_enable_height)"/>
+    <param name="setpoint_topic"
+           value="$(arg topic_prefix)/control/position_setpoint"/>
+  </node>
+</launch>

@@ -74,10 +74,10 @@ cd ~/match_ws
 sh shfiles/run_uav1_sensor_stack.sh landing
 ```
 
-脚本自动查找 Generic USB 下视相机，启动 `/UAV1/down_camera` 和
-`/UAV1/precision_landing_node`。它只监听 `/UAV1/need_to_land`，启动时不会自动
-解锁、切换 `OFFBOARD` 或触发降落。状态和调试话题位于 `/UAV1/landing/...`，
-飞控输入输出只连接 `/UAV1/mavros/...`，不会连接 UAV0。
+脚本自动查找 Generic USB 下视相机，启动 `/UAV1/down_camera`、
+`/UAV1/precision_landing_node` 和降落控制仲裁器。它只监听
+`/UAV1/need_to_land`，启动时不会自动解锁、切换 `OFFBOARD` 或触发降落。状态和
+调试话题位于 `/UAV1/landing/...`，不会连接 UAV0。
 
 检查：
 
@@ -105,30 +105,22 @@ roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
 /UAV1/planning/goal
 ```
 
-## 7. 单独启动 UAV1 桥接和 AutoTrans 控制器
+## 7. 启动 UAV1 简单控制器
 
 终端 6：
 
 ```bash
 cd ~/match_ws
 source devel/setup.bash
-roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
-  enable_planner:=false \
-  enable_controller:=true \
-  enable_rviz:=false
+roslaunch exploration_control simple_controller.launch \
+  vehicle_ns:=UAV1 \
+  node_name:=UAV1_controller
 ```
 
-轨迹链路：
-
-```text
-/drone_1_planning/trajectory
-    -> autotrans_reference_bridge
-    -> /drone_1_planning/autotrans_trajectory
-    -> AutoTrans MPC
-    -> /UAV1/mavros/setpoint_raw/attitude
-```
-
-不要再同时运行旧的 `run_uav1_autotrans.sh`，避免重复启动桥接节点或控制器。
+简单控制器发布 `/UAV1/control/position_setpoint`，降落入口中的仲裁器唯一转发到
+`/UAV1/mavros/setpoint_raw/local`。收到降落触发且精确降落通过预检查后，仲裁器
+锁存降落控制权，简单控制器不再影响飞控。若以后改回 AutoTrans，现有 AutoTrans
+入口也已改为向 `/UAV1/control/attitude_setpoint` 发布并经过同一仲裁器。
 
 ## 8. 启动后检查
 
@@ -138,7 +130,9 @@ rostopic echo /UAV1/fast_lio/Odometry
 rostopic echo /UAV1/mavros/vision_pose/pose
 rostopic echo /drone_1_planning/trajectory
 rostopic echo /drone_1_planning/autotrans_trajectory
-rostopic echo /UAV1/mavros/setpoint_raw/attitude
+rostopic echo /UAV1/control/position_setpoint
+rostopic echo /UAV1/mavros/setpoint_raw/local
+rostopic echo /UAV1/landing/control_owner
 ```
 
 未确认 MAVROS、FAST-LIO、视觉位姿、轨迹桥接和 setpoint 均正常前，不进入 `OFFBOARD`。
@@ -147,7 +141,7 @@ rostopic echo /UAV1/mavros/setpoint_raw/attitude
 
 ## 8. 停止顺序
 
-1. 退出 AutoTrans 控制器、轨迹桥接和 Diff-Planner。
+1. 退出简单控制器和 Diff-Planner。
 2. 确认无人机已退出自动控制、落地并上锁。
 3. 停止位姿回传、FAST-LIO 和 MID360。
 4. 最后停止 MAVROS。

@@ -4,6 +4,13 @@
 > 解锁、起飞或悬停。`landing_test.launch` 是旧的独立测试入口，现已默认关闭
 > 自动开始和解锁权限，不得用于正式比赛启动流程。
 
+比赛入口同时启动 `landing_setpoint_arbiter`。简单控制器应发布到
+`/UAVx/control/position_setpoint`，不能直接发布 MAVROS；正常飞行时仲裁器转发
+控制器指令。收到 `/UAVx/need_to_land=true` 后，降落节点通过全部预检查并发出
+第一帧保持指令时，仲裁器锁存 `LANDING` 所有权并永久阻断控制器输出，直至相关
+节点重启。可通过 `/UAVx/landing/control_owner` 查看 `CONTROLLER`、
+`LANDING_PENDING` 或 `LANDING`。
+
 This package controls a PX4 vehicle through MAVROS only after a rising
 `/need_to_land` trigger, valid camera calibration, fresh vehicle data, and an
 armed `OFFBOARD` state. Treat it as flight-critical software: begin every
