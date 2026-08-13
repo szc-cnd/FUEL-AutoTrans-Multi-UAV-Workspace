@@ -44,6 +44,10 @@ class TargetReporterNode:
         self.image_wait_timeout = max(
             0.0, float(rospy.get_param("~image_wait_timeout_s", 0.50))
         )
+        self.d435_image_tolerance = max(
+            0.0,
+            float(rospy.get_param("~d435_image_match_tolerance_s", 0.10)),
+        )
         self.source_match_tolerance = max(
             0.0,
             float(
@@ -159,6 +163,15 @@ class TargetReporterNode:
                 "thermal", "/UAV0/thermal/target_camera_point", PointStamped,
                 "/UAV0/thermal/fusion_valid", Bool, "/UAV0/thermal/debug_image"
             )
+        rospy.Subscriber(
+            rospy.get_param(
+                "~thermal_d435_debug_image_topic",
+                "/UAV0/thermal/d435_debug_image",
+            ),
+            Image,
+            lambda msg: self._image_cb("thermal_d435", msg),
+            queue_size=2,
+        )
         # TF 可能在节点启动后的短时间内尚未建立。候选不能因为一次 TF
         # 查询失败就丢失，因此定时重试尚未处理的点/状态配对。
         self.retry_timer = rospy.Timer(rospy.Duration(0.10), self._retry_pending)
@@ -207,7 +220,7 @@ class TargetReporterNode:
         for source in ("color", "qr", "thermal"):
             self._try_process(source)
 
-    def _wait_for_matching_image(self, source, stamp):
+    def _wait_for_matching_image(self, source, stamp, tolerance=None):
         """Wait briefly for the debug image from the confirmed source frame.
 
         Detector callbacks publish the candidate/status and debug image on
@@ -215,10 +228,12 @@ class TargetReporterNode:
         Waiting here is bounded; if no same-frame image arrives, the caller
         records the confirmed JSON without attaching an unrelated image.
         """
+        if tolerance is None:
+            tolerance = self.image_tolerance
         deadline = time.monotonic() + self.image_wait_timeout
         while not rospy.is_shutdown():
             match = self.images.nearest_with_stamp(
-                source, stamp, self.image_tolerance
+                source, stamp, tolerance
             )
             if match is not None:
                 image_stamp, image = match
@@ -345,6 +360,7 @@ class TargetReporterNode:
             confidence=confidence,
         ).to_dict()
         jpeg = None
+        d435_jpeg = None
         if image is not None:
             jpeg = build_evidence_jpeg(image, event,
                                        (point.point.x, point.point.y, point.point.z))
@@ -357,6 +373,26 @@ class TargetReporterNode:
                 target_type,
                 target_id,
             )
+        if source == "thermal":
+            d435_image = self._wait_for_matching_image(
+                "thermal_d435", event_stamp, self.d435_image_tolerance
+            )
+            if d435_image is not None:
+                d435_image_id = "{}_seq{:06d}_thermal_source_d435.jpg".format(
+                    self.drone_id, event_seq
+                )
+                d435_jpeg = build_evidence_jpeg(
+                    d435_image,
+                    event,
+                    (point.point.x, point.point.y, point.point.z),
+                )
+                event["d435_image"] = image_metadata(d435_image_id, d435_jpeg)
+                self.store.save_image(d435_image_id, d435_jpeg)
+            else:
+                rospy.logwarn(
+                    "Confirmed thermal target %s has no matching D435 debug image",
+                    target_id,
+                )
         # Only confirmed detector output is sent remotely.  This happens
         # after same-frame image matching, never before it.
         self.realtime_client.publish(observation)
@@ -364,6 +400,8 @@ class TargetReporterNode:
             self.json_client.enqueue(event)
             if jpeg is not None:
                 self.image_client.enqueue((image_id, jpeg))
+            if d435_jpeg is not None:
+                self.image_client.enqueue((d435_image_id, d435_jpeg))
             rospy.loginfo("Confirmed %s %s at channel [%.3f %.3f %.3f]", target_type,
                           target_id, world.point.x, world.point.y, world.point.z)
 

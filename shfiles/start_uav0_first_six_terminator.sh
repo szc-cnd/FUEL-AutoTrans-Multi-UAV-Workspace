@@ -257,7 +257,7 @@ run_detection_pane() {
   rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
     enable_realsense:=true \
     enable_thermal:="${THERMAL}" \
-    enable_thermal_d435_fusion:=false \
+    enable_thermal_d435_fusion:="${THERMAL}" \
     realsense_color_width:=1280 \
     realsense_color_height:=720 \
     realsense_depth_width:=1280 \

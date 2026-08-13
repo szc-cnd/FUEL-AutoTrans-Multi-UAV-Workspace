@@ -52,6 +52,7 @@ ROS 时间戳一致，`target_reporting` 会用它配对点和调试图。`candi
 /UAV0/thermal/target_camera_point              geometry_msgs/PointStamped
 /UAV0/thermal/fusion_valid                     std_msgs/Bool
 /UAV0/thermal/debug_image                      sensor_msgs/Image
+/UAV0/thermal/d435_debug_image                 sensor_msgs/Image
 ```
 
 所有空间消息必须使用真实相机光学坐标 `frame_id`、源图像时间戳和米制坐标。TF树至少需要连通：
@@ -155,7 +156,8 @@ roslaunch target_reporting remote_server.launch
 `/UAV0/target_reporting/observation`，因此规划器 RViz 仍能看到候选；默认只有确认观测
 通过 TCP 5000 发往远程端，候选不会传到 Windows，也不会生成远程记录或图片。只有确认目标
 生成最终 JSON 和保留检测器原始框选的证据图片；颜色标签、二维码和热源检测器各自负责绘制
-目标框，target_reporting 只添加底部信息面板，不再用统一橙色框进行二次覆盖。确认目标不会再产生飞行目标。
+目标框，target_reporting 只添加底部信息面板，不再用统一橙色框进行二次覆盖。确认热源时会同时上传
+热成像标注图和 D435 映射标注图；确认目标不会再产生飞行目标。
 候选观测只发布在机载 ROS 话题供 RViz 使用，远程端始终只接收确认结果。
 
 确认事件的证据图必须与检测点使用同一源时间戳（默认允许误差 0.03 秒）。上报节点会等待

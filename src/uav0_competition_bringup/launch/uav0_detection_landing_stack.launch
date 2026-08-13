@@ -8,8 +8,8 @@
   <arg name="enable_color_tag" default="true" />
   <arg name="enable_qr" default="true" />
   <arg name="enable_thermal" default="true" />
-  <!-- 热成像到 D435 尚未标定时保持关闭，避免输出错误三维坐标。 -->
-  <arg name="enable_thermal_d435_fusion" default="false" />
+  <!-- 已完成热成像到 D435 单应矩阵标定，默认同时进行深度融合。 -->
+  <arg name="enable_thermal_d435_fusion" default="true" />
   <arg name="enable_camera_body_tf" default="true" />
   <arg name="enable_target_reporting" default="true" />
   <!-- 留空时由 target_reporting 按当天日期生成 onboard_test_YYYYMMDD。 -->

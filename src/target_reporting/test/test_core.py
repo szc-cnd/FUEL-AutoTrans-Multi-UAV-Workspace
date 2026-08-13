@@ -67,15 +67,22 @@ class CoreTests(unittest.TestCase):
             second = self.make_event(seq=2).to_dict()
             second["target_id"] = "uav1-color_tag-002"
             second["image"] = {"id": "second.jpg", "encoding": "jpeg", "size": 3}
+            second["d435_image"] = {"id": "second_d435.jpg", "encoding": "jpeg", "size": 4}
             store.append_event(first)
             store.append_event(second)
             store.save_image("second.jpg", b"jpg")
+            store.save_image("second_d435.jpg", b"d435")
             store.mark_event_acked(1)
 
             reopened = MissionStore(tmp, "uav1", mission_id="test")
             self.assertEqual([2], [event["seq"] for event in reopened.pending_events()])
-            self.assertEqual([("second.jpg", b"jpg")], reopened.pending_images())
+            self.assertEqual(
+                [("second.jpg", b"jpg"), ("second_d435.jpg", b"d435")],
+                reopened.pending_images(),
+            )
             reopened.mark_image_acked("second.jpg")
+            self.assertEqual([("second_d435.jpg", b"d435")], reopened.pending_images())
+            reopened.mark_image_acked("second_d435.jpg")
             self.assertEqual([], reopened.pending_images())
 
     def test_stable_false_target_does_not_block_real_target_elsewhere(self):

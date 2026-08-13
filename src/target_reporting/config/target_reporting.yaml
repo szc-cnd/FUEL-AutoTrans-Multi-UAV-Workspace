@@ -10,6 +10,7 @@ qr_candidate_point_topic: "/UAV0/vision/qr_candidate_pose_camera"
 qr_candidate_status_topic: "/UAV0/vision/qr_candidate_detected"
 thermal_candidate_point_topic: "/UAV0/thermal/target_candidate_camera_point"
 thermal_candidate_status_topic: "/UAV0/thermal/target_candidate_status"
+thermal_d435_debug_image_topic: "/UAV0/thermal/d435_debug_image"
 
 remote_host: "192.168.31.147"
 remote_port: 5000
@@ -22,6 +23,8 @@ confirm_hits: 1
 dedup_distance_m: 0.30
 # 证据图必须与确认点使用同一检测帧；不再使用前后 0.5 秒的旧图。
 image_match_tolerance_s: 0.03
+# D435 和热成像不是硬件同步曝光，允许选择时间上最近的 D435 标注帧。
+d435_image_match_tolerance_s: 0.10
 # 候选状态 stamp 与 PointStamped 的允许配对误差。
 source_match_tolerance_s: 0.03
 image_wait_timeout_s: 0.50
