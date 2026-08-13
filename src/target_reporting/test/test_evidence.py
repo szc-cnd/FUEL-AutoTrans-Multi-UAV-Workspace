@@ -12,7 +12,6 @@ from target_reporting import evidence
 from target_reporting.evidence import (
     TimestampedImageCache,
     draw_detection_overlay,
-    encode_jpeg,
     evidence_overlay_layout,
     wrap_evidence_lines,
 )
@@ -88,14 +87,6 @@ class EvidenceLayoutTests(unittest.TestCase):
         decoded = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
         self.assertEqual(320, decoded.shape[1])
         self.assertGreater(decoded.shape[0], 240)
-
-    def test_plain_jpeg_keeps_d435_image_dimensions(self):
-        import cv2
-
-        image = np.zeros((720, 1280, 3), dtype=np.uint8)
-        jpeg = encode_jpeg(image)
-        decoded = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-        self.assertEqual((720, 1280, 3), decoded.shape)
 
     def test_evidence_text_wraps_to_thermal_image_width(self):
         import cv2

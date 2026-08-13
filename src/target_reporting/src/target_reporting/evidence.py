@@ -231,18 +231,6 @@ def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
     return encoded.tobytes()
 
 
-def encode_jpeg(image, quality=85):
-    """Encode an existing annotated image without adding another text panel."""
-    import cv2
-
-    ok, encoded = cv2.imencode(
-        ".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
-    )
-    if not ok:
-        raise ValueError("JPEG encoding failed")
-    return encoded.tobytes()
-
-
 def image_metadata(image_id, data):
     return {
         "id": image_id,
