@@ -1384,10 +1384,14 @@ bool FastExplorationManager::planInflationHistoryEscape(
   validateAndTruncate(inflation_escape::buildForwardTangentPath(
                           pos, recovery_odom_history_, max_distance, sample_step),
                       false, 1, "history-tangent");
-  validateAndTruncate(inflation_escape::buildBackwardHistoryPath(
-                          pos, recovery_odom_history_, max_distance,
-                          recovery_history_spacing_),
-                      true, 2, "history-backtrack");
+  // 仅落入膨胀余量、原始机体足迹没有真实接触时禁止后退。此时只能向前/侧向
+  // 增加净空或转入确认式下穿；确有原始占据接触时才保留沿历史轨迹退回保命。
+  if (start_contacts > 0) {
+    validateAndTruncate(inflation_escape::buildBackwardHistoryPath(
+                            pos, recovery_odom_history_, max_distance,
+                            recovery_history_spacing_),
+                        true, 2, "history-backtrack");
+  }
   if (candidates.empty()) {
     ROS_WARN_THROTTLE(0.5,
                       "[inflation_history_escape] no monotonic wall-pull/history exit "
