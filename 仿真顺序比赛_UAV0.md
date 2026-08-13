@@ -11,7 +11,7 @@
 
 ```bash
 cd ~/match_ws
-bash shfiles/start_uav0_first_six_terminator.sh
+bash shfiles/start_uav0_first_seven_terminator.sh
 ```
 
 窗口布局为两行三列：
@@ -21,7 +21,7 @@ bash shfiles/start_uav0_first_six_terminator.sh
 下排：4 视觉位姿回传 | 5 检测/TF/上报 | 6 FUEL 规划器/RViz | 7 简单控制器
 ```
 
-六个分屏会同时打开，但每个分屏会等待自己的前置话题：MID360 等待 ROS master，
+七个分屏会同时打开，但每个分屏会等待自己的前置话题：MID360 等待 ROS master，
 FAST-LIO 等待 `/UAV0/livox/lidar` 和 `/UAV0/livox/imu`，其余分屏等待
 `/UAV0/fast_lio/Odometry`；因此不需要人工按照时间估计启动间隔。每个分屏会把
 启动失败或等待超时直接显示在自己的终端中，并在命令退出后保持窗口打开。
@@ -31,26 +31,26 @@ FAST-LIO 等待 `/UAV0/livox/lidar` 和 `/UAV0/livox/imu`，其余分屏等待
 热成像相机时使用：
 
 ```bash
-bash shfiles/start_uav0_first_six_terminator.sh --no-thermal
+bash shfiles/start_uav0_first_seven_terminator.sh --no-thermal
 ```
 
 如果 FAST-LIO 实际发布的是无前缀话题 `/Odometry`，使用：
 
 ```bash
-bash shfiles/start_uav0_first_six_terminator.sh --odom-topic /Odometry
+bash shfiles/start_uav0_first_seven_terminator.sh --odom-topic /Odometry
 ```
 
 停止时可关闭本入口打开的 Terminator 窗口（不会替 ROS 节点执行强制停止）：
 
 ```bash
-bash shfiles/start_uav0_first_six_terminator.sh stop
+bash shfiles/start_uav0_first_seven_terminator.sh stop
 ```
 
 该入口包含第 5 步的 `enable_target_reporting:=true`，因此机载端上报客户端会一同
 启动；Windows 接收服务器仍需在远程端单独启动。第 7 步简单控制器会等待规划器
 `/UAV0/planning/pos_cmd` 出现后启动，但不会自动解锁、切换 `OFFBOARD` 或起飞。
 各 ROS 节点仍写入默认的 `~/.ros/log/`，七分屏
-自身的启动错误记录在 `/tmp/uav0_first_six_terminator_<用户ID>.log`。
+自身的启动错误记录在 `/tmp/uav0_first_seven_terminator_<用户ID>.log`。
 
 ## 1. 启动 UAV0 MAVROS
 

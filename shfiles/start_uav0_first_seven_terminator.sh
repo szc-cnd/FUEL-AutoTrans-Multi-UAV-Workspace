@@ -13,28 +13,28 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-ROS_SETUP="${UAV0_FIRST_SIX_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
-LAYOUT_CONFIG="${UAV0_FIRST_SIX_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav0_first_six.conf}"
+ROS_SETUP="${UAV0_FIRST_SEVEN_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
+LAYOUT_CONFIG="${UAV0_FIRST_SEVEN_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav0_first_seven.conf}"
 RUN_ID="${UID:-$(id -u)}"
-TERMINATOR_LOG="${UAV0_FIRST_SIX_TERMINATOR_LOG:-/tmp/uav0_first_six_terminator_${RUN_ID}.log}"
-TERMINATOR_PID_FILE="${UAV0_FIRST_SIX_TERMINATOR_PID_FILE:-/tmp/uav0_first_six_terminator_${RUN_ID}.pid}"
-START_LOCK_FILE="${UAV0_FIRST_SIX_START_LOCK_FILE:-/tmp/uav0_first_six_start.lock}"
-RUNTIME_CONFIG="${UAV0_FIRST_SIX_RUNTIME_CONFIG:-/tmp/uav0_first_six_terminator_${RUN_ID}.conf}"
+TERMINATOR_LOG="${UAV0_FIRST_SEVEN_TERMINATOR_LOG:-/tmp/uav0_first_seven_terminator_${RUN_ID}.log}"
+TERMINATOR_PID_FILE="${UAV0_FIRST_SEVEN_TERMINATOR_PID_FILE:-/tmp/uav0_first_seven_terminator_${RUN_ID}.pid}"
+START_LOCK_FILE="${UAV0_FIRST_SEVEN_START_LOCK_FILE:-/tmp/uav0_first_seven_start.lock}"
+RUNTIME_CONFIG="${UAV0_FIRST_SEVEN_RUNTIME_CONFIG:-/tmp/uav0_first_seven_terminator_${RUN_ID}.conf}"
 
-THERMAL="${UAV0_FIRST_SIX_THERMAL:-true}"
-ODOM_TOPIC="${UAV0_FIRST_SIX_ODOM_TOPIC:-/UAV0/fast_lio/Odometry}"
+THERMAL="${UAV0_FIRST_SEVEN_THERMAL:-true}"
+ODOM_TOPIC="${UAV0_FIRST_SEVEN_ODOM_TOPIC:-/UAV0/fast_lio/Odometry}"
 PANE=""
 SHOW_HELP=false
 STOP_REQUEST=false
 
 log() {
-  printf '[uav0_first_six] %s\n' "$*"
+  printf '[uav0_first_seven] %s\n' "$*"
 }
 
 usage() {
   cat <<'EOF'
 用法：
-  bash shfiles/start_uav0_first_six_terminator.sh [选项]
+  bash shfiles/start_uav0_first_seven_terminator.sh [选项]
 
 选项：
   --thermal                 第 5 屏同时启用热成像（默认）
@@ -44,14 +44,14 @@ usage() {
   -h, --help                显示帮助
 
 示例：
-  bash shfiles/start_uav0_first_six_terminator.sh
-  bash shfiles/start_uav0_first_six_terminator.sh --no-thermal
-  bash shfiles/start_uav0_first_six_terminator.sh --odom-topic /Odometry
+  bash shfiles/start_uav0_first_seven_terminator.sh
+  bash shfiles/start_uav0_first_seven_terminator.sh --no-thermal
+  bash shfiles/start_uav0_first_seven_terminator.sh --odom-topic /Odometry
 EOF
 }
 
 keep_pane_open() {
-  printf '\n[uav0_first_six] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
+  printf '\n[uav0_first_seven] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
   if [[ -t 0 ]]; then
     exec "${SHELL:-/bin/bash}" -i
   fi
@@ -121,12 +121,12 @@ terminator_window_running() {
   if [[ -r "${TERMINATOR_PID_FILE}" ]]; then
     pid="$(tr -d '[:space:]' < "${TERMINATOR_PID_FILE}")"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      if [[ -r "/proc/${pid}/cmdline" ]] && tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq 'uav0_first_six'; then
+      if [[ -r "/proc/${pid}/cmdline" ]] && tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq 'uav0_first_seven'; then
         return 0
       fi
     fi
   fi
-  pgrep -af '[t]erminator.*uav0_first_six' >/dev/null 2>&1
+  pgrep -af '[t]erminator.*uav0_first_seven' >/dev/null 2>&1
 }
 
 stop_terminator_window() {
@@ -423,11 +423,11 @@ if terminator_window_running; then
   exit 0
 fi
 
-# 通过环境变量把主入口参数传给六个 Terminator 子分屏，避免在布局文件中拼接 shell 参数。
-export UAV0_FIRST_SIX_THERMAL="${THERMAL}"
-export UAV0_FIRST_SIX_ODOM_TOPIC="${ODOM_TOPIC}"
+# 通过环境变量把主入口参数传给七个 Terminator 子分屏，避免在布局文件中拼接 shell 参数。
+export UAV0_FIRST_SEVEN_THERMAL="${THERMAL}"
+export UAV0_FIRST_SEVEN_ODOM_TOPIC="${ODOM_TOPIC}"
 
-sed "s|__UAV0_FIRST_SIX_SCRIPT__|${SCRIPT_PATH}|g" \
+sed "s|__UAV0_FIRST_SEVEN_SCRIPT__|${SCRIPT_PATH}|g" \
   "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
 
 log '打开 UAV0 前七步 Terminator 七分屏'
@@ -438,7 +438,7 @@ log "Terminator 启动日志：${TERMINATOR_LOG}"
 
 nohup terminator --no-dbus --maximise \
   --config="${RUNTIME_CONFIG}" \
-  --layout=uav0_first_six \
+  --layout=uav0_first_seven \
   >"${TERMINATOR_LOG}" 2>&1 &
 terminator_pid=$!
 printf '%s\n' "${terminator_pid}" > "${TERMINATOR_PID_FILE}"

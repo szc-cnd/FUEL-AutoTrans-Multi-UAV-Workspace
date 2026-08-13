@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 强制停止当前用户启动的 ROS1 节点、启动器和 UAV0 六分屏。
+# 强制停止当前用户启动的 ROS1 节点、启动器和 UAV0 七分屏。
 #
 # 这个脚本故意不把 rosnode kill -a 作为唯一手段：ROS master 卡住或已经退出
 # 时，rosnode 命令可能长时间等待，导致脚本看起来“没有反应”。先用一个很短
@@ -22,11 +22,11 @@ usage() {
 
 作用：
   立即强制停止当前用户的 ROS 主节点、ROS 节点、RViz、视觉位姿脚本和
-  UAV0 前六步 Terminator。不会自动降落、上锁或切换飞行模式。
+  UAV0 前七步 Terminator。不会自动降落、上锁或切换飞行模式。
 
 选项：
   --dry-run           只显示将清理的进程，不发送信号
-  --keep-terminator   保留 UAV0 前六步 Terminator 窗口
+  --keep-terminator   保留 UAV0 前七步 Terminator 窗口
   -h, --help          显示帮助
 EOF
 }
@@ -37,9 +37,9 @@ log() {
 
 close_uav0_terminator() {
   [[ "${KEEP_TERMINATOR}" == true ]] && return 0
-  local launcher="${MATCH_WS}/shfiles/start_uav0_first_six_terminator.sh"
+  local launcher="${MATCH_WS}/shfiles/start_uav0_first_seven_terminator.sh"
   if [[ -x "${launcher}" ]]; then
-    log '关闭 UAV0 前六步 Terminator 窗口'
+    log '关闭 UAV0 前七步 Terminator 窗口'
     # stop 分支只处理窗口 PID 文件，不依赖 ROS master，也不会等待节点退出。
     "${launcher}" stop >/dev/null 2>&1 || true
   fi

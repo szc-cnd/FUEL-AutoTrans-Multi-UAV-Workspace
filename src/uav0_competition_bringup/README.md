@@ -93,7 +93,7 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
 
 ## UAV0 精确降落
 
-比赛六分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0
+比赛七分屏脚本的第 5 屏会自动查找 Generic USB 下视相机，并同时启动 UAV0
 精确降落节点。手动使用统一入口时追加以下参数：
 
 ```bash
