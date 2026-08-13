@@ -87,7 +87,7 @@ private:
 
   // 2026-07-23: A*保留膨胀图引导，最终路径安全以原始占据上的真实圆盘足迹为准，
   // 避免把膨胀层与机体半径重复作为两个硬约束。
-  double footprint_check_radius_{0.20};
+  double footprint_check_radius_{0.18};
   int footprint_check_samples_{12};
   int footprint_min_occupied_support_{2};
   bool supported_occupancy_hard_reject_enabled_{true};

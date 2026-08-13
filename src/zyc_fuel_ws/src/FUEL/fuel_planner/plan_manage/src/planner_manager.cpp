@@ -36,7 +36,7 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
   nh.param("manager/min_time", pp_.min_time_, false);
   // 2026-07-23: 0.15m膨胀图用于A*搜索引导；路径和轨迹最终安全按此真实机体圆盘半径复核，
   // 两者不再叠成硬性的0.35m净空要求。
-  nh.param("manager/footprint_check_radius", footprint_check_radius_, 0.20);
+  nh.param("manager/footprint_check_radius", footprint_check_radius_, 0.18);
   nh.param("manager/footprint_check_samples", footprint_check_samples_, 12);
   nh.param("manager/footprint_min_occupied_support",
            footprint_min_occupied_support_, 2);
