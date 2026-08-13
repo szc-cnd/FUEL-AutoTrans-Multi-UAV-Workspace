@@ -249,9 +249,32 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         fd_->static_state_ = true;
         clearVisMarker();
       } else if (res == FAIL) {
-        // Still in PLAN_TRAJ state, keep replanning
-        // 2026-07-13: 新轨迹未生成时立即悬停，旧 bspline 不允许继续把机体带向障碍物。
-        if (hold_on_plan_failure_) setSafetyHold(true, "planning failed");
+        // 替代规划失败不等于当前已发布轨迹失效。只要旧轨迹仍安全且未走完，继续执行；
+        // 不能因一次地图刷新/候选失败把已经确认的水平侧绕短步刷掉。
+        const double active_time = active_traj_valid_
+                                       ? std::max(0.0, (ros::Time::now() -
+                                                        active_traj_.start_time_).toSec())
+                                       : 0.0;
+        double old_collision_distance = 0.0;
+        const bool old_trajectory_safe =
+            active_traj_valid_ && !active_traj_braked_ &&
+            active_time < active_traj_.duration_ &&
+            planner_manager_->checkTrajCollision(
+                active_traj_, old_collision_distance, inflation_escape_active_);
+        if (exploration_policy::shouldContinueCurrentTrajectoryAfterReplacementFailure(
+                active_traj_valid_ && !safety_hold_active_, active_traj_braked_,
+                old_trajectory_safe,
+                active_time, active_traj_valid_ ? active_traj_.duration_ : 0.0)) {
+          next_plan_retry_time_ = ros::Time(0);
+          fd_->static_state_ = false;
+          transitState(EXEC_TRAJ, "replacement-plan-failed");
+          ROS_WARN("[trajectory_preserve] replacement planning failed; continue safe "
+                   "published trajectory for %.2fs.",
+                   active_traj_.duration_ - active_time);
+          break;
+        }
+        // 没有可继续的安全旧轨迹时才锁点悬停并低频重试。
+        if (hold_on_plan_failure_) setSafetyHold(true, "planning failed without safe old trajectory");
         // 2026-07-14: FSM 定时器为 100 Hz，连续不可达时限制重复日志，保留悬停和后续重规划行为。
         ROS_WARN_THROTTLE(1.0, "plan fail");
         fd_->static_state_ = true;
@@ -353,7 +376,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         return;
       }
       if (exploration_policy::shouldReplanNearTrajectoryEnd(
-              time_to_end, fp_->replan_thresh1_)) {
+              time_to_end, fp_->replan_thresh1_, info->duration_)) {
         transitState(PLAN_TRAJ, "FSM");
         ROS_WARN("Replan: traj fully executed=================================");
         return;
