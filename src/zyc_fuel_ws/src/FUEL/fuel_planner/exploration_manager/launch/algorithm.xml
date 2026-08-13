@@ -214,8 +214,8 @@
     <param name="manager/dynamic_environment" value="1" type="int"/>
     <param name="manager/local_segment_length" value="5.0" type="double"/>
     <param name="manager/clearance_threshold" value="0.2" type="double"/>
-    <!-- 最终路径/轨迹按0.18m机体圆盘复核；孤立占据点按噪声忽略，连续墙柱仍硬拒绝。 -->
-    <param name="manager/footprint_check_radius" value="0.18" type="double"/>
+    <!-- 最终路径/轨迹按0.20m机体圆盘复核；孤立占据点按噪声忽略，连续墙柱仍硬拒绝。 -->
+    <param name="manager/footprint_check_radius" value="0.20" type="double"/>
     <param name="manager/footprint_check_samples" value="12" type="int"/>
     <param name="manager/footprint_min_occupied_support" value="2" type="int"/>
     <param name="manager/supported_occupancy_hard_reject_enabled" value="true" type="bool"/>
