@@ -194,6 +194,9 @@ namespace PayloadMPC
 		real_t max_thrust_;
 		real_t max_bodyrate_xy_;
 		real_t max_bodyrate_z_;
+		// NMPC 世界系速度硬约束，单位 m/s；x/y 与 z 分开配置。
+		real_t max_velocity_xy_;
+		real_t max_velocity_z_;
 
 		real_t state_cost_exponential_;
 		real_t input_cost_exponential_;
@@ -226,6 +229,8 @@ namespace PayloadMPC
 			max_thrust_ = 0.0;
 			max_bodyrate_z_ = 0.0;
 			max_bodyrate_xy_ = 0.0;
+			max_velocity_xy_ = 0.0;
+			max_velocity_z_ = 0.0;
 			enable_rc_hover_adjust_ = false;
 		}
 
@@ -254,6 +259,14 @@ namespace PayloadMPC
 			read_essential_param(nh, "max_thrust", max_thrust_);
 			read_essential_param(nh, "max_bodyrate_xy", max_bodyrate_xy_);
 			read_essential_param(nh, "max_bodyrate_z", max_bodyrate_z_);
+			read_essential_param(nh, "max_velocity_xy", max_velocity_xy_);
+			read_essential_param(nh, "max_velocity_z", max_velocity_z_);
+			if (!std::isfinite(max_velocity_xy_) || !std::isfinite(max_velocity_z_) ||
+				max_velocity_xy_ <= 0.0 || max_velocity_z_ <= 0.0)
+			{
+				ROS_ERROR("[MPCCTRL] max_velocity_xy/max_velocity_z 必须为正的有限值，单位 m/s。");
+				ROS_BREAK();
+			}
 
 			read_essential_param(nh, "state_cost_exponential", state_cost_exponential_);
 			read_essential_param(nh, "input_cost_exponential", input_cost_exponential_);

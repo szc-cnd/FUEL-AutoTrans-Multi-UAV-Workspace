@@ -1,6 +1,5 @@
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <string>
 
 #include <ros/ros.h>
@@ -13,48 +12,46 @@ namespace
 class ReferenceBridge
 {
 public:
-  ReferenceBridge()
-      : private_nh_("~"), last_input_time_(0), last_trajectory_id_(1), abort_sent_(false)
+  ReferenceBridge() : private_nh_("~")
   {
     private_nh_.param<std::string>("input_topic", input_topic_, "/drone_1_planning/trajectory");
     private_nh_.param<std::string>("output_topic", output_topic_,
                                    "/drone_1_planning/autotrans_trajectory");
-    private_nh_.param<std::string>("frame_id", frame_id_, "camera_init");
-    private_nh_.param("trajectory_timeout", trajectory_timeout_, 0.5);
+    private_nh_.param<std::string>("frame_id", frame_id_, "UAV1/camera_init");
 
-    output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true);
+    // 非 latched：控制器重启后不能自动收到上一次实验的旧轨迹。
+    output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, false);
     input_sub_ = nh_.subscribe(input_topic_, 2, &ReferenceBridge::trajectoryCallback, this);
-    timeout_timer_ = nh_.createTimer(ros::Duration(0.05), &ReferenceBridge::timeoutCallback, this);
 
-    ROS_INFO("[autotrans_reference_bridge] %s -> %s, timeout=%.3f s, frame_id=%s",
-             input_topic_.c_str(), output_topic_.c_str(), trajectory_timeout_, frame_id_.c_str());
+    ROS_INFO("[autotrans_reference_bridge] %s -> %s, frame_id=%s; no replan timeout abort.",
+             input_topic_.c_str(), output_topic_.c_str(), frame_id_.c_str());
   }
 
 private:
-  bool finiteValue(double value) const
+  static bool finiteValue(double value)
   {
     return std::isfinite(value);
   }
 
   bool validateInput(const traj_utils::PolyTraj& input, std::size_t& segment_count,
-                     std::size_t& coefficient_count) const
+                    std::size_t& coefficient_count) const
   {
     if (input.traj_id < 1)
     {
-      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] Reject trajectory: traj_id must start from 1.");
+      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：traj_id 必须从 1 开始。");
       return false;
     }
     if (input.start_time.isZero())
     {
-      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] Reject trajectory: start_time is zero.");
+      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：start_time 为空。");
       return false;
     }
 
     segment_count = input.duration.size();
     coefficient_count = static_cast<std::size_t>(input.order) + 1;
-    if (segment_count == 0 || coefficient_count == 0)
+    if (segment_count == 0 || coefficient_count == 0 || coefficient_count > 20)
     {
-      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] Reject trajectory: empty segments or coefficients.");
+      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：段数或多项式阶数无效。");
       return false;
     }
 
@@ -62,8 +59,7 @@ private:
     if (input.coef_x.size() != expected_size || input.coef_y.size() != expected_size ||
         input.coef_z.size() != expected_size)
     {
-      ROS_ERROR_THROTTLE(1.0,
-                         "[autotrans_reference_bridge] Reject trajectory: coefficient length mismatch.");
+      ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：系数长度不匹配。");
       return false;
     }
 
@@ -71,15 +67,16 @@ private:
     {
       if (!finiteValue(input.duration[i]) || input.duration[i] <= 0.0F)
       {
-        ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] Reject trajectory: invalid duration.");
+        ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：duration 无效。");
         return false;
       }
     }
     for (std::size_t i = 0; i < expected_size; ++i)
     {
-      if (!finiteValue(input.coef_x[i]) || !finiteValue(input.coef_y[i]) || !finiteValue(input.coef_z[i]))
+      if (!finiteValue(input.coef_x[i]) || !finiteValue(input.coef_y[i]) ||
+          !finiteValue(input.coef_z[i]))
       {
-        ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] Reject trajectory: non-finite coefficient.");
+        ROS_ERROR_THROTTLE(1.0, "[autotrans_reference_bridge] 拒绝轨迹：存在非有限系数。");
         return false;
       }
     }
@@ -96,9 +93,8 @@ private:
     }
 
     quadrotor_msgs::PolynomialTraj output;
-    // 输出 header.stamp 与 Diff-Planner 的 start_time 保持一致，便于 AutoTrans 做时间对齐。
+    // 轨迹时间和坐标系必须与 FAST-LIO/AutoTrans 约定一致，不在桥接器中做坐标变换。
     output.header.stamp = input->start_time;
-    // frame_id 是 FAST-LIO 的雷达世界系名称，不做坐标旋转或平移。
     output.header.frame_id = frame_id_;
     output.trajectory_id = static_cast<std::uint32_t>(input->traj_id);
     output.action = quadrotor_msgs::PolynomialTraj::ACTION_ADD;
@@ -110,9 +106,10 @@ private:
       piece.num_order = input->order;
       piece.num_dim = 3;
       piece.duration = input->duration[segment];
-      piece.data.reserve(3 * coefficient_count);
 
-      // AutoTrans 用 Eigen::Map 按列主序恢复 [x; y; z]，因此这里逐阶交错三轴系数。
+      // Eigen::Map 按列主序恢复 3 x (order + 1) 矩阵；按每阶 x/y/z 交错写入，
+      // 与 traj_utils/PolyTraj 的 coef_x/coef_y/coef_z 语义保持一致。
+      piece.data.reserve(3 * coefficient_count);
       for (std::size_t order = 0; order < coefficient_count; ++order)
       {
         const std::size_t index = segment * coefficient_count + order;
@@ -124,43 +121,17 @@ private:
     }
 
     output_pub_.publish(output);
-    last_input_time_ = ros::Time::now();
-    last_trajectory_id_ = output.trajectory_id;
-    abort_sent_ = false;
-    ROS_INFO_THROTTLE(1.0, "[autotrans_reference_bridge] Forward trajectory id=%u, segments=%zu.",
+    ROS_INFO_THROTTLE(1.0, "[autotrans_reference_bridge] 已转发轨迹 id=%u，段数=%zu。",
                       output.trajectory_id, segment_count);
-  }
-
-  void timeoutCallback(const ros::TimerEvent&)
-  {
-    if (last_input_time_.isZero() || (ros::Time::now() - last_input_time_).toSec() <= trajectory_timeout_ ||
-        abort_sent_)
-    {
-      return;
-    }
-
-    quadrotor_msgs::PolynomialTraj abort_message;
-    abort_message.header.stamp = ros::Time::now();
-    abort_message.header.frame_id = frame_id_;
-    abort_message.trajectory_id = last_trajectory_id_;
-    abort_message.action = quadrotor_msgs::PolynomialTraj::ACTION_ABORT;
-    output_pub_.publish(abort_message);
-    abort_sent_ = true;
-    ROS_ERROR("[autotrans_reference_bridge] Input trajectory timeout; ACTION_ABORT published.");
   }
 
   ros::NodeHandle nh_;
   ros::NodeHandle private_nh_;
   ros::Subscriber input_sub_;
   ros::Publisher output_pub_;
-  ros::Timer timeout_timer_;
   std::string input_topic_;
   std::string output_topic_;
   std::string frame_id_;
-  double trajectory_timeout_;
-  ros::Time last_input_time_;
-  std::uint32_t last_trajectory_id_;
-  bool abort_sent_;
 };
 
 }  // namespace

@@ -2,6 +2,7 @@
 #include <nav_msgs/Odometry.h>
 #include <algorithm>
 #include <ctime>
+#include <cmath>
 
 namespace PayloadMPC
 {
@@ -33,7 +34,8 @@ namespace PayloadMPC
     mpc_wrapper_.setExternalForce(Eigen::Vector3d::Zero());
     mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
-        params_.max_bodyrate_xy_, params_.max_bodyrate_z_);
+        params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
+        params_.max_velocity_xy_, params_.max_velocity_z_);
 
     // first_traj_received_ = false;
     solve_from_scratch_ = false;
@@ -58,20 +60,42 @@ namespace PayloadMPC
 
     mpc_wrapper_.setTrajectory(reference_states, reference_inputs);
 
+    const bool previous_mpc_solve_success = last_mpc_solve_success_;
     if (solve_from_scratch_)
     {
-      ROS_INFO("Solving MPC with hover as initial guess.");
-      mpc_wrapper_.solve(estimated_state);
+      ROS_INFO("[NMPC] 使用悬停参考作为初始猜测求解。");
+      last_mpc_solve_success_ = mpc_wrapper_.solve(estimated_state);
       solve_from_scratch_ = false;
     }
     else
     {
       constexpr bool do_preparation_step(false); // the preparation step has been done by another thread
-      mpc_wrapper_.update(estimated_state, do_preparation_step);
+      last_mpc_solve_success_ = mpc_wrapper_.update(estimated_state, do_preparation_step);
     }
 
-    mpc_wrapper_.getStates(predicted_states);
-    mpc_wrapper_.getInputs(control_inputs);
+    if (!last_mpc_solve_success_)
+    {
+      // 求解失败时直接使用悬停输入：T 为物理总推力 N，角速度为机体系 rad/s。
+      predicted_states = estimated_state.replicate(1, kSamples + 1);
+      control_inputs = hover_input_.leftCols(kSamples);
+      ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，切换到悬停安全输入。");
+    }
+    else
+    {
+      if (!previous_mpc_solve_success)
+      {
+        ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+      }
+      mpc_wrapper_.getStates(predicted_states);
+      mpc_wrapper_.getInputs(control_inputs);
+      if (!predicted_states.allFinite() || !control_inputs.allFinite())
+      {
+        last_mpc_solve_success_ = false;
+        predicted_states = estimated_state.replicate(1, kSamples + 1);
+        control_inputs = hover_input_.leftCols(kSamples);
+        ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 输出含非有限值，切换到悬停安全输入。");
+      }
+    }
 
     // Start a thread to prepare for the next execution.
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);

@@ -1,5 +1,6 @@
 #include "mpc_input.h"
 #include <algorithm>
+#include <cmath>
 RC_Data_t::RC_Data_t()
 {
     rcv_stamp = ros::Time(0);
@@ -10,6 +11,7 @@ RC_Data_t::RC_Data_t()
 
     // Parameter initilation is very important in RC-Free usage!
     is_manual_mode = true;
+    mode_valid = false;
     is_hover_mode = false;
     enter_hover_mode = false;
     is_command_mode = false;
@@ -50,6 +52,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
         is_command_mode = false;
         is_hover_mode = false;
         is_takeoff_mode = false;
+        mode_valid = false;
         return;
     }
 
@@ -69,6 +72,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
         ROS_WARN_THROTTLE(1.0, "[MPCCtrl] /mavros/rc/in has no CH%d for mode selection.", mode_channel + 1);
         // 模式通道缺失时按手动请求处理，避免通道异常时沿用上一帧 AUTO_HOVER/CMD_CTRL 状态。
         is_manual_mode = true;
+        mode_valid = false;
         is_command_mode = false;
         is_hover_mode = false;
         is_takeoff_mode = false;
@@ -86,11 +90,12 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
         last_mode = mode;
     }
 
-    const bool mode_valid = mode >= 800.0 && mode <= 2200.0;
-    if (!mode_valid)
+    const bool mode_pwm_valid = mode >= 800.0 && mode <= 2200.0;
+    if (!mode_pwm_valid)
     {
         // 异常 PWM 不能触发起飞或自动控制，交给状态机执行安全退出。
         is_manual_mode = true;
+        mode_valid = false;
         is_takeoff_mode = false;
         is_hover_mode = false;
         is_command_mode = false;
@@ -101,6 +106,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     const bool last_command_mode = last_mode > high_threshold;
     const bool last_hover_mode = last_mode >= mid_low_threshold && last_mode <= mid_high_threshold;
 
+    mode_valid = true;
     is_manual_mode = false;
     is_takeoff_mode = mode < low_threshold;
     is_hover_mode = mode >= mid_low_threshold && mode <= mid_high_threshold;
@@ -263,24 +269,74 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
     const quadrotor_msgs::PolynomialTraj &traj = *pMsg;
     if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
     {
-        // exec_traj = false;
-        ROS_INFO("[MPCCtrl Traj] Loading the trajectory.");
+        const ros::Time now = ros::Time::now();
         if ((int)traj.trajectory_id < 1)
         {
-            ROS_ERROR("[MPCCtrl Traj] The trajectory_id must start from 1"); //. zxzxzxzx
+            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：trajectory_id 无效。");
             return;
         }
-        // if ((int)traj.trajectory_id > 1 && (int)traj.trajectory_id < _traj_id) return ;
+        if (pMsg->header.stamp.isZero())
+        {
+            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：header.stamp 为空。");
+            return;
+        }
+        const double age = (now - pMsg->header.stamp).toSec();
+        if (age > 0.8 || age < -0.1)
+        {
+            ROS_WARN_THROTTLE(1.0, "[轨迹] 拒绝旧轨迹或过早轨迹：id=%u，时间差=%.3f s。",
+                              traj.trajectory_id, age);
+            return;
+        }
+        if (have_last_trajectory_id &&
+            (traj.trajectory_id <= last_trajectory_id ||
+             pMsg->header.stamp <= last_trajectory_stamp))
+        {
+            ROS_WARN_THROTTLE(1.0, "[轨迹] 拒绝重复或倒退轨迹：id=%u。", traj.trajectory_id);
+            return;
+        }
+        if (traj.trajectory.empty())
+        {
+            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：piece 为空。");
+            return;
+        }
 
         oneTraj_Data_t traj_data;
         traj_data.traj_start_time = pMsg->header.stamp;
         double t_total = 0;
         for (auto &piece : traj.trajectory)
         {
+            if (piece.num_dim != 3 || piece.num_order < 0 || piece.num_order > 20 ||
+                piece.duration <= 0.0 || !std::isfinite(piece.duration) ||
+                piece.data.size() != static_cast<size_t>(piece.num_dim) *
+                                         static_cast<size_t>(piece.num_order + 1))
+            {
+                ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：piece 维度、阶数、duration 或 data 无效。");
+                return;
+            }
+            for (const double coefficient : piece.data)
+            {
+                if (!std::isfinite(coefficient))
+                {
+                    ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：piece 系数不是有限值。");
+                    return;
+                }
+            }
             traj_data.traj.emplace_back(piece.duration, Eigen::Map<const Eigen::MatrixXd>(&piece.data[0], piece.num_dim, (piece.num_order + 1)));
             t_total += piece.duration;
         }
         traj_data.traj_end_time = traj_data.traj_start_time + ros::Duration(t_total);
+        if (!std::isfinite(t_total) || t_total <= 0.0)
+        {
+            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：总 duration 无效。");
+            return;
+        }
+        last_end_position = traj_data.traj.getJuncPos(traj_data.traj.getPieceNum());
+        last_end_position_valid = last_end_position.allFinite();
+        if (!last_end_position_valid)
+        {
+            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：终点位置不是有限值。");
+            return;
+        }
         if (ros::Time::now() < traj_data.traj_start_time) // Future traj
         {
             // A future trajectory
@@ -305,6 +361,11 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
             total_traj_start_time = traj_queue.front().traj_start_time;
         }
         exec_traj = 1;
+        last_trajectory_id = traj.trajectory_id;
+        last_trajectory_stamp = pMsg->header.stamp;
+        have_last_trajectory_id = true;
+        ROS_INFO("[轨迹] 收到有效轨迹：id=%u，piece 数量=%zu。",
+                 traj.trajectory_id, traj.trajectory.size());
     }
     else if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ABORT)
     {
@@ -313,6 +374,7 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
         total_traj_end_time = ros::Time(0);
         traj_queue.clear();
         exec_traj = -1;
+        last_end_position_valid = false;
     }
     else if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_WARN_IMPOSSIBLE)
     {
@@ -320,6 +382,7 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
         total_traj_end_time = ros::Time(0);
         traj_queue.clear();
         exec_traj = -1;
+        last_end_position_valid = false;
     }
 }
 

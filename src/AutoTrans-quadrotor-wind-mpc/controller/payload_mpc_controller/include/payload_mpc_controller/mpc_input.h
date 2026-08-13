@@ -16,6 +16,7 @@
 #include <polynomial_trajectory.h>
 #include <quadrotor_msgs/PolynomialTraj.h>
 #include <deque>
+#include <cstdint>
 #include "lowpassfilter2p.h"
 
 class RC_Data_t
@@ -40,6 +41,8 @@ public:
 
   bool is_manual_mode;
   bool is_command_mode;
+  // CH8 PWM 是否有效；无效时保持当前自动状态，不触发手动接管。
+  bool mode_valid;
   bool enter_command_mode;
   bool is_hover_mode;
   bool enter_hover_mode;
@@ -165,6 +168,11 @@ public:
   int exec_traj = 0; // use for aborting the trajectory, 0 means no trajectory is executing
                      // -1 means the trajectory is aborting, 1 means the trajectory is executing
   std::deque<oneTraj_Data_t> traj_queue;
+  Eigen::Vector3d last_end_position{Eigen::Vector3d::Zero()};
+  bool last_end_position_valid{false};
+  std::uint32_t last_trajectory_id{0};
+  ros::Time last_trajectory_stamp{0};
+  bool have_last_trajectory_id{false};
 
   Trajectory_Data_t();
   void adjust_end_time()

@@ -37,6 +37,9 @@ max_bodyrate_z:     1.2         # ~ pi*2/3 [rad/s]
 # 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
 min_thrust:         1.0
 max_thrust:         29.5
+# NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
+max_velocity_xy: 0.3
+max_velocity_z: 0.3
 
 # use ending pos for better ending tracking performance)
 use_trajectory_ending_pos: true

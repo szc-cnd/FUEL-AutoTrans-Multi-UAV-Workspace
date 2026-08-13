@@ -11,6 +11,7 @@
  */
 
 #include "mpc_wrapper.h"
+#include <cmath>
 
 namespace PayloadMPC
 {
@@ -122,7 +123,9 @@ namespace PayloadMPC
   }
 
   // Set the input limits.
-  bool MpcWrapper::setLimits(real_t min_thrust, real_t max_thrust, real_t max_rollpitchrate, real_t max_yawrate)
+  bool MpcWrapper::setLimits(real_t min_thrust, real_t max_thrust,
+                             real_t max_rollpitchrate, real_t max_yawrate,
+                             real_t max_velocity_xy, real_t max_velocity_z)
   {
     if (min_thrust <= 0.0 || min_thrust > max_thrust)
     {
@@ -148,6 +151,13 @@ namespace PayloadMPC
       return false;
     }
 
+    if (!std::isfinite(max_velocity_xy) || !std::isfinite(max_velocity_z) ||
+        max_velocity_xy <= 0.0 || max_velocity_z <= 0.0)
+    {
+      ROS_ERROR("[NMPC] 最大世界系速度约束无效，单位必须为 m/s。");
+      return false;
+    }
+
     // Set input boundaries.
     Eigen::Matrix<real_t, 4, 1> lower_bounds = Eigen::Matrix<real_t, 4, 1>::Zero();
     Eigen::Matrix<real_t, 4, 1> upper_bounds = Eigen::Matrix<real_t, 4, 1>::Zero();
@@ -165,6 +175,14 @@ namespace PayloadMPC
 
     acado_upper_bounds_ =
         upper_bounds.replicate(1, kSamples);
+
+    // v_x/v_y/v_z 是 ENU 世界系速度，单位 m/s；这是 ACADO 的硬约束。
+    Eigen::Matrix<real_t, kStateConstraintSize, 1> lower_velocity_bounds;
+    lower_velocity_bounds << -max_velocity_xy, -max_velocity_xy, -max_velocity_z;
+    Eigen::Matrix<real_t, kStateConstraintSize, 1> upper_velocity_bounds;
+    upper_velocity_bounds << max_velocity_xy, max_velocity_xy, max_velocity_z;
+    acado_lower_affine_bounds_ = lower_velocity_bounds.replicate(1, kSamples);
+    acado_upper_affine_bounds_ = upper_velocity_bounds.replicate(1, kSamples);
     return true;
   }
 

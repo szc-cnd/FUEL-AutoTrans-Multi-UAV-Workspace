@@ -1,5 +1,6 @@
 #include <memory>
 #include <math.h>
+#include <cmath>
 #include <acado_optimal_control.hpp>
 #include <acado_code_generation.hpp>
 #include <acado_gnuplot.hpp>
@@ -64,6 +65,16 @@ int main(int argc, char **argv)
   double g_z = cfg_root["gravity"].As<double>(9.81);
   double dt = cfg_root["step_T"].As<double>(0.05);
   int N = cfg_root["step_N"].As<int>(20);
+  // NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
+  const double max_velocity_xy = cfg_root["max_velocity_xy"].As<double>(0.3);
+  const double max_velocity_z = cfg_root["max_velocity_z"].As<double>(0.3);
+  if (!std::isfinite(max_velocity_xy) || !std::isfinite(max_velocity_z) ||
+      max_velocity_xy <= 0.0 || max_velocity_z <= 0.0)
+  {
+    std::cerr << RED << "max_velocity_xy/max_velocity_z must be finite and positive."
+              << RESET << std::endl;
+    return EXIT_FAILURE;
+  }
 
   std::cout << YELLOW;
   std::cout << "Mq:       " << Mq << std::endl;
@@ -175,6 +186,10 @@ int main(int argc, char **argv)
   ocp.subjectTo(-w_max_xy <= w_y <= w_max_xy);
   ocp.subjectTo(-w_max_yaw <= w_z <= w_max_yaw);
   ocp.subjectTo(T_min <= T <= T_max);
+  // v_x/v_y/v_z 是 ENU 世界系速度，单位 m/s；这是求解器的硬约束。
+  ocp.subjectTo(-max_velocity_xy, v_x, max_velocity_xy);
+  ocp.subjectTo(-max_velocity_xy, v_y, max_velocity_xy);
+  ocp.subjectTo(-max_velocity_z, v_z, max_velocity_z);
 
   ocp.setNOD(4);
 

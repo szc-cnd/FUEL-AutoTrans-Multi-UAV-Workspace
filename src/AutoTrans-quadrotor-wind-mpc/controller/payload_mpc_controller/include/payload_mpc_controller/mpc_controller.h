@@ -76,6 +76,7 @@ namespace PayloadMPC
       {mpc_wrapper_.setDynamicParams(mass_q);}
     void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
       {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
+    bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
     // Thrust to control
     std::queue<std::pair<ros::Time, double>> timed_thrust;
     double thr_scale_compensate;
@@ -134,6 +135,7 @@ namespace PayloadMPC
     // Variables
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
+    bool last_mpc_solve_success_{true};
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;

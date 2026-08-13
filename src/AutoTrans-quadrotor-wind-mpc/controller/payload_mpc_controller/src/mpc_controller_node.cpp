@@ -2,6 +2,7 @@
 #include "mpc_fsm.h"
 #include "mpc_controller.h"
 #include <ros/ros.h>
+#include <clocale>
 
 std::unique_ptr<PayloadMPC::MPCFSM> fsm_ptr;
 void MPC_controller_main(const ros::TimerEvent &)
@@ -16,6 +17,8 @@ void system_state_update_main(const ros::TimerEvent &)
 
 int main(int argc, char **argv)
 {
+    // ROS 日志使用 UTF-8 中文；在 ros::init 前设置本地化，避免终端显示为问号。
+    std::setlocale(LC_ALL, "");
     ros::init(argc, argv, "MPCctrl");
     ros::NodeHandle nh("~");
 

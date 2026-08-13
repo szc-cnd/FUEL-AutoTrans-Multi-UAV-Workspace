@@ -110,6 +110,16 @@ namespace PayloadMPC
 		double takeoff_start_yaw_{0.0};
 		ros::Time takeoff_start_time_{0};
 		ros::Time takeoff_settle_start_{0};
+		// 里程计失效后的 OFFBOARD 失联保护：最多继续发 0.3 s 的最后安全 setpoint。
+		bool odom_failsafe_active_{false};
+		ros::Time odom_failsafe_deadline_{0};
+		bool suppress_manual_setpoint_{false};
+		bool auto_land_request_sent_{false};
+		ros::Time last_auto_land_request_time_{0};
+		Eigen::Vector3d last_safe_body_rate_{Eigen::Vector3d::Zero()};
+		double last_safe_normalized_thrust_{0.0};
+		bool last_safe_setpoint_valid_{false};
+		bool manual_setpoint_published_{false};
 
 		long int rmse_cnt_ = 0;
 		double rmse_sum_ = 0;
@@ -177,8 +187,12 @@ namespace PayloadMPC
 							   ros::Time &time, double dt);
 
 		void publish_bodyrate_ctrl(const Eigen::Ref<const Eigen::Matrix<real_t, kInputSize, 1>> predicted_input,
-								   const ros::Time &stamp);
+									   const ros::Time &stamp);
 		void publish_manual_ctrl(const ros::Time &stamp);
+		void publish_failsafe_hold(const ros::Time &stamp);
+		void enter_odom_failsafe(const char *reason);
+		void clear_autonomous_inputs();
+		bool odom_state_valid() const;
 
 		// ---- tools ----
 		void printandresetRMSE();
