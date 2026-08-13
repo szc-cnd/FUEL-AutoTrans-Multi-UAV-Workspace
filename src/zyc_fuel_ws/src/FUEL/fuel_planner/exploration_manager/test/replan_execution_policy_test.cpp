@@ -5,7 +5,6 @@
 int main() {
   using fast_planner::exploration_policy::shouldInterruptCurrentTrajectory;
   using fast_planner::exploration_policy::shouldReplanNearTrajectoryEnd;
-  using fast_planner::exploration_policy::shouldContinueCurrentTrajectoryAfterReplacementFailure;
   using fast_planner::exploration_policy::shouldPeriodicReplan;
   using fast_planner::exploration_policy::shouldBrakePublishedTrajectory;
   using fast_planner::exploration_policy::shouldMonitorPublishedTrajectory;
@@ -27,21 +26,8 @@ int main() {
   assert(!shouldBrakePublishedTrajectory(true, true, true));
   assert(!shouldBrakePublishedTrajectory(false, true, false));
 
-  // 长轨迹仍按剩余1s接续；0.6s短侧绕必须先执行到最后0.15s，不能发布即重规划。
-  assert(shouldReplanNearTrajectoryEnd(0.99, 1.0, 5.0));
-  assert(!shouldReplanNearTrajectoryEnd(1.01, 1.0, 5.0));
-  assert(!shouldReplanNearTrajectoryEnd(0.50, 1.0, 0.60));
-  assert(shouldReplanNearTrajectoryEnd(0.14, 1.0, 0.60));
-
-  // 替代规划失败时继续尚未走完的安全旧轨迹；已刹停、碰撞或到期都不得恢复。
-  assert(shouldContinueCurrentTrajectoryAfterReplacementFailure(
-      true, false, true, 0.40, 0.60));
-  assert(!shouldContinueCurrentTrajectoryAfterReplacementFailure(
-      true, true, true, 0.40, 0.60));
-  assert(!shouldContinueCurrentTrajectoryAfterReplacementFailure(
-      true, false, false, 0.40, 0.60));
-  assert(!shouldContinueCurrentTrajectoryAfterReplacementFailure(
-      true, false, true, 0.60, 0.60));
+  assert(shouldReplanNearTrajectoryEnd(0.99, 1.0));
+  assert(!shouldReplanNearTrajectoryEnd(1.01, 1.0));
 
   // 通道模式关闭无条件周期重规划；碰撞与临近终点由FSM的独立分支处理。
   assert(!shouldPeriodicReplan(30.0, 3.0, false));

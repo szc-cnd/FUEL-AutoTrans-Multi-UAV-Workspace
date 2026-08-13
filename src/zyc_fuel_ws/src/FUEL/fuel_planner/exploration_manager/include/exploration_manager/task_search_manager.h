@@ -46,8 +46,7 @@ public:
   bool isTaskPathAllowed(const std::vector<Eigen::Vector3d>& path) const;
   // 2026-07-28: 短回撤只豁免路径开头方向，门平面、旧通道和逐点障碍约束仍全部保留。
   bool isRecoveryPathAllowed(const std::vector<Eigen::Vector3d>& path,
-                             bool allow_initial_reverse,
-                             bool allow_staged_vertical_motion = false) const;
+                             bool allow_initial_reverse) const;
   double clampSearchHeight(double z) const;
   double preferredSearchHeight() const;
   // 2026-07-13: 窄通道任务点优先保持水平飞行，仅以有限步长向巡航高度收敛。
