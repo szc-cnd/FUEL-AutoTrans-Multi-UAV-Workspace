@@ -831,17 +831,48 @@ bool FastExplorationManager::buildWideSideBypass(
                           wide_side_bypass_min_lane_width_)
     return false;
 
+  const double left_lane_center =
+      0.5 * (split.left_free_min + split.left_free_max);
+  const double right_lane_center =
+      0.5 * (split.right_free_min + split.right_free_max);
+  auto knownFreeContinuationDepth = [&](double lane_center) {
+    double depth = 0.0;
+    for (double ahead = split.forward_distance + sample_step;
+         ahead <= wide_side_bypass_continuation_lookahead_ + 1e-6;
+         ahead += sample_step) {
+      if (!knownFree(ahead, lane_center)) break;
+      depth = ahead - split.forward_distance;
+    }
+    return depth;
+  };
+  const double left_continuation_depth =
+      knownFreeContinuationDepth(left_lane_center);
+  const double right_continuation_depth =
+      knownFreeContinuationDepth(right_lane_center);
+
   const double latched_right_alignment =
-      recovery_side_latched_
-          ? recovery_side_dir_.head<2>().dot(lateral.head<2>())
+      wide_side_lane_latched_
+          ? wide_side_lane_dir_.head<2>().dot(lateral.head<2>())
           : 0.0;
   const bool keep_latched_side =
-      recovery_side_latched_ && std::fabs(latched_right_alignment) >= 0.50;
-  const bool choose_right = task_search::chooseRightWideSideLane(
-      recovery_side_latched_, latched_right_alignment,
-      split.left_width, split.right_width);
+      wide_side_lane_latched_ && std::fabs(latched_right_alignment) >= 0.50;
+  bool choose_right = task_search::chooseRightWideSideLane(
+      wide_side_lane_latched_, latched_right_alignment,
+      split.left_width, split.right_width, left_continuation_depth,
+      right_continuation_depth, sample_step);
+  // 首次选择时不能让“后方更深”把选择导向低于最低净宽的通道；已经锁定
+  // 的通道若短时变窄则保持原侧等待，不能来回切换。
+  if (!keep_latched_side) {
+    if (split.left_width < wide_side_bypass_min_lane_width_ &&
+        split.right_width >= wide_side_bypass_min_lane_width_)
+      choose_right = true;
+    else if (split.right_width < wide_side_bypass_min_lane_width_ &&
+             split.left_width >= wide_side_bypass_min_lane_width_)
+      choose_right = false;
+  }
   const double chosen_width = choose_right ? split.right_width : split.left_width;
   const double other_width = choose_right ? split.left_width : split.right_width;
+  const double side_sign = choose_right ? 1.0 : -1.0;
   if (chosen_width < wide_side_bypass_min_lane_width_) {
     ROS_WARN_THROTTLE(
         0.5,
@@ -851,10 +882,17 @@ bool FastExplorationManager::buildWideSideBypass(
         wide_side_bypass_min_lane_width_);
     return false;
   }
+  if (!keep_latched_side) {
+    wide_side_lane_latched_ = true;
+    wide_side_lane_origin_ = pos;
+    wide_side_lane_dir_ = side_sign * lateral;
+    recovery_side_latched_ = true;
+    recovery_side_origin_ = pos;
+    recovery_side_dir_ = wide_side_lane_dir_;
+  }
   const double lane_min = choose_right ? split.right_free_min : split.left_free_min;
   const double lane_max = choose_right ? split.right_free_max : split.left_free_max;
   const double lane_center = 0.5 * (lane_min + lane_max);
-  const double side_sign = choose_right ? 1.0 : -1.0;
 
   struct BypassChoice {
     bool valid{false};
@@ -930,25 +968,25 @@ bool FastExplorationManager::buildWideSideBypass(
     ROS_WARN_THROTTLE(
         0.5,
         "[wide_side_bypass] split obstacle at %.2fm; widths left=%.2fm right=%.2fm, "
-        "preferred %s side has no safe horizontal step yet.",
+        "continuation left=%.2fm right=%.2fm, preferred %s side has no safe "
+        "horizontal step yet.",
         split.forward_distance, split.left_width, split.right_width,
+        left_continuation_depth, right_continuation_depth,
         choose_right ? "right" : "left");
     return false;
   }
 
   next_pos = best.target;
   next_yaw = cur_yaw;
-  if (!keep_latched_side) {
-    recovery_side_latched_ = true;
-    recovery_side_origin_ = pos;
-    recovery_side_dir_ = side_sign * lateral;
-  }
   if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
   ROS_WARN(
       "[wide_side_bypass] split obstacle at %.2fm, widths left=%.2fm right=%.2fm; "
-      "choose %s lane (%.2fm vs %.2fm), horizontal shift=%.2fm forward=%.2fm "
+      "continuation left=%.2fm right=%.2fm (checked to %.2fm); choose %s lane "
+      "(%.2fm vs %.2fm), horizontal shift=%.2fm forward=%.2fm "
       "target=(%.2f,%.2f,%.2f), path_clearance=%.2fm, keep yaw=%.1fdeg.",
       split.forward_distance, split.left_width, split.right_width,
+      left_continuation_depth, right_continuation_depth,
+      wide_side_bypass_continuation_lookahead_,
       choose_right ? "right" : "left", chosen_width, other_width,
       std::fabs(best.lateral_offset), best.forward_step, next_pos.x(), next_pos.y(),
       next_pos.z(), best.path_clearance, next_yaw * 180.0 / M_PI);
@@ -978,14 +1016,36 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
                           split_obstacle_detected))
     return true;
-  const double recovery_side_progress =
-      (pos - recovery_side_origin_).head<2>().norm();
-  if (task_search::shouldReleaseRecoverySide(
-          recovery_side_latched_, split_obstacle_detected,
-          recovery_side_progress, recovery_side_release_distance_)) {
-    recovery_side_latched_ = false;
-    ROS_WARN("[mission_exploration] side recovery released after %.2fm progress; "
-             "straight-forward priority restored.", recovery_side_release_distance_);
+  if (wide_side_lane_latched_) {
+    const double lane_progress =
+        (pos - wide_side_lane_origin_).head<2>().norm();
+    if (task_search::shouldReleaseRecoverySide(
+            wide_side_lane_latched_, split_obstacle_detected,
+            lane_progress, recovery_side_release_distance_)) {
+      wide_side_lane_latched_ = false;
+      recovery_side_latched_ = false;
+      ROS_WARN("[wide_side_bypass] locked split lane released after obstacle "
+               "disappeared and %.2fm progress.", lane_progress);
+    }
+  } else {
+    const double recovery_side_progress =
+        (pos - recovery_side_origin_).head<2>().norm();
+    if (task_search::shouldReleaseRecoverySide(
+            recovery_side_latched_, split_obstacle_detected,
+            recovery_side_progress, recovery_side_release_distance_)) {
+      recovery_side_latched_ = false;
+      ROS_WARN("[mission_exploration] side recovery released after %.2fm progress; "
+               "straight-forward priority restored.", recovery_side_release_distance_);
+    }
+  }
+  // 分流障碍仍在且所选通道暂时没有安全短步时，保持锁定并等待地图更新。
+  // 不能继续进入普通恢复枚举，否则直行或另一侧候选可能抢先返回。
+  if (split_obstacle_detected) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[wide_side_bypass] horizontal split remains, but the locked lane has no "
+        "safe side step; hold position and retry from the updated map.");
+    return false;
   }
   // 2026-07-28: 所有前向方向仍保持任务层顺序；短回撤候选改按目标点ESDF净空降序，
   // 让无人机优先退向通道中部，而不是因为±135度枚举顺序固定地退向某一侧墙。
@@ -1237,15 +1297,6 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
     return commitRecoveryChoice(best_micro_adjustment, true);
   if (long_side_fallback.valid)
     return commitRecoveryChoice(long_side_fallback, false);
-  // 已知是水平分流障碍时，下降不会绕过贯穿当前高度的占据区。较宽侧
-  // 暂时还不能落点就等待下一轮地图，不能让低位探测抢占并锁死水平重选。
-  if (split_obstacle_detected) {
-    ROS_WARN_THROTTLE(
-        0.5,
-        "[wide_side_bypass] horizontal split remains, but no safe side step is available; "
-        "skip vertical detour and retry from the updated map.");
-    return false;
-  }
   // 没有水平分流证据、也没有任何安全侧向候选时，才把已确认的低位
   // 通道交给原来的上下绕行逻辑。
   if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
@@ -1531,6 +1582,8 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
            wide_side_bypass_min_lookahead_, 0.20);
   nh.param("mission/wide_side_bypass/max_lookahead",
            wide_side_bypass_max_lookahead_, 0.90);
+  nh.param("mission/wide_side_bypass/continuation_lookahead",
+           wide_side_bypass_continuation_lookahead_, 2.00);
   nh.param("mission/wide_side_bypass/lateral_range",
            wide_side_bypass_lateral_range_, 0.90);
   nh.param("mission/wide_side_bypass/min_lane_width",
@@ -1563,6 +1616,9 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
       std::max(0.10, wide_side_bypass_min_lookahead_);
   wide_side_bypass_max_lookahead_ =
       std::max(wide_side_bypass_min_lookahead_, wide_side_bypass_max_lookahead_);
+  wide_side_bypass_continuation_lookahead_ =
+      std::max(wide_side_bypass_max_lookahead_,
+               wide_side_bypass_continuation_lookahead_);
   wide_side_bypass_lateral_range_ =
       std::max(0.30, wide_side_bypass_lateral_range_);
   wide_side_bypass_min_lane_width_ =
