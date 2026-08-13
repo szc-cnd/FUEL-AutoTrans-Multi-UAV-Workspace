@@ -1,5 +1,6 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <plan_env/metric_voxel_policy.h>
 #include <plan_env/sdf_map.h>
 #include <plan_env/raycast.h>
 
@@ -40,6 +41,7 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
   nh.param("manager/footprint_check_samples", footprint_check_samples_, 12);
   nh.param("manager/footprint_min_occupied_support",
            footprint_min_occupied_support_, 2);
+  nh.param("manager/footprint_support_radius", footprint_support_radius_, 0.10);
   nh.param("manager/supported_occupancy_hard_reject_enabled",
            supported_occupancy_hard_reject_enabled_, true);
   nh.param("manager/escape_max_initial_occupied_samples",
@@ -47,6 +49,7 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
   footprint_check_radius_ = std::max(0.0, footprint_check_radius_);
   footprint_check_samples_ = std::max(4, footprint_check_samples_);
   footprint_min_occupied_support_ = std::max(1, footprint_min_occupied_support_);
+  footprint_support_radius_ = std::max(0.0, footprint_support_radius_);
   escape_max_initial_occupied_samples_ =
       std::max(0, escape_max_initial_occupied_samples_);
 
@@ -185,23 +188,22 @@ bool FastPlannerManager::isSupportedOccupied(const Eigen::Vector3d& position) co
   }
   Eigen::Vector3i center;
   sdf_map_->posToIndex(position, center);
-  int support = 0;
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dz = -1; dz <= 1; ++dz) {
+  const int support_radius = std::max(
+      1, metric_voxel::radiusInVoxels(
+             footprint_support_radius_, sdf_map_->getResolution()));
+  const bool supported = metric_voxel::hasMinimumSupport(
+      support_radius, footprint_min_occupied_support_, true,
+      [&](int dx, int dy, int dz) {
         const Eigen::Vector3i neighbor = center + Eigen::Vector3i(dx, dy, dz);
-        if (sdf_map_->isInMap(neighbor) &&
-            sdf_map_->getOccupancy(neighbor) == SDFMap::OCCUPIED &&
-            ++support >= footprint_min_occupied_support_)
-          return true;
-      }
-    }
-  }
+        return sdf_map_->isInMap(neighbor) &&
+               sdf_map_->getOccupancy(neighbor) == SDFMap::OCCUPIED;
+      });
+  if (supported) return true;
   ROS_WARN_THROTTLE(0.5,
                     "[footprint_safety] ignore isolated occupied voxel at %.2f %.2f %.2f "
-                    "support=%d/%d.",
-                    position.x(), position.y(), position.z(), support,
-                    footprint_min_occupied_support_);
+                    "support_radius=%.2fm min_support=%d.",
+                    position.x(), position.y(), position.z(),
+                    footprint_support_radius_, footprint_min_occupied_support_);
   return false;
 }
 

@@ -78,7 +78,8 @@
     <param name="sdf_map/obstacles_inflation"     value="0.099" />
 
     <param name="sdf_map/local_bound_inflate"    value="0.5"/>
-    <param name="sdf_map/local_map_margin" value="50"/>
+    <!-- 0.05m体素下保留5m的ESDF发布边距。 -->
+    <param name="sdf_map/local_map_margin" value="100"/>
     <param name="sdf_map/ground_height"        value="-1.0"/>
     <param name="sdf_map/default_dist"        value="0.0"/>
     
@@ -92,7 +93,8 @@
     <param name="sdf_map/inflation_noise_filter_enabled" value="true" type="bool"/>
     <param name="sdf_map/inflation_min_hit_evidence" value="2" type="int"/>
     <param name="sdf_map/inflation_min_neighbors" value="2" type="int"/>
-    <param name="sdf_map/inflation_vertical_radius" value="2" type="int"/>
+    <param name="sdf_map/inflation_neighbor_radius" value="0.10" type="double"/>
+    <param name="sdf_map/inflation_vertical_radius" value="4" type="int"/>
 
     <!-- 2026-07-08: 为了让无人机能在大房间里看见通道另一侧的未知区，恢复到更接近 FUEL 原始探索距离的雷达建图射线长度。 -->
     <param name="sdf_map/min_ray_length" value="0.5"/>
@@ -173,7 +175,7 @@
     <!--by chen-->
     <param name="cmu_exploration" value="false" type="bool"/>
     <!---->
-    <param name="frontier/cluster_min" value="100" type="int"/>
+    <param name="frontier/cluster_min" value="400" type="int"/>
     <param name="frontier/cluster_size_xy" value="2.0" type="double"/>
     <param name="frontier/cluster_size_z" value="10.0" type="double"/>
     <param name="frontier/min_candidate_dist" value="0.75" type="double"/>
@@ -184,7 +186,7 @@
     <!-- 2026-07-08: 将视角采样半径缩到更适合狭窄通道的范围，避免围绕 frontier 采样的位置大多落进墙体或通道外。 -->
     <param name="frontier/candidate_rmin" value="0.8" type="double"/>
     <param name="frontier/candidate_rmax" value="1.8" type="double"/>
-    <param name="frontier/down_sample" value="3" type="int"/>;
+    <param name="frontier/down_sample" value="6" type="int"/>;
     <!-- 2026-07-08: 雷达在通道口看到的有效 frontier 体素更稀，降低最小可见体素数，减少被丢进 dormant_frontiers 的概率。 -->
     <param name="frontier/min_visib_num" value="6" type="int"/>;
     <param name="frontier/min_view_finish_fraction" value="0.2" type="double"/>;
@@ -218,6 +220,7 @@
     <param name="manager/footprint_check_radius" value="0.18" type="double"/>
     <param name="manager/footprint_check_samples" value="12" type="int"/>
     <param name="manager/footprint_min_occupied_support" value="2" type="int"/>
+    <param name="manager/footprint_support_radius" value="0.10" type="double"/>
     <param name="manager/supported_occupancy_hard_reject_enabled" value="true" type="bool"/>
     <!-- 2026-07-16: 控制点间距缩到0.25m，使轨迹在窄道拐角更贴近已验证A*折线。 -->
     <param name="manager/control_points_distance" value="0.25" type="double"/>

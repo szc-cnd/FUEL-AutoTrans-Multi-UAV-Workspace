@@ -104,6 +104,7 @@ struct MapParam {
   bool inflation_noise_filter_enabled_;
   int inflation_min_hit_evidence_;
   int inflation_min_neighbors_;
+  double inflation_neighbor_radius_;
   int inflation_vertical_radius_;
   double local_bound_inflate_;
   int local_map_margin_;

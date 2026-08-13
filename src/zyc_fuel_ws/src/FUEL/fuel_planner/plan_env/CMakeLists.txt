@@ -58,3 +58,9 @@ add_executable(obj_generator
     )
 target_link_libraries(obj_generator 
     ${catkin_LIBRARIES})
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(metric_voxel_policy_test
+      test/metric_voxel_policy_test.cpp)
+  add_test(NAME metric_voxel_policy_test COMMAND metric_voxel_policy_test)
+endif()
