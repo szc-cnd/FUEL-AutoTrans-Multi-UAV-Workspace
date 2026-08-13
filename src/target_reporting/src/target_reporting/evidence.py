@@ -35,6 +35,16 @@ class TimestampedImageCache:
             return None
         return best_stamp, best_image.copy()
 
+    def has_match(self, source, stamp, tolerance_s):
+        """Check for a timestamp match without copying a full image."""
+        target_stamp = float(stamp)
+        tolerance_s = float(tolerance_s)
+        with self._lock:
+            return any(
+                abs(image_stamp - target_stamp) <= tolerance_s
+                for image_stamp, _image in self._items.get(source, ())
+            )
+
 
 def evidence_overlay_layout(image_shape, line_count, margin=12, line_height=22):
     """Return the top and height of the dedicated bottom evidence panel."""

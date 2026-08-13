@@ -28,6 +28,9 @@ class EvidenceLayoutTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertAlmostEqual(10.0, match[0])
         self.assertEqual(image.shape, match[1].shape)
+        self.assertTrue(cache.has_match("color", 10.01, 0.03))
+        self.assertFalse(cache.has_match("color", 10.20, 0.03))
+        self.assertFalse(cache.has_match("thermal_d435", 10.0, 0.10))
 
     def test_overlay_is_reserved_at_bottom_of_image(self):
         y0, panel_height = evidence_overlay_layout((480, 640, 3), line_count=5)

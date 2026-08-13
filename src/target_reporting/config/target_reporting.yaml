@@ -28,6 +28,8 @@ dedup_distance_m: 0.30
 image_match_tolerance_s: 0.03
 # D435 和热成像不是硬件同步曝光，允许选择时间上最近的 D435 标注帧。
 d435_image_match_tolerance_s: 0.10
+# 热源必须先匹配到同时间的 D435 映射帧，才开始正式确认和双图上传。
+require_thermal_d435_evidence: true
 # 候选状态 stamp 与 PointStamped 的允许配对误差。
 source_match_tolerance_s: 0.03
 image_wait_timeout_s: 0.50

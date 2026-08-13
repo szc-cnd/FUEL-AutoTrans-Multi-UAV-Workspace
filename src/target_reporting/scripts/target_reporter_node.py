@@ -52,6 +52,9 @@ class TargetReporterNode:
             0.0,
             float(rospy.get_param("~d435_image_match_tolerance_s", 0.10)),
         )
+        self.require_thermal_d435_evidence = bool(
+            rospy.get_param("~require_thermal_d435_evidence", True)
+        )
         self.source_match_tolerance = max(
             0.0,
             float(
@@ -329,12 +332,21 @@ class TargetReporterNode:
         )
         result["detector_stable"] = detector_stable
         result["detector_confirmable"] = detector_confirmable
+        evidence_ready = True
+        if source == "thermal" and self.require_thermal_d435_evidence:
+            # Thermal detection becomes stable before the D435 mapping stream
+            # finishes its exposure warm-up.  Do not consume confirmation hits
+            # until a same-time mapping frame exists, otherwise the one-shot
+            # confirmed event can never attach/upload its D435 evidence.
+            evidence_ready = self.images.has_match(
+                "thermal_d435", event_stamp, self.d435_image_tolerance
+            )
         with self.candidate_lock:
             candidate, confirmed = self.tracker.update(
                 target_type,
                 result,
                 position,
-                allow_confirmation=detector_confirmable,
+                allow_confirmation=detector_confirmable and evidence_ready,
                 timestamp=event_stamp,
             )
             candidate_number = candidate["local_number"]
