@@ -19,6 +19,7 @@ class CandidateTracker:
         confirm_hits=1,
         confirm_hits_by_type=None,
         confirmation_max_gap_s_by_type=None,
+        confirmation_duration_s_by_type=None,
     ):
         self.distance_m = float(distance_m)
         self.confirm_hits = max(1, int(confirm_hits))
@@ -29,6 +30,10 @@ class CandidateTracker:
         self.confirmation_max_gap_s_by_type = {
             str(key): max(0.0, float(value))
             for key, value in (confirmation_max_gap_s_by_type or {}).items()
+        }
+        self.confirmation_duration_s_by_type = {
+            str(key): max(0.0, float(value))
+            for key, value in (confirmation_duration_s_by_type or {}).items()
         }
         self._items = []
         self._next = {}
@@ -83,6 +88,7 @@ class CandidateTracker:
                 "position": dict(position),
                 "hits": 0,
                 "last_confirmation_stamp": None,
+                "first_confirmation_stamp": None,
                 "reported": False,
                 "local_number": number,
             }
@@ -93,6 +99,7 @@ class CandidateTracker:
             if not best["reported"]:
                 best["hits"] = 0
                 best["last_confirmation_stamp"] = None
+                best["first_confirmation_stamp"] = None
             for axis in ("x", "y", "z"):
                 best["position"][axis] = float(position[axis])
             return best, False
@@ -107,9 +114,12 @@ class CandidateTracker:
             and (current_stamp < last_stamp or current_stamp - last_stamp > max_gap)
         ):
             best["hits"] = 0
+            best["first_confirmation_stamp"] = None
 
         best["hits"] += 1
         if current_stamp is not None:
+            if best.get("first_confirmation_stamp") is None:
+                best["first_confirmation_stamp"] = current_stamp
             best["last_confirmation_stamp"] = current_stamp
         alpha = 1.0 / best["hits"]
         for axis in ("x", "y", "z"):
@@ -117,7 +127,20 @@ class CandidateTracker:
         required_hits = self.confirm_hits_by_type.get(
             target_type, self.confirm_hits
         )
-        newly_confirmed = best["hits"] >= required_hits and not best["reported"]
+        required_duration = self.confirmation_duration_s_by_type.get(
+            target_type, 0.0
+        )
+        first_stamp = best.get("first_confirmation_stamp")
+        observed_duration = (
+            current_stamp - first_stamp
+            if current_stamp is not None and first_stamp is not None
+            else 0.0
+        )
+        newly_confirmed = (
+            best["hits"] >= required_hits
+            and observed_duration >= required_duration
+            and not best["reported"]
+        )
         if newly_confirmed:
             best["reported"] = True
         return best, newly_confirmed

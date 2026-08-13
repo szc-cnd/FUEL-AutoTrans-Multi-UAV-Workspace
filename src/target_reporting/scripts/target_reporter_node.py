@@ -55,6 +55,10 @@ class TargetReporterNode:
         self.require_thermal_d435_evidence = bool(
             rospy.get_param("~require_thermal_d435_evidence", True)
         )
+        self.thermal_d435_ready_tolerance = max(
+            self.d435_image_tolerance,
+            float(rospy.get_param("~thermal_d435_ready_tolerance_s", 0.50)),
+        )
         self.source_match_tolerance = max(
             0.0,
             float(
@@ -82,6 +86,11 @@ class TargetReporterNode:
             confirmation_max_gap_s_by_type={
                 "thermal_source": rospy.get_param(
                     "~thermal_confirmation_max_gap_s", 0.25
+                )
+            },
+            confirmation_duration_s_by_type={
+                "thermal_source": rospy.get_param(
+                    "~thermal_confirmation_duration_s", 1.0
                 )
             },
         )
@@ -339,7 +348,9 @@ class TargetReporterNode:
             # until a same-time mapping frame exists, otherwise the one-shot
             # confirmed event can never attach/upload its D435 evidence.
             evidence_ready = self.images.has_match(
-                "thermal_d435", event_stamp, self.d435_image_tolerance
+                "thermal_d435",
+                event_stamp,
+                self.thermal_d435_ready_tolerance,
             )
         with self.candidate_lock:
             candidate, confirmed = self.tracker.update(

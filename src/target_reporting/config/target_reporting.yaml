@@ -19,17 +19,20 @@ image_port: 5001
 record_root: "~/target_reports"
 # 颜色标签和二维码由检测器完成确认，上报层对它们只做空间去重。
 confirm_hits: 1
-# 热源使用世界坐标连续确认：20 Hz 下约需稳定 1 秒；中断超过 0.25 秒重新累计。
-thermal_confirm_hits: 20
-thermal_confirmation_max_gap_s: 0.25
+# 热源在世界坐标稳定满 1 秒且至少有 3 次有效观测后确认。
+thermal_confirm_hits: 3
+thermal_confirmation_duration_s: 1.0
+# 允许 TF/不同帧率导致的短暂间隔，超过后重新累计。
+thermal_confirmation_max_gap_s: 0.50
 # 非空二维码内容优先作为目标身份；相同内容即使定位漂移超过本距离也不会重复上报。
 dedup_distance_m: 0.30
 # 证据图必须与确认点使用同一检测帧；不再使用前后 0.5 秒的旧图。
 image_match_tolerance_s: 0.03
 # D435 和热成像不是硬件同步曝光，允许选择时间上最近的 D435 标注帧。
-d435_image_match_tolerance_s: 0.10
+d435_image_match_tolerance_s: 0.15
 # 热源必须先匹配到同时间的 D435 映射帧，才开始正式确认和双图上传。
 require_thermal_d435_evidence: true
+thermal_d435_ready_tolerance_s: 0.50
 # 候选状态 stamp 与 PointStamped 的允许配对误差。
 source_match_tolerance_s: 0.03
 image_wait_timeout_s: 0.50

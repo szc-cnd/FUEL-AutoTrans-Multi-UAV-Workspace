@@ -261,6 +261,25 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(confirmed)
         self.assertEqual(1, candidate["hits"])
 
+    def test_thermal_confirmation_requires_elapsed_stability_time(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.5},
+            confirmation_duration_s_by_type={"thermal_source": 1.0},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        for stamp in (10.0, 10.2, 10.5, 10.8):
+            _, confirmed = tracker.update(
+                "thermal_source", {}, position, timestamp=stamp
+            )
+            self.assertFalse(confirmed)
+        candidate, confirmed = tracker.update(
+            "thermal_source", {}, position, timestamp=11.0
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(5, candidate["hits"])
+
 
 if __name__ == "__main__":
     unittest.main()
