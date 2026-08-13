@@ -130,8 +130,6 @@
 
     <!-- Fsm -->
     <param name="fsm/thresh_replan1" value="1.0" type="double"/>
-    <!-- 短恢复轨迹至少执行0.35s，避免刚发布就因剩余不足1s再次重规划。 -->
-    <param name="fsm/min_execution_before_near_end_replan" value="0.35" type="double"/>
     <param name="fsm/thresh_replan2" value="0.5" type="double"/>
     <!-- 2026-07-20: 周期重规划由1.2s放宽到3.0s，减少安全长轨迹尚未推进就被重复替换；20Hz碰撞检查保持不变。 -->
     <param name="fsm/thresh_replan3" value="3.0" type="double"/>

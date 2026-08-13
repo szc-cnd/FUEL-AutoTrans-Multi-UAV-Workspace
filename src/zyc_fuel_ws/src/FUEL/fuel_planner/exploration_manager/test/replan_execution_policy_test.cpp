@@ -26,10 +26,8 @@ int main() {
   assert(!shouldBrakePublishedTrajectory(true, true, true));
   assert(!shouldBrakePublishedTrajectory(false, true, false));
 
-  // 新发布的短恢复轨迹不能因为总时长不足1秒而立即触发下一轮规划。
-  assert(!shouldReplanNearTrajectoryEnd(0.20, 0.10, 1.0, 0.35));
-  assert(shouldReplanNearTrajectoryEnd(0.35, 0.10, 1.0, 0.35));
-  assert(!shouldReplanNearTrajectoryEnd(0.80, 1.01, 1.0, 0.35));
+  assert(shouldReplanNearTrajectoryEnd(0.99, 1.0));
+  assert(!shouldReplanNearTrajectoryEnd(1.01, 1.0));
 
   // 通道模式关闭无条件周期重规划；碰撞与临近终点由FSM的独立分支处理。
   assert(!shouldPeriodicReplan(30.0, 3.0, false));

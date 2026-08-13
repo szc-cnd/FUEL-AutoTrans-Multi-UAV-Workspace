@@ -58,7 +58,3 @@ add_executable(obj_generator
     )
 target_link_libraries(obj_generator 
     ${catkin_LIBRARIES})
-
-# 结构化静态占据策略为纯逻辑测试，不依赖ROS运行时。
-add_executable(static_occupancy_policy_test
-    test/static_occupancy_policy_test.cpp)

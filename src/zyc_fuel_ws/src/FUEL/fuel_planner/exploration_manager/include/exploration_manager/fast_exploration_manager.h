@@ -105,21 +105,16 @@ private:
   Vector3d recovery_side_origin_{0.0, 0.0, 0.0};
   Vector3d recovery_side_dir_{1.0, 0.0, 0.0};
   double recovery_side_release_distance_{0.20};
-  // 前方竖直障碍把通道横向分开时，优先锁定净宽更大或后方延伸更深的一侧。
+  // 前方竖直障碍把通道横向分开时，优先横移到占据地图中净宽更大的一侧。
   bool wide_side_bypass_enabled_{true};
   double wide_side_bypass_min_lookahead_{0.20};
   double wide_side_bypass_max_lookahead_{0.90};
-  double wide_side_bypass_continuation_lookahead_{2.00};
   double wide_side_bypass_lateral_range_{0.90};
   double wide_side_bypass_min_lane_width_{0.25};
   double wide_side_bypass_max_lateral_step_{0.45};
   double wide_side_bypass_forward_step_{0.20};
   double wide_side_bypass_low_support_height_{0.20};
   int wide_side_bypass_min_vertical_support_layers_{2};
-  // 分流障碍首次选定通道后独立锁定，不能由普通恢复侧提前替它做决定。
-  bool wide_side_lane_latched_{false};
-  Vector3d wide_side_lane_origin_{0.0, 0.0, 0.0};
-  Vector3d wide_side_lane_dir_{1.0, 0.0, 0.0};
   // 可选的一次性短回撤；比赛窄通道默认关闭。
   bool short_backtrack_enabled_{false};
   bool short_backtrack_latched_{false};

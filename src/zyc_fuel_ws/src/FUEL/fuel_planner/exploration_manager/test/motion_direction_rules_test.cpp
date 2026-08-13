@@ -65,32 +65,6 @@ int main() {
   assert(fast_planner::task_search::holdYawForLateralTranslation(0.70));
   assert(!fast_planner::task_search::holdYawForLateralTranslation(0.71));
 
-  // 净宽明显不同时必须选更宽侧，不能被后方少量自由空间反向覆盖。
-  assert(!fast_planner::task_search::chooseRightWideSideLane(
-      false, 0.0, 0.80, 0.40, 0.20, 0.80, 0.10));
-  assert(fast_planner::task_search::chooseRightWideSideLane(
-      false, 0.0, 0.40, 0.80, 0.80, 0.20, 0.10));
-  // 净宽只差一个体素以内时，选择障碍后方已知自由通道延伸更深的一侧。
-  assert(fast_planner::task_search::chooseRightWideSideLane(
-      false, 0.0, 0.60, 0.65, 0.20, 0.60, 0.10));
-  assert(!fast_planner::task_search::chooseRightWideSideLane(
-      false, 0.0, 0.65, 0.60, 0.70, 0.30, 0.10));
-  // 宽度和后方深度完全相同时固定选左，不使用随机结果。
-  assert(!fast_planner::task_search::chooseRightWideSideLane(
-      false, 0.0, 0.60, 0.60, 0.70, 0.70, 0.10));
-  // 分流障碍首次选定一侧后，即使另一侧短时测得更宽，也保持原世界方向。
-  assert(fast_planner::task_search::chooseRightWideSideLane(
-      true, 1.0, 0.80, 0.40, 0.80, 0.20, 0.10));
-  assert(!fast_planner::task_search::chooseRightWideSideLane(
-      true, -1.0, 0.40, 0.80, 0.20, 0.80, 0.10));
-  // 只走够距离不解锁；必须同时确认分流障碍已经消失。
-  assert(!fast_planner::task_search::shouldReleaseRecoverySide(
-      true, true, 0.60, 0.20));
-  assert(!fast_planner::task_search::shouldReleaseRecoverySide(
-      true, false, 0.19, 0.20));
-  assert(fast_planner::task_search::shouldReleaseRecoverySide(
-      true, false, 0.20, 0.20));
-
   // 拐角近场允许只有外墙连续；远场还会单独要求新方向重新形成稳定双墙。
   assert(fast_planner::task_search::mappedContourSupportsTurn(true, 3, 0, 2));
   assert(fast_planner::task_search::mappedContourSupportsTurn(true, 0, 3, 2));

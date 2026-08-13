@@ -23,8 +23,6 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/thresh_replan2", fp_->replan_thresh2_, -1.0);
   nh.param("fsm/thresh_replan3", fp_->replan_thresh3_, -1.0);
   nh.param("fsm/replan_time", fp_->replan_time_, -1.0);
-  nh.param("fsm/min_execution_before_near_end_replan",
-           fp_->min_execution_before_near_end_replan_, 0.35);
   // 2026-07-13: 最新日志出现 0.35~0.44m 跟踪误差，超过机体安全余量时不允许继续执行旧轨迹。
   nh.param("fsm/max_tracking_error_xy", fp_->max_tracking_error_xy_, 0.30);
   nh.param("fsm/max_tracking_error_z", fp_->max_tracking_error_z_, 0.25);
@@ -355,8 +353,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         return;
       }
       if (exploration_policy::shouldReplanNearTrajectoryEnd(
-              t_cur, time_to_end, fp_->replan_thresh1_,
-              fp_->min_execution_before_near_end_replan_)) {
+              time_to_end, fp_->replan_thresh1_)) {
         transitState(PLAN_TRAJ, "FSM");
         ROS_WARN("Replan: traj fully executed=================================");
         return;
