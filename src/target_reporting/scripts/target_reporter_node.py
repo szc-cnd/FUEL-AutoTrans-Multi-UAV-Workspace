@@ -15,7 +15,12 @@ from std_msgs.msg import Bool, String
 
 from target_reporting.adapters import parse_color_status, parse_qr_status, parse_thermal_status
 from target_reporting.candidates import CandidateTracker
-from target_reporting.evidence import TimestampedImageCache, build_evidence_jpeg, image_metadata
+from target_reporting.evidence import (
+    TimestampedImageCache,
+    build_evidence_jpeg,
+    encode_jpeg,
+    image_metadata,
+)
 from target_reporting.model import Position, TargetEvent
 from target_reporting.store import MissionStore
 from target_reporting.transport import ImageAckClient, JsonAckClient, LatestJsonClient
@@ -391,11 +396,10 @@ class TargetReporterNode:
                 d435_image_id = "{}_seq{:06d}_thermal_source_d435.jpg".format(
                     self.drone_id, event_seq
                 )
-                d435_jpeg = build_evidence_jpeg(
-                    d435_image,
-                    event,
-                    (point.point.x, point.point.y, point.point.z),
-                )
+                # The D435 fusion debug image already contains status, mapped
+                # box, pixel, depth and XYZ.  Keep it full-frame and avoid a
+                # duplicate evidence panel obscuring the lower image region.
+                d435_jpeg = encode_jpeg(d435_image)
                 event["d435_image"] = image_metadata(d435_image_id, d435_jpeg)
                 self.store.save_image(d435_image_id, d435_jpeg)
             else:

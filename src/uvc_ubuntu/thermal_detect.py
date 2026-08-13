@@ -324,24 +324,39 @@ def draw_debug(gray, detection, stable_detected=None, stable_count=None, stable_
             markerSize=12,
             thickness=2,
         )
-        status = (
-            f"candidate=True stable={bool(stable_detected)} "
-            f"{int(stable_count)}/{int(stable_window)} pixel=({cx},{cy}) "
-            f"border={bool(detection.get('touches_roi_border', False))}"
-        )
+        status_lines = [
+            "cand=%d stable=%d hits=%d/%d"
+            % (
+                1,
+                int(bool(stable_detected)),
+                int(stable_count),
+                int(stable_window),
+            ),
+            "pixel=(%d,%d) border=%d"
+            % (
+                cx,
+                cy,
+                int(bool(detection.get("touches_roi_border", False))),
+            ),
+        ]
     else:
-        status = "candidate=False stable=False pixel=(-1,-1)"
+        status_lines = ["cand=0 stable=0 hits=0/%d" % int(stable_window)]
 
-    cv2.putText(debug, status, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
-    cv2.putText(
-        debug,
-        f"thr={detection['threshold']:.1f} area={detection['area']:.1f}",
-        (8, 44),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (0, 255, 255),
-        1,
+    status_lines.append(
+        "thr=%.1f area=%.1f"
+        % (detection["threshold"], detection["area"])
     )
+    for line_index, line in enumerate(status_lines):
+        cv2.putText(
+            debug,
+            line,
+            (8, 20 + line_index * 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
     return debug
 
 

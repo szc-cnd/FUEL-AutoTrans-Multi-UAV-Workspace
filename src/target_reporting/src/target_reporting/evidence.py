@@ -59,6 +59,35 @@ def _finite_float(value):
     return value if math.isfinite(value) else None
 
 
+def wrap_evidence_lines(lines, max_width, font_scale=0.50, thickness=1):
+    """Wrap evidence text using rendered pixel width instead of character count."""
+    import cv2
+
+    max_width = max(1, int(max_width))
+    wrapped = []
+    for source_line in lines:
+        words = str(source_line).split()
+        if not words:
+            wrapped.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = current + " " + word
+            width = cv2.getTextSize(
+                candidate,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                thickness,
+            )[0][0]
+            if width <= max_width:
+                current = candidate
+            else:
+                wrapped.append(current)
+                current = word
+        wrapped.append(current)
+    return wrapped
+
+
 def _image_points(value):
     """Convert detector points ({u,v} or [u,v]) into a finite Nx2 array."""
     import numpy as np
@@ -156,8 +185,9 @@ def draw_detection_overlay(image, event):
 
 def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
     import cv2
+    import numpy as np
 
-    canvas = image.copy()
+    source_image = image.copy()
     position = event["position"]
     geometry_keys = {
         "points", "bbox", "center_u", "center_v", "u", "v", "cx", "cy",
@@ -178,13 +208,15 @@ def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
     if camera_xyz is not None:
         lines.insert(1, "Camera: X={:.3f} Y={:.3f} Z={:.3f} m".format(*camera_xyz))
 
-    height, width = canvas.shape[:2]
-    panel_top, panel_height = evidence_overlay_layout(canvas.shape, len(lines))
-    panel = canvas.copy()
-    cv2.rectangle(panel, (0, panel_top), (width - 1, height - 1), (0, 0, 0), -1)
-    cv2.addWeighted(panel, 0.62, canvas, 0.38, 0, canvas)
+    height, width = source_image.shape[:2]
+    lines = wrap_evidence_lines(lines, width - 24)
+    _, panel_height = evidence_overlay_layout(source_image.shape, len(lines))
+    # Evidence text lives below the detector image instead of covering its
+    # lower half.  This is especially important for the 384x288 thermal view.
+    canvas = np.zeros((height + panel_height, width, 3), dtype=np.uint8)
+    canvas[:height] = source_image
 
-    y = panel_top + 29
+    y = height + 29
     for line in lines:
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(canvas, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
@@ -194,6 +226,18 @@ def build_evidence_jpeg(image, event, camera_xyz=None, quality=85):
     # target_reporting only adds the bottom evidence information panel and
     # does not redraw a generic orange confirmation box.
     ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    if not ok:
+        raise ValueError("JPEG encoding failed")
+    return encoded.tobytes()
+
+
+def encode_jpeg(image, quality=85):
+    """Encode an existing annotated image without adding another text panel."""
+    import cv2
+
+    ok, encoded = cv2.imencode(
+        ".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+    )
     if not ok:
         raise ValueError("JPEG encoding failed")
     return encoded.tobytes()

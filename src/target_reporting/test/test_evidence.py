@@ -12,7 +12,9 @@ from target_reporting import evidence
 from target_reporting.evidence import (
     TimestampedImageCache,
     draw_detection_overlay,
+    encode_jpeg,
     evidence_overlay_layout,
+    wrap_evidence_lines,
 )
 
 
@@ -82,6 +84,35 @@ class EvidenceLayoutTests(unittest.TestCase):
         ):
             jpeg = evidence.build_evidence_jpeg(image, event)
         self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+        import cv2
+        decoded = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(320, decoded.shape[1])
+        self.assertGreater(decoded.shape[0], 240)
+
+    def test_plain_jpeg_keeps_d435_image_dimensions(self):
+        import cv2
+
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        jpeg = encode_jpeg(image)
+        decoded = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual((720, 1280, 3), decoded.shape)
+
+    def test_evidence_text_wraps_to_thermal_image_width(self):
+        import cv2
+
+        lines = wrap_evidence_lines(
+            [
+                "thermal_source detected=True, detector_stable=True, "
+                "detector_confirmable=True"
+            ],
+            384 - 24,
+        )
+        self.assertGreater(len(lines), 1)
+        for line in lines:
+            width = cv2.getTextSize(
+                line, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1
+            )[0][0]
+            self.assertLessEqual(width, 384 - 24)
 
 
 if __name__ == "__main__":
