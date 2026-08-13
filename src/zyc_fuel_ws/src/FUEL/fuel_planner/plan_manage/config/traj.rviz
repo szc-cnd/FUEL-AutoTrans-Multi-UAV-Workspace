@@ -353,17 +353,17 @@ Visualization Manager:
           Queue Size: 100
           Value: true
         - Class: rviz/Image
-          Enabled: false
-          Image Topic: /image_converter/output_video
+          Enabled: true
+          Image Topic: /UAV0/thermal/d435_debug_image
           Max Value: 1
           Median window: 5
           Min Value: 0
-          Name: depth
+          Name: thermal_d435_mapping
           Normalize Range: true
           Queue Size: 2
           Transport Hint: raw
           Unreliable: false
-          Value: false
+          Value: true
       Enabled: true
       Name: active_perception
     - Class: rviz/Group
