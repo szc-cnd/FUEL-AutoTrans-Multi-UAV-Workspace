@@ -93,6 +93,42 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            recovery_turn_wall_max_half_width_, 1.05);
   nh.param("mission/task_search/recovery/turn_min_wall_support",
            recovery_turn_min_wall_support_, 2);
+  nh.param("mission/task_search/recovery/turn_confirmation_count",
+           recovery_turn_confirmation_count_, 2);
+  nh.param("mission/task_search/recovery/turn_confirmation_min_interval",
+           recovery_turn_confirmation_min_interval_, 0.15);
+  nh.param("mission/task_search/recovery/turn_confirmation_angle_deg",
+           recovery_turn_confirmation_angle_deg_, 15.0);
+  nh.param("mission/task_search/recovery/turn_confirmation_accumulation_window",
+           recovery_turn_confirmation_accumulation_window_, 8.0);
+  nh.param("mission/task_search/recovery/turn_long_view_length",
+           recovery_turn_long_view_length_, 4.50);
+  nh.param("mission/task_search/recovery/turn_long_view_step",
+           recovery_turn_long_view_step_, 0.25);
+  nh.param("mission/task_search/recovery/turn_long_view_min_depth",
+           recovery_turn_long_view_min_depth_, 2.00);
+  nh.param("mission/task_search/recovery/turn_long_view_min_free_sections",
+           recovery_turn_long_view_min_free_sections_, 5);
+  nh.param("mission/task_search/recovery/turn_long_view_min_wall_sections",
+           recovery_turn_long_view_min_wall_sections_, 3);
+  nh.param("mission/task_search/recovery/turn_long_view_min_paired_wall_sections",
+           recovery_turn_long_view_min_paired_wall_sections_, 4);
+  nh.param("mission/task_search/recovery/turn_long_view_width_tolerance",
+           recovery_turn_long_view_width_tolerance_, 0.30);
+  nh.param("mission/task_search/recovery/turn_long_view_center_tolerance",
+           recovery_turn_long_view_center_tolerance_, 0.25);
+  nh.param("mission/task_search/recovery/turn_no_return_margin",
+           recovery_turn_no_return_margin_, 0.20);
+  nh.param("mission/task_search/recovery/turn_yaw_release_angle_deg",
+           recovery_turn_yaw_release_angle_deg_, 15.0);
+  recovery_turn_confirmation_count_ =
+      std::max(1, recovery_turn_confirmation_count_);
+  recovery_turn_confirmation_min_interval_ =
+      std::max(0.05, recovery_turn_confirmation_min_interval_);
+  recovery_turn_confirmation_angle_deg_ =
+      std::max(3.0, std::min(30.0, recovery_turn_confirmation_angle_deg_));
+  recovery_turn_confirmation_accumulation_window_ =
+      std::max(0.5, recovery_turn_confirmation_accumulation_window_);
 
   // 2026-07-13: 第三阶段基于累计占据地图的拓扑距离推断出口，二维码未确认时只扫描不降落。
   nh.param("mission/task_search/exit/enabled", exit_detection_enabled_, true);
@@ -348,6 +384,7 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
     latest_robot_pos_ = pos;
     latest_robot_yaw_ = yaw;
     latest_robot_pose_valid_ = true;
+    ++latest_robot_pose_sequence_;
   }
   // 2026-07-23: 用入口门平面只做一次“起点外 -> 通道内”锁存；之后不再根据局部几何
   // 反复重定义内外。0.35m滞回避免刚过门平面时的里程计抖动。
@@ -388,6 +425,63 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
     }
   }
   (void)yaw;
+}
+
+void TaskSearchManager::clearPendingTurnEvidence() {
+  pending_turn_confirmations_ = 0;
+  pending_turn_probe_origin_valid_ = false;
+  pending_turn_last_evidence_ = ros::Time(0);
+  pending_turn_pose_sequence_ = 0;
+}
+
+bool TaskSearchManager::confirmCorridorTurnEvidence(
+    const Eigen::Vector3d& turn_direction) {
+  const ros::Time now = ros::Time::now();
+  if (turn_direction.head<2>().norm() < 1e-3) return false;
+
+  const Eigen::Vector2d observed = turn_direction.head<2>().normalized();
+  const double elapsed = pending_turn_last_evidence_.isZero()
+                             ? std::numeric_limits<double>::infinity()
+                             : (now - pending_turn_last_evidence_).toSec();
+  const double angular_tolerance =
+      recovery_turn_confirmation_angle_deg_ * M_PI / 180.0;
+  const bool direction_consistent =
+      pending_turn_confirmations_ > 0 &&
+      std::acos(std::max(-1.0, std::min(1.0,
+                                      pending_turn_direction_.dot(observed)))) <=
+          angular_tolerance;
+  // 在时间窗内累计同方向证据，不要求相邻规划周期连续命中。中间地图暂时缺失
+  // 不清票；只有方向明显改变或时间窗过期才重新计数。
+  if (!direction_consistent ||
+      elapsed > recovery_turn_confirmation_accumulation_window_) {
+    pending_turn_direction_ = observed;
+    pending_turn_probe_origin_ = visited_positions_.empty()
+                                     ? latest_robot_pos_
+                                     : visited_positions_.back();
+    pending_turn_probe_origin_valid_ = true;
+    pending_turn_confirmations_ = 1;
+    pending_turn_last_evidence_ = now;
+    pending_turn_pose_sequence_ = latest_robot_pose_sequence_;
+  } else if (elapsed >= recovery_turn_confirmation_min_interval_ &&
+             latest_robot_pose_sequence_ != pending_turn_pose_sequence_) {
+    pending_turn_direction_ =
+        (pending_turn_direction_ * pending_turn_confirmations_ + observed).normalized();
+    ++pending_turn_confirmations_;
+    pending_turn_last_evidence_ = now;
+    pending_turn_pose_sequence_ = latest_robot_pose_sequence_;
+  }
+
+  if (pending_turn_confirmations_ < recovery_turn_confirmation_count_) {
+    ROS_WARN_THROTTLE(0.3,
+                      "[task_search] mapped turn pending %d/%d yaw=%.1fdeg; "
+                      "freeze probe=(%.2f,%.2f) and keep current corridor direction.",
+                      pending_turn_confirmations_, recovery_turn_confirmation_count_,
+                      std::atan2(observed.y(), observed.x()) * 180.0 / M_PI,
+                      pending_turn_probe_origin_.x(), pending_turn_probe_origin_.y());
+    return false;
+  }
+  clearPendingTurnEvidence();
+  return true;
 }
 
 Eigen::Vector2d TaskSearchManager::stableProgressDirection() const {
@@ -941,7 +1035,11 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       travel_direction.head<2>().norm() < 1e-3)
     return false;
 
-  const Eigen::Vector3d origin = visited_positions_.back();
+  // 第一票出现后冻结当时看到拐角的地图观察点。无人机随后斜移/进入新通道时，
+  // 若继续用最新位置发射旧前向射线，前墙会落到身后，可靠的第一票反而无法复核。
+  const Eigen::Vector3d origin =
+      pending_turn_probe_origin_valid_ ? pending_turn_probe_origin_
+                                       : visited_positions_.back();
   const Eigen::Vector2d travel = travel_direction.head<2>().normalized();
   const double probe_step = std::max(0.05, recovery_turn_probe_step_);
   auto knownFreeLength = [&](const Eigen::Vector3d& ray_origin,
@@ -979,6 +1077,104 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
     }
     return supported_sections;
   };
+  struct LongViewEvidence {
+    double farthest_free{0.0};
+    int free_sections{0};
+    double farthest_left_wall{0.0};
+    int left_wall_sections{0};
+    double farthest_right_wall{0.0};
+    int right_wall_sections{0};
+    double farthest_paired_wall{0.0};
+    int paired_wall_sections{0};
+    int consistent_paired_wall_sections{0};
+  };
+  auto longViewEvidence = [&](const Eigen::Vector3d& probe_origin,
+                              const Eigen::Vector2d& direction) {
+    LongViewEvidence evidence;
+    const Eigen::Vector2d lateral(-direction.y(), direction.x());
+    const double view_step = std::max(0.10, recovery_turn_long_view_step_);
+    auto wallDistanceAtSection = [&](double along, double side_sign) {
+      for (double half_width = recovery_turn_wall_min_half_width_;
+           half_width <= recovery_turn_wall_max_half_width_ + 1e-6;
+           half_width += 0.10) {
+        Eigen::Vector3d wall_probe = probe_origin;
+        wall_probe.head<2>() += along * direction + side_sign * half_width * lateral;
+        if (mapRelativeColumnOccupied(wall_probe, probe_origin.z())) return half_width;
+      }
+      return std::numeric_limits<double>::infinity();
+    };
+    struct PairedWallSection {
+      double depth;
+      double width;
+      double center_offset;
+    };
+    std::vector<PairedWallSection> paired_sections;
+    for (double along = view_step;
+         along <= recovery_turn_long_view_length_ + 1e-6; along += view_step) {
+      bool band_free = false;
+      for (double lateral_offset : {-0.17, 0.0, 0.17}) {
+        Eigen::Vector3d free_probe = probe_origin;
+        free_probe.head<2>() += along * direction + lateral_offset * lateral;
+        if (sdf_map_->isInMap(free_probe) &&
+            sdf_map_->getOccupancy(free_probe) == SDFMap::FREE) {
+          band_free = true;
+          break;
+        }
+      }
+      if (band_free) {
+        evidence.farthest_free = along;
+        ++evidence.free_sections;
+      }
+      const double left_wall_distance = wallDistanceAtSection(along, 1.0);
+      const double right_wall_distance = wallDistanceAtSection(along, -1.0);
+      if (std::isfinite(left_wall_distance)) {
+        evidence.farthest_left_wall = along;
+        ++evidence.left_wall_sections;
+      }
+      if (std::isfinite(right_wall_distance)) {
+        evidence.farthest_right_wall = along;
+        ++evidence.right_wall_sections;
+      }
+      // 同一截面必须中心可见且左右墙同时存在，才算通道截面。这样柱体的一条边和
+      // 数米外另一面墙不能被拼成转弯；中间被障碍遮住的截面则留空，允许远端重现。
+      if (band_free && std::isfinite(left_wall_distance) &&
+          std::isfinite(right_wall_distance)) {
+        paired_sections.push_back(
+            {along, left_wall_distance + right_wall_distance,
+             0.5 * (left_wall_distance - right_wall_distance)});
+      }
+    }
+    evidence.paired_wall_sections = static_cast<int>(paired_sections.size());
+    if (!paired_sections.empty()) {
+      std::vector<double> widths;
+      std::vector<double> centers;
+      widths.reserve(paired_sections.size());
+      centers.reserve(paired_sections.size());
+      for (const auto& section : paired_sections) {
+        widths.push_back(section.width);
+        centers.push_back(section.center_offset);
+      }
+      auto median = [](std::vector<double> values) {
+        std::sort(values.begin(), values.end());
+        const size_t middle = values.size() / 2;
+        if (values.size() % 2 == 0)
+          return 0.5 * (values[middle - 1] + values[middle]);
+        return values[middle];
+      };
+      const double median_width = median(widths);
+      const double median_center = median(centers);
+      for (const auto& section : paired_sections) {
+        if (std::fabs(section.width - median_width) <=
+                recovery_turn_long_view_width_tolerance_ &&
+            std::fabs(section.center_offset - median_center) <=
+                recovery_turn_long_view_center_tolerance_) {
+          ++evidence.consistent_paired_wall_sections;
+          evidence.farthest_paired_wall = section.depth;
+        }
+      }
+    }
+    return evidence;
+  };
 
   forward_free_length = knownFreeLength(origin, travel);
   // 在旧通道中心线前方找到实际墙面；仅UNKNOWN截止不能作为转弯结构证据。
@@ -999,6 +1195,7 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   Eigen::Vector2d best_direction = travel;
   int best_left_support = 0;
   int best_right_support = 0;
+  LongViewEvidence best_long_view;
   const double min_angle = recovery_turn_min_angle_deg_ * M_PI / 180.0;
   const double max_angle = recovery_turn_max_angle_deg_ * M_PI / 180.0;
   for (double angle = min_angle; angle <= max_angle + 1e-6; angle += M_PI / 12.0) {
@@ -1018,14 +1215,28 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
         continue;
       const int left_support = wallSupport(contour_origin, direction, 1.0);
       const int right_support = wallSupport(contour_origin, direction, -1.0);
-      // 正常直角/弧形弯道允许内侧墙在拐角终止，只要求外侧存在连续墙轮廓；孤立柱体
-      // 没有连续三截面支撑，不能改变通道主方向。
+      // 拐角近场允许内侧墙终止、只保留外墙；下面的长视野还必须在新方向重新找到
+      // 宽度和中心稳定的双墙，孤立柱体或一段单墙不能改变通道主方向。
       if (!task_search::mappedContourSupportsTurn(
               front_wall_blocked, left_support, right_support,
               recovery_turn_min_wall_support_))
         continue;
+      const LongViewEvidence long_view = longViewEvidence(contour_origin, direction);
+      if (!task_search::longRangeTurnViewSupported(
+              long_view.farthest_free, long_view.free_sections,
+              long_view.farthest_left_wall, long_view.left_wall_sections,
+              long_view.farthest_right_wall, long_view.right_wall_sections,
+              long_view.farthest_paired_wall, long_view.paired_wall_sections,
+              long_view.consistent_paired_wall_sections,
+              recovery_turn_long_view_min_depth_,
+              recovery_turn_long_view_min_free_sections_,
+              recovery_turn_long_view_min_wall_sections_,
+              recovery_turn_long_view_min_paired_wall_sections_))
+        continue;
       // 2026-07-28: 先选自由延伸最长的双墙通道，同等长度才轻微偏好小转角。
-      const double score = free_length + 0.08 * (left_support + right_support) -
+      const double score = long_view.farthest_free +
+                           0.08 * (long_view.left_wall_sections +
+                                   long_view.right_wall_sections) -
                            0.05 * std::fabs(angle);
       if (score > best_score) {
         best_score = score;
@@ -1033,6 +1244,7 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
         turn_free_length = free_length;
         best_left_support = left_support;
         best_right_support = right_support;
+        best_long_view = long_view;
       }
     }
   }
@@ -1041,23 +1253,79 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   ROS_ERROR_THROTTLE(
       0.5,
       "[task_search] OCCUPANCY TURN selected yaw=%.1fdeg old_free=%.2fm new_free=%.2fm "
-      "wall_support=%d/%d contour_probe=(%.2f,%.2f); mapped wall contour selected.",
+      "wall_support=%d/%d long_view free=%.2fm/%d wall=%.2fm/%d|%.2fm/%d "
+      "paired=%.2fm/%d consistent=%d "
+      "contour_probe=(%.2f,%.2f); mapped wall contour selected.",
       std::atan2(best_direction.y(), best_direction.x()) * 180.0 / M_PI,
       forward_free_length, turn_free_length, best_left_support, best_right_support,
+      best_long_view.farthest_free, best_long_view.free_sections,
+      best_long_view.farthest_left_wall, best_long_view.left_wall_sections,
+      best_long_view.farthest_right_wall, best_long_view.right_wall_sections,
+      best_long_view.farthest_paired_wall, best_long_view.paired_wall_sections,
+      best_long_view.consistent_paired_wall_sections,
       contour_origin.x(), contour_origin.y());
   return true;
 }
 
+void TaskSearchManager::commitCorridorTurn(
+    const Eigen::Vector3d& turn_direction) {
+  if (turn_direction.head<2>().norm() < 1e-3) return;
+  Eigen::Vector2d incoming = stableProgressDirection();
+  if (incoming.norm() < 1e-3) incoming = corridor_dir_.head<2>();
+  incoming.normalize();
+  const Eigen::Vector2d outgoing = turn_direction.head<2>().normalized();
+  const double signed_angle = std::atan2(
+      incoming.x() * outgoing.y() - incoming.y() * outgoing.x(),
+      incoming.dot(outgoing));
+
+  Eigen::Vector2d anchor = visited_positions_.empty()
+                               ? corridor_origin_.head<2>()
+                               : visited_positions_.back().head<2>();
+  {
+    std::lock_guard<std::mutex> lock(body_cloud_mutex_);
+    if (latest_robot_pose_valid_) anchor = latest_robot_pos_.head<2>();
+  }
+  latest_turn_anchor_ = anchor;
+  latest_turn_incoming_direction_ = incoming;
+  latest_turn_anchor_valid_ = true;
+  stable_progress_direction_ = outgoing;
+  stable_progress_direction_valid_ = true;
+  turn_yaw_follow_latch_.arm(outgoing);
+  ROS_ERROR("[task_search] confirmed %s turn %.1fdeg at (%.2f,%.2f); "
+            "new wall-parallel yaw=%.1fdeg and latest completed direction is no-return.",
+            signed_angle >= 0.0 ? "LEFT" : "RIGHT",
+            std::fabs(signed_angle) * 180.0 / M_PI, anchor.x(), anchor.y(),
+            std::atan2(outgoing.y(), outgoing.x()) * 180.0 / M_PI);
+}
+
 bool TaskSearchManager::mappedCorridorDirection(
-    double cur_yaw, Eigen::Vector3d& direction) const {
+    double cur_yaw, Eigen::Vector3d& direction) {
+  Eigen::Vector2d latched_direction;
+  const double release_angle =
+      std::max(0.0, recovery_turn_yaw_release_angle_deg_) * M_PI / 180.0;
+  if (turn_yaw_follow_latch_.directionForYaw(
+          cur_yaw, release_angle, latched_direction)) {
+    direction = Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
+    return true;
+  }
+
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
   const Eigen::Vector3d travel(stable.x(), stable.y(), 0.0);
   double forward_free_length = 0.0;
   double turn_free_length = 0.0;
-  return inferOccupancyTurnDirection(
-      travel, direction, forward_free_length, turn_free_length);
+  if (!inferOccupancyTurnDirection(
+          travel, direction, forward_free_length, turn_free_length))
+    return false;
+  if (!confirmCorridorTurnEvidence(direction)) return false;
+  commitCorridorTurn(direction);
+  // 新确认的这一周期立即生效；即使已接近目标yaw，也要完整生成一次墙平行偏航。
+  if (!turn_yaw_follow_latch_.directionForYaw(
+          cur_yaw, release_angle, latched_direction))
+    return false;
+  direction = Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
+  return true;
 }
 
 // 2026-07-28: 局部恢复先采用累计地图确认的通道拐弯轴线；没有结构证据时才使用最近实飞切线。
@@ -1074,15 +1342,12 @@ Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
   double turn_free_length = 0.0;
   if (inferOccupancyTurnDirection(travel, occupancy_turn, forward_free_length,
                                   turn_free_length)) {
-    // 只有“旧前向受阻、新方向自由距离更长且两侧都有连续墙体”的地图证据，
+    // 只有“旧前向受阻、新方向自由距离更长且远端重新形成稳定双墙”的地图证据，
     // 才表示已经进入真实弯道并允许改变主方向。机头yaw和临时斜飞均不参与更新。
-    stable_progress_direction_ = occupancy_turn.head<2>().normalized();
-    stable_progress_direction_valid_ = true;
-    ROS_ERROR_THROTTLE(0.5,
-                       "[task_search] confirmed corridor turn; persistent forward yaw=%.1fdeg.",
-                       std::atan2(stable_progress_direction_.y(),
-                                  stable_progress_direction_.x()) * 180.0 / M_PI);
-    return occupancy_turn;
+    if (confirmCorridorTurnEvidence(occupancy_turn)) {
+      commitCorridorTurn(occupancy_turn);
+      return occupancy_turn;
+    }
   }
   return travel;
 }
@@ -1147,10 +1412,18 @@ bool TaskSearchManager::isRecoveryCandidateUseful(const Eigen::Vector3d& candida
   if (corridor_frame_received_ && !visited_positions_.empty()) {
     const Eigen::Vector2d motion =
         candidate.head<2>() - visited_positions_.back().head<2>();
-    if (!task_search::insideForwardHalfPlane(motion, corridor_dir_.head<2>()))
+    if (!task_search::insideForwardHalfPlane(motion, stableProgressDirection()))
       return false;
   }
   return isTaskMotionAllowed(candidate);
+}
+
+bool TaskSearchManager::astarNoReturnDirection(Eigen::Vector3d& direction) const {
+  if (!global_no_return_ || !corridor_frame_received_) return false;
+  const Eigen::Vector2d progress = stableProgressDirection();
+  if (progress.norm() < 1e-6) return false;
+  direction = Eigen::Vector3d(progress.x(), progress.y(), 0.0);
+  return true;
 }
 
 bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) const {
@@ -1169,21 +1442,29 @@ bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) co
         (candidate.head<2>() - exit_portal_center_.head<2>())
             .dot(exit_outward_direction_.normalized());
   }
-  return task_search::passesMissionBoundaryNoReturn(
-      door_progress, inside_return_margin_, final_exit_guard_active, exit_side);
+  if (!task_search::passesMissionBoundaryNoReturn(
+          door_progress, inside_return_margin_, final_exit_guard_active, exit_side))
+    return false;
+  // 入口平面只防止回到场外；每次地图确认转弯后再冻结最近一段已完成通道，
+  // 防止候选沿旧方向穿过拐点倒回去。新通道的横移和大角度弯道仍允许。
+  return !latest_turn_anchor_valid_ ||
+         task_search::passesLatestTurnNoReturn(
+             candidate.head<2>(), latest_turn_anchor_,
+             latest_turn_incoming_direction_, stableProgressDirection(),
+             recovery_turn_no_return_margin_);
 }
 
 bool TaskSearchManager::isTaskPathAllowed(
     const std::vector<Eigen::Vector3d>& path) const {
   if (!global_no_return_ || !corridor_frame_received_ || path.empty()) return true;
 
-  // 完整路径逐点检查入口和最终出口边界，避免目标合法但中途越界。
+  // 完整路径逐点检查入口、最近已完成转角和最终出口边界，避免目标合法但中途越界。
   for (const auto& point : path) {
     if (!isTaskMotionAllowed(point)) return false;
   }
 
-  // 不再按局部后退距离或路径夹角否决A*结果。横移、斜向避障和短时位置波动
-  // 只接受占据/足迹安全检查；全局禁回仍由上面的入口和最终出口平面逐点检查保证。
+  // 不按路径夹角否决A*结果。横移、斜向避障和短时位置波动仍允许；真正退回
+  // 已完成通道由上面的入口/转角/出口有向边界逐点检查。
   return true;
 }
 
@@ -1192,9 +1473,10 @@ bool TaskSearchManager::isRecoveryPathAllowed(
   // 所有普通/恢复路径都不得从规划起点向入口方向倒退；侧移(dot=0)允许。
   // short_backtrack 开关不再能绕过这条多机硬约束。
   if (corridor_frame_received_ && path.size() >= 2) {
-    const double start_progress = path.front().dot(corridor_dir_);
+    const Eigen::Vector2d progress_direction = stableProgressDirection();
+    const double start_progress = path.front().head<2>().dot(progress_direction);
     for (const auto& point : path) {
-      if (point.dot(corridor_dir_) < start_progress - 1e-3) return false;
+      if (point.head<2>().dot(progress_direction) < start_progress - 1e-3) return false;
     }
   }
   if (!allow_initial_reverse) return isTaskPathAllowed(path);
@@ -1210,6 +1492,10 @@ bool TaskSearchManager::isRecoveryPathAllowed(
 
 double TaskSearchManager::clampSearchHeight(double z) const {
   return std::max(min_search_height_, std::min(max_search_height_, z));
+}
+
+double TaskSearchManager::preferredSearchHeight() const {
+  return clampSearchHeight(cruise_height_);
 }
 
 double TaskSearchManager::projectSearchHeight(double candidate_z, double current_z) const {

@@ -50,7 +50,34 @@ void Astar::setResolution(const double& res) {
   this->inv_resolution_ = 1.0 / resolution_;
 }
 
+void Astar::setProgressConstraint(const Eigen::Vector3d& forward_direction,
+                                  double maximum_regression) {
+  if (forward_direction.head<2>().norm() < 1e-6) {
+    clearProgressConstraint();
+    return;
+  }
+  progress_constraint_enabled_ = true;
+  progress_direction_.setZero();
+  progress_direction_.head<2>() = forward_direction.head<2>().normalized();
+  maximum_progress_regression_ = std::max(0.0, maximum_regression);
+}
+
+void Astar::clearProgressConstraint() {
+  progress_constraint_enabled_ = false;
+  maximum_progress_regression_ = 0.0;
+}
+
 int Astar::search(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& end_pt) {
+  if (progress_constraint_enabled_ &&
+      !directional_progress::isAllowed(start_pt, end_pt, progress_direction_,
+                                       maximum_progress_regression_)) {
+    ROS_WARN_THROTTLE(0.5,
+                      "[Astar] reject goal behind active corridor direction before search: "
+                      "start=(%.2f %.2f) goal=(%.2f %.2f) dir=(%.2f %.2f).",
+                      start_pt.x(), start_pt.y(), end_pt.x(), end_pt.y(),
+                      progress_direction_.x(), progress_direction_.y());
+    return NO_PATH;
+  }
   NodePtr cur_node = path_node_pool_[0];
   cur_node->parent = NULL;
   cur_node->position = start_pt;
@@ -117,6 +144,12 @@ int Astar::search(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& end_pt
           step << dx, dy, dz;
           if (step.norm() < 1e-3) continue;
           nbr_pos = cur_pos + step;
+          // 多机通道的禁回头约束必须在搜索阶段生效。纯横移(dot=0)和斜前绕障
+          // 正常展开，旧通道方向上的负进度节点不进入open set。
+          if (progress_constraint_enabled_ &&
+              !directional_progress::isAllowed(start_pt, nbr_pos, progress_direction_,
+                                               maximum_progress_regression_))
+            continue;
           // 2026-07-28: A*展开阶段直接约束完整路径高度；若起点尚低于下限，只允许不下降并逐步爬升。
           if (start_pt.z() < min_search_height_ && cur_pos.z() < min_search_height_) {
             if (nbr_pos.z() + 1e-3 < cur_pos.z()) continue;
@@ -148,6 +181,12 @@ int Astar::search(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& end_pt
           dir.normalize();
           for (double l = 0.1; l < len; l += 0.1) {
             Vector3d ckpt = cur_pos + l * dir;
+            if (progress_constraint_enabled_ &&
+                !directional_progress::isAllowed(start_pt, ckpt, progress_direction_,
+                                                 maximum_progress_regression_)) {
+              safe = false;
+              break;
+            }
             // 2026-07-28: 对角边内部采样同样遵守高度带，不能只检查端点后从地面穿过。
             if ((start_pt.z() >= min_search_height_ && ckpt.z() < min_search_height_ - 1e-3) ||
                 (start_pt.z() <= max_search_height_ && ckpt.z() > max_search_height_ + 1e-3)) {

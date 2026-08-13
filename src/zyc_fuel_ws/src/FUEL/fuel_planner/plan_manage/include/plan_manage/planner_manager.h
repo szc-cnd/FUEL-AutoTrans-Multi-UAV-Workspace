@@ -34,6 +34,8 @@ public:
   // 2026-07-14: 返回轨迹生成是否成功，拒绝少于三点或含零长度分段的非法 waypoint 输入。
   bool planExploreTraj(const vector<Eigen::Vector3d>& tour, const Eigen::Vector3d& cur_vel,
                        const Eigen::Vector3d& cur_acc, const double& time_lb = -1);
+  // 地图确认真实转弯后，位置保持不动，只执行yaw对准。
+  bool planStationaryTraj(const Eigen::Vector3d& position, double duration);
   bool planGlobalTraj(const Eigen::Vector3d& start_pos);
   bool topoReplan(bool collide);
 
@@ -49,18 +51,26 @@ public:
   // 2026-07-28: 膨胀层脱困轨迹在执行期沿用“原始足迹安全且净空单调增加”的判据，
   // 避免发布前允许逃逸、发布后20ms又被普通膨胀层检查立即否决。
   bool checkTrajCollision(double& distance, bool allow_inflation_escape = false);
+  bool checkTrajCollision(LocalTrajData& trajectory, double& distance,
+                          bool allow_inflation_escape = false);
   // 2026-07-13: 使用独立机体足迹检查轨迹/路径，避免 0.15m 建图膨胀小于 Iris 实际旋翼半径。
   bool isPositionSafe(const Eigen::Vector3d& position) const;
   // 2026-07-28: FSM发布门控需要区分原始占据碰撞与仅接触膨胀层，决定能否执行受控逃逸。
   bool isRawPositionSafe(const Eigen::Vector3d& position) const;
+  // 局部脱困专用：允许少量受支撑占据采样，但只能沿采样数和ESDF净空持续改善的方向退出。
+  int rawFootprintCollisionCount(const Eigen::Vector3d& position) const;
+  bool isControlledEscapePosition(const Eigen::Vector3d& position) const;
   bool isPositionInflated(const Eigen::Vector3d& position) const;
-  bool isPathSafe(const vector<Eigen::Vector3d>& path) const;
+  bool isPathSafe(const vector<Eigen::Vector3d>& path,
+                  bool allow_contact_escape = false) const;
   // 2026-07-14: B-spline 发布前复核完整 Iris 足迹，避免优化曲线偏离安全 A* 折线后才被执行期急停。
-  bool isTrajectorySafe(double sample_dt = 0.03);
+  bool isTrajectorySafe(double sample_dt = 0.03,
+                        bool allow_contact_escape = false);
   // 2026-07-28: 起点已在膨胀层时，新轨迹必须在限定路程内真正回到非膨胀区，
   // 不能仅靠净空不下降生成一条始终贴墙的“伪恢复”轨迹。
   bool trajectoryClearsInflation(double max_path_distance = 0.80,
-                                 double sample_dt = 0.02);
+                                 double sample_dt = 0.02,
+                                 bool allow_contact_escape = false);
   void calcNextYaw(const double& last_yaw, double& yaw);
 
   PlanParameters pp_;
@@ -81,6 +91,7 @@ private:
   int footprint_check_samples_{12};
   int footprint_min_occupied_support_{2};
   bool supported_occupancy_hard_reject_enabled_{true};
+  int escape_max_initial_occupied_samples_{6};
   // 2026-07-23: 真实圆盘足迹检查供路径/轨迹最终复核；膨胀图仅用于A*引导，
   // 避免当前位置被膨胀层擦到后所有前向脱困路径因共享同一起点而全部失败。
   bool isRawFootprintSafe(const Eigen::Vector3d& position) const;

@@ -12,6 +12,7 @@
 #include <boost/functional/hash.hpp>
 #include <queue>
 #include <path_searching/matrix_hash.h>
+#include <path_searching/directional_progress_policy.h>
 namespace fast_planner {
 class Node {
 public:
@@ -45,6 +46,9 @@ public:
   void reset();
   int search(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& end_pt);
   void setResolution(const double& res);
+  void setProgressConstraint(const Eigen::Vector3d& forward_direction,
+                             double maximum_regression = 0.0);
+  void clearProgressConstraint();
   static double pathLength(const vector<Eigen::Vector3d>& path);
 
   std::vector<Eigen::Vector3d> getPath();
@@ -82,6 +86,9 @@ private:
   double tie_breaker_;
   double resolution_, inv_resolution_;
   Eigen::Vector3d map_size_3d_, origin_;
+  bool progress_constraint_enabled_{false};
+  Eigen::Vector3d progress_direction_{1.0, 0.0, 0.0};
+  double maximum_progress_regression_{0.0};
 };
 
 }  // namespace fast_planner

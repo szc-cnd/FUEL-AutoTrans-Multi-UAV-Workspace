@@ -40,6 +40,7 @@
     <!-- 2026-07-13: FUEL 源码中的绝对单机话题在节点边界统一映射，避免 iris_0 占用全局规划、地图和任务接口。 -->
     <remap from="/waypoint_generator/waypoints" to="$(arg topic_prefix)/waypoint_generator/waypoints"/>
     <remap from="/planning/replan" to="$(arg topic_prefix)/planning/replan"/>
+    <remap from="/planning/emergency_brake" to="$(arg topic_prefix)/planning/emergency_brake"/>
     <remap from="/planning/new" to="$(arg topic_prefix)/planning/new"/>
     <remap from="/planning/bspline" to="$(arg topic_prefix)/planning/bspline"/>
     <remap from="/planning/safety_hold" to="$(arg topic_prefix)/planning/safety_hold"/>
@@ -72,10 +73,9 @@
     <param name="sdf_map/map_size_x"   value="$(arg map_size_x_)" /> 
     <param name="sdf_map/map_size_y"   value="$(arg map_size_y_)" /> 
     <param name="sdf_map/map_size_z"   value="$(arg map_size_z_)" /> 
-    <!-- <param name="sdf_map/obstacles_inflation"     value="0.099" />  -->
     <!-- 2026-07-08: 针对 indoor1/管道环境里 frontier 被过度吞掉的问题，将障碍物膨胀从 0.4 下调到 0.15，先单独验证是否恢复对空白区的探索意愿。 -->
-    <!-- 2026-07-27: A*膨胀层由0.25m折中为0.18m，避免窄通道已知自由域被切断；最终轨迹仍由0.28m真实足迹硬复核。 -->
-    <param name="sdf_map/obstacles_inflation"     value="0.099" />
+    <!-- 2026-08-13: A*占据膨胀设为0.109m；最终路径/轨迹另按0.18m机体圆盘执行硬复核。 -->
+    <param name="sdf_map/obstacles_inflation"     value="0.109" />
 
     <param name="sdf_map/local_bound_inflate"    value="0.5"/>
     <param name="sdf_map/local_map_margin" value="50"/>
@@ -129,7 +129,7 @@
     <param name="map_ros/frame_id"      value="world"/>
 
     <!-- Fsm -->
-    <param name="fsm/thresh_replan1" value="0.5" type="double"/>
+    <param name="fsm/thresh_replan1" value="1.0" type="double"/>
     <param name="fsm/thresh_replan2" value="0.5" type="double"/>
     <!-- 2026-07-20: 周期重规划由1.2s放宽到3.0s，减少安全长轨迹尚未推进就被重复替换；20Hz碰撞检查保持不变。 -->
     <param name="fsm/thresh_replan3" value="3.0" type="double"/>
@@ -151,6 +151,7 @@
     <param name="fsm/trajectory_release_confirm_time" value="0.12" type="double"/>
     <param name="fsm/trajectory_release_check_interval" value="0.04" type="double"/>
     <param name="fsm/trajectory_release_max_start_error" value="0.25" type="double"/>
+    <param name="fsm/emergency_brake_horizon" value="0.12" type="double"/>
 
     <!-- Exploration manager -->
 
@@ -252,7 +253,7 @@
     <param name="astar/vertical_weight" value="4.0" type="double"/>
     <!-- 宽通道优先：0.60m净空内按距离连续惩罚贴墙路径，不扩大0.14m硬膨胀边界。 -->
     <param name="astar/preferred_clearance" value="0.60" type="double"/>
-    <param name="astar/clearance_weight" value="8.0" type="double"/>
+    <param name="astar/clearance_weight" value="12.0" type="double"/>
     <param name="astar/resolution_astar" value="0.2" type="double"/>
     <param name="astar/allocate_num" value="1000000" type="int"/>
     <!-- 2026-07-16: 旧值1ms会把复杂但可达的通道误判为No path；50ms仍满足规划周期且允许绕柱搜索。 -->

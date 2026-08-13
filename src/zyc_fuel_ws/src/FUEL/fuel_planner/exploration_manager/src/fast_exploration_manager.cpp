@@ -1,5 +1,6 @@
 // #include <fstream>
 #include <exploration_manager/fast_exploration_manager.h>
+#include <exploration_manager/inflation_history_escape_policy.h>
 #include <thread>
 #include <iostream>
 #include <fstream>
@@ -325,7 +326,8 @@ bool FastExplorationManager::isKnownSafeHorizontalCorridor(
 }
 
 bool FastExplorationManager::isKnownSafeVerticalPath(const Vector3d& start,
-                                                      double target_z) const {
+                                                      double target_z,
+                                                      bool allow_unknown) const {
   if (!sdf_map_ || !planner_manager_) return false;
   vector<Vector3d> path{start};
   const double distance = std::fabs(target_z - start.z());
@@ -334,9 +336,13 @@ bool FastExplorationManager::isKnownSafeVerticalPath(const Vector3d& start,
     Vector3d point = start;
     point.z() = start.z() + (target_z - start.z()) * static_cast<double>(sample) /
                                 static_cast<double>(samples);
-    // 垂直试探允许进入UNKNOWN补图；只有真实占据/膨胀安全复核失败才拒绝。
-    if (!sdf_map_->isInMap(point) ||
-        sdf_map_->getOccupancy(point) == SDFMap::OCCUPIED)
+    // 向下试探允许进入UNKNOWN补图；下穿结束后的上升释放则要求整根中心柱
+    // 已知自由，不能把球体后方尚未重扫的UNKNOWN误认为已经穿出障碍。
+    const int occupancy = sdf_map_->isInMap(point)
+                              ? sdf_map_->getOccupancy(point)
+                              : SDFMap::OCCUPIED;
+    if (!sdf_map_->isInMap(point) || occupancy == SDFMap::OCCUPIED ||
+        (!allow_unknown && occupancy != SDFMap::FREE))
       return false;
     path.push_back(point);
   }
@@ -366,7 +372,8 @@ bool FastExplorationManager::isLowProbeCorridorSafe(
 
 bool FastExplorationManager::buildVerticalDetourFallback(
     const Vector3d& pos, double cur_yaw, const Vector3d& forward,
-    Vector3d& next_pos, double& next_yaw) {
+    Vector3d& next_pos, double& next_yaw,
+    bool require_map_confirmed_underpass) {
   if (!vertical_detour_enabled_ || forward.head<2>().norm() < 1e-3 ||
       low_probe_phase_ != vertical_detour::LowProbePhase::IDLE)
     return false;
@@ -381,9 +388,16 @@ bool FastExplorationManager::buildVerticalDetourFallback(
       return false;
     low_probe_phase_ = vertical_detour::LowProbePhase::DESCENDING;
     low_probe_confirmations_ = 0;
+    low_probe_release_confirmations_ = 0;
+    low_probe_advanced_distance_ = 0.0;
     low_probe_origin_ = pos;
     low_probe_direction_ = direction;
+    // 低于正常巡航层开始下穿时，必须一直检查到巡航高度的整根上升柱；否则
+    // 只回到原来的低高度后普通frontier会立刻抬升，仍可能在球体正下方撞上去。
     low_probe_return_height_ = pos.z();
+    if (task_search_manager_)
+      low_probe_return_height_ = std::max(
+          low_probe_return_height_, task_search_manager_->preferredSearchHeight());
     low_probe_yaw_ = cur_yaw;
     low_probe_target_ = pos;
     low_probe_target_.z() = low_z;
@@ -395,6 +409,22 @@ bool FastExplorationManager::buildVerticalDetourFallback(
              pos.z(), low_z, pos.x(), pos.y(), cur_yaw * 180.0 / M_PI);
     return true;
   };
+
+  // 同高度正前方已经不可达时，若地图明确显示原地下降柱以及低位正前短管道
+  // 都安全，则将其识别为悬空障碍下穿，并优先于任何侧向贴墙恢复。
+  if (require_map_confirmed_underpass) {
+    Vector3d low_start = pos;
+    low_start.z() = vertical_detour_low_height_;
+    if (pos.z() > vertical_detour_low_height_ + vertical_detour_height_tolerance_ &&
+        isLowProbeCorridorSafe(low_start, direction,
+                               vertical_detour_forward_check_distance_) &&
+        startLowProbe()) {
+      ROS_WARN("[vertical_detour] mapped underpass confirmed below suspended obstacle; "
+               "prefer centered low corridor before side-wall recovery.");
+      return true;
+    }
+    return false;
+  }
 
   const bool descend_first = vertical_detour::preferDescending(
       pos.z(), vertical_detour_down_first_height_);
@@ -460,32 +490,94 @@ bool FastExplorationManager::handleActiveLowProbe(
   if (low_probe_phase_ == vertical_detour::LowProbePhase::IDLE) return false;
 
   const auto previous_phase = low_probe_phase_;
-  const bool at_probe_height =
+  if (previous_phase == vertical_detour::LowProbePhase::ASCENDING) {
+    const double xy_error =
+        (pos - low_probe_ascent_origin_).head<2>().norm();
+    const double elapsed = low_probe_ascent_start_.isZero()
+                               ? 0.0
+                               : (ros::Time::now() - low_probe_ascent_start_).toSec();
+    if (vertical_detour::ascentShouldAbort(
+            xy_error, vertical_detour_xy_tolerance_, elapsed,
+            vertical_detour_ascent_timeout_)) {
+      ROS_ERROR("[vertical_detour] cancel stale ascent: xy_error=%.2fm "
+                "elapsed=%.2fs; release old target and resume live planning.",
+                xy_error, elapsed);
+      cancelActiveLowProbe("ascent xy drift or timeout");
+      return false;
+    }
+  }
+  vertical_detour::LowProbeObservation observation;
+  observation.at_probe_height =
       std::fabs(pos.z() - vertical_detour_low_height_) <=
       vertical_detour_height_tolerance_;
-  const bool xy_stable =
+  observation.xy_stable =
       (pos - low_probe_origin_).head<2>().norm() <= vertical_detour_xy_tolerance_;
-  const bool corridor_safe =
+  observation.low_corridor_safe =
       previous_phase == vertical_detour::LowProbePhase::VERIFYING &&
       isLowProbeCorridorSafe(pos, low_probe_direction_,
                              vertical_detour_forward_check_distance_);
-  const bool timed_out =
+  observation.verification_timed_out =
       previous_phase == vertical_detour::LowProbePhase::VERIFYING &&
       !low_probe_verify_start_.isZero() &&
       (ros::Time::now() - low_probe_verify_start_).toSec() >=
           vertical_detour_verification_timeout_;
-  const bool advance_complete =
+  observation.advance_complete =
       previous_phase == vertical_detour::LowProbePhase::ADVANCING &&
       (pos - low_probe_target_).norm() <= 0.10;
-  const bool ascent_complete =
+  observation.ascent_complete =
       previous_phase == vertical_detour::LowProbePhase::ASCENDING &&
+      (pos - low_probe_ascent_origin_).head<2>().norm() <=
+          vertical_detour_xy_tolerance_ &&
       std::fabs(pos.z() - low_probe_return_height_) <=
           vertical_detour_height_tolerance_;
 
+  // 低位实测正前仍不可通行时，立即用这一高度的地图区分“悬空”与“落地竖直”。
+  // 若同一障碍在低位仍有支撑，就退出直线下穿，改走左右更宽的一侧。
+  if (previous_phase == vertical_detour::LowProbePhase::VERIFYING &&
+      !observation.low_corridor_safe) {
+    bool split_obstacle_detected = false;
+    Vector3d side_target;
+    double side_yaw = low_probe_yaw_;
+    const bool use_side_target = buildWideSideBypass(
+        pos, low_probe_yaw_, low_probe_direction_, side_target, side_yaw,
+        split_obstacle_detected);
+    if (split_obstacle_detected) {
+      low_probe_phase_ = vertical_detour::LowProbePhase::IDLE;
+      low_probe_confirmations_ = 0;
+      low_probe_release_confirmations_ = 0;
+      low_probe_verify_start_ = ros::Time();
+      ROS_WARN("[vertical_detour] obstacle remains vertically occupied at low height; "
+               "cancel centered underpass and switch to wider horizontal lane.");
+      if (use_side_target) {
+        next_pos = side_target;
+        next_yaw = side_yaw;
+        return true;
+      }
+      return false;
+    }
+  }
+
+  // 每个0.20m低位短步结束后，必须验证当前位置到恢复高度的整根垂直柱，
+  // 以及恢复高度正前方短走廊。球仍在头顶时只会继续低位推进，绝不会提前抬升。
+  const bool check_ascent =
+      observation.advance_complete ||
+      previous_phase == vertical_detour::LowProbePhase::EXIT_VERIFYING ||
+      observation.verification_timed_out;
+  if (check_ascent) {
+    observation.ascent_path_safe =
+        isKnownSafeVerticalPath(pos, low_probe_return_height_, false);
+    Vector3d return_level_start = pos;
+    return_level_start.z() = low_probe_return_height_;
+    observation.release_corridor_safe =
+        observation.ascent_path_safe &&
+        isKnownSafeHorizontalCorridor(return_level_start, low_probe_direction_,
+                                      vertical_detour_forward_check_distance_);
+  }
+
   low_probe_phase_ = vertical_detour::advanceLowProbe(
-      previous_phase, at_probe_height, xy_stable, corridor_safe, timed_out,
-      advance_complete, ascent_complete, vertical_detour_required_confirmations_,
-      low_probe_confirmations_);
+      previous_phase, observation, vertical_detour_required_confirmations_,
+      vertical_detour_release_confirmations_, low_probe_confirmations_,
+      low_probe_release_confirmations_);
 
   if (previous_phase == vertical_detour::LowProbePhase::DESCENDING &&
       low_probe_phase_ == vertical_detour::LowProbePhase::VERIFYING) {
@@ -496,37 +588,351 @@ bool FastExplorationManager::handleActiveLowProbe(
              vertical_detour_required_confirmations_);
   } else if (previous_phase == vertical_detour::LowProbePhase::VERIFYING &&
              low_probe_phase_ == vertical_detour::LowProbePhase::ADVANCING) {
-    low_probe_target_ = low_probe_origin_ +
-                        vertical_detour_forward_check_distance_ * low_probe_direction_;
+    low_probe_origin_ = pos;
+    low_probe_target_ = pos + vertical_detour_forward_check_distance_ *
+                                  low_probe_direction_;
     low_probe_target_.z() = vertical_detour_low_height_;
-    ROS_WARN("[vertical_detour] low corridor confirmed %d/%d; release %.2fm forward target.",
+    ROS_WARN("[vertical_detour] low corridor confirmed %d/%d; release next %.2fm "
+             "centered forward target.",
              low_probe_confirmations_, vertical_detour_required_confirmations_,
              vertical_detour_forward_check_distance_);
   } else if (previous_phase == vertical_detour::LowProbePhase::VERIFYING &&
              low_probe_phase_ == vertical_detour::LowProbePhase::ASCENDING) {
-    low_probe_target_ = low_probe_origin_;
+    low_probe_target_ = pos;
     low_probe_target_.z() = low_probe_return_height_;
-    ROS_WARN("[vertical_detour] low corridor verification timed out; ascend vertically "
-             "to %.2fm without forward motion.",
+    ROS_WARN("[vertical_detour] low corridor verification timed out and vertical return "
+             "column is safe; ascend in place to %.2fm.",
              low_probe_return_height_);
+  } else if (previous_phase == vertical_detour::LowProbePhase::ADVANCING &&
+             observation.advance_complete) {
+    low_probe_advanced_distance_ +=
+        (low_probe_target_ - low_probe_origin_).head<2>().norm();
+    low_probe_origin_ = pos;
+    low_probe_target_ = pos;
+    low_probe_target_.z() = vertical_detour_low_height_;
+    if (low_probe_phase_ == vertical_detour::LowProbePhase::EXIT_VERIFYING) {
+      ROS_WARN("[vertical_detour] advanced %.2fm below obstacle; ascent column and "
+               "return-level corridor safe %d/%d, hold low altitude for release check.",
+               low_probe_advanced_distance_, low_probe_release_confirmations_,
+               vertical_detour_release_confirmations_);
+    } else if (low_probe_phase_ == vertical_detour::LowProbePhase::ASCENDING) {
+      low_probe_target_.z() = low_probe_return_height_;
+      ROS_WARN("[vertical_detour] obstacle fully cleared after %.2fm low advance; "
+               "ascend vertically to %.2fm.",
+               low_probe_advanced_distance_, low_probe_return_height_);
+    } else {
+      low_probe_verify_start_ = ros::Time::now();
+      ROS_WARN("[vertical_detour] obstacle still overhead after %.2fm; keep z=%.2fm and "
+               "verify the next %.2fm forward segment.",
+               low_probe_advanced_distance_, vertical_detour_low_height_,
+               vertical_detour_forward_check_distance_);
+    }
+  } else if (previous_phase == vertical_detour::LowProbePhase::EXIT_VERIFYING &&
+             low_probe_phase_ == vertical_detour::LowProbePhase::ASCENDING) {
+    low_probe_target_ = pos;
+    low_probe_target_.z() = low_probe_return_height_;
+    ROS_WARN("[vertical_detour] underpass exit confirmed %d/%d after %.2fm; ascend "
+             "vertically to %.2fm before normal planning.",
+             low_probe_release_confirmations_, vertical_detour_release_confirmations_,
+             low_probe_advanced_distance_, low_probe_return_height_);
+  } else if (previous_phase == vertical_detour::LowProbePhase::EXIT_VERIFYING &&
+             low_probe_phase_ == vertical_detour::LowProbePhase::VERIFYING) {
+    low_probe_origin_ = pos;
+    low_probe_target_ = pos;
+    low_probe_target_.z() = vertical_detour_low_height_;
+    low_probe_verify_start_ = ros::Time::now();
+    ROS_WARN("[vertical_detour] underpass exit clearance changed; remain low and verify "
+             "the next forward segment instead of climbing.");
+  }
+
+  if (previous_phase != vertical_detour::LowProbePhase::ASCENDING &&
+      low_probe_phase_ == vertical_detour::LowProbePhase::ASCENDING) {
+    low_probe_ascent_origin_ = pos;
+    low_probe_ascent_start_ = ros::Time::now();
   }
 
   if (low_probe_phase_ == vertical_detour::LowProbePhase::IDLE) {
-    ROS_WARN("[vertical_detour] staged low detour finished; resume normal planning.");
+    ROS_WARN("[vertical_detour] staged low detour finished after %.2fm; resume normal planning.",
+             low_probe_advanced_distance_);
     return false;
   }
-  if (low_probe_phase_ == vertical_detour::LowProbePhase::VERIFYING) {
+  if (low_probe_phase_ == vertical_detour::LowProbePhase::VERIFYING ||
+      low_probe_phase_ == vertical_detour::LowProbePhase::EXIT_VERIFYING) {
     wait_for_confirmation = true;
-    ROS_INFO_THROTTLE(0.5,
-                      "[vertical_detour] low corridor confirmation %d/%d safe=%d; "
-                      "holding fixed xy/yaw.",
-                      low_probe_confirmations_, vertical_detour_required_confirmations_,
-                      static_cast<int>(corridor_safe));
+    if (low_probe_phase_ == vertical_detour::LowProbePhase::EXIT_VERIFYING) {
+      ROS_INFO_THROTTLE(
+          0.5,
+          "[vertical_detour] exit clearance confirmation %d/%d safe=%d; holding low "
+          "xy/z/yaw before ascent.",
+          low_probe_release_confirmations_, vertical_detour_release_confirmations_,
+          static_cast<int>(observation.release_corridor_safe));
+    } else {
+      ROS_INFO_THROTTLE(0.5,
+                        "[vertical_detour] low corridor confirmation %d/%d safe=%d; "
+                        "holding fixed xy/yaw.",
+                        low_probe_confirmations_, vertical_detour_required_confirmations_,
+                        static_cast<int>(observation.low_corridor_safe));
+    }
     return false;
   }
 
   next_pos = low_probe_target_;
   next_yaw = low_probe_yaw_;
+  return true;
+}
+
+void FastExplorationManager::cancelActiveLowProbe(const char* reason) {
+  if (low_probe_phase_ == vertical_detour::LowProbePhase::IDLE) return;
+  low_probe_phase_ = vertical_detour::LowProbePhase::IDLE;
+  low_probe_confirmations_ = 0;
+  low_probe_release_confirmations_ = 0;
+  low_probe_advanced_distance_ = 0.0;
+  low_probe_verify_start_ = ros::Time();
+  low_probe_ascent_start_ = ros::Time();
+  ROS_WARN("[vertical_detour] active low-probe target cancelled: %s.", reason);
+}
+
+bool FastExplorationManager::occupiedNearHeight(const Vector3d& point,
+                                                double height) const {
+  if (!sdf_map_) return false;
+  const double horizontal_step = std::max(0.04, 0.5 * sdf_map_->getResolution());
+  for (double dx : {-horizontal_step, 0.0, horizontal_step}) {
+    for (double dy : {-horizontal_step, 0.0, horizontal_step}) {
+      Vector3d probe(point.x() + dx, point.y() + dy, height);
+      if (sdf_map_->isInMap(probe) &&
+          sdf_map_->getOccupancy(probe) == SDFMap::OCCUPIED) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool FastExplorationManager::hasLowVerticalSupport(
+    const Vector3d& point, double current_height) const {
+  if (!sdf_map_) return false;
+  const double low_height = std::max(vertical_detour_low_height_ + 0.05,
+                                     wide_side_bypass_low_support_height_);
+  // 已经下降到低位时，当前层仍被挡就足以说明这不是只悬在头顶的障碍。
+  if (current_height <= low_height + 0.12)
+    return occupiedNearHeight(point, current_height);
+
+  const double upper_limit = std::min(current_height - 0.12, low_height + 0.35);
+  int consecutive_low_support = 0;
+  for (double height = low_height; height <= upper_limit + 1e-6; height += 0.10) {
+    Vector3d center(point.x(), point.y(), height);
+    if (!sdf_map_->isInMap(center)) return false;
+    const int occupancy = sdf_map_->getOccupancy(center);
+    if (occupancy == SDFMap::UNKNOWN || !occupiedNearHeight(point, height))
+      return false;
+    ++consecutive_low_support;
+    if (consecutive_low_support >= wide_side_bypass_min_vertical_support_layers_)
+      return true;
+  }
+  // 低位地图尚未扫到时不武断认成竖直障碍：先让原有低位探测下降补图。
+  // 必须从最低检查层开始连续占据，不能把悬空球底部的两层占据算成落地支撑。
+  return false;
+}
+
+bool FastExplorationManager::buildWideSideBypass(
+    const Vector3d& pos, double cur_yaw, const Vector3d& forward,
+    Vector3d& next_pos, double& next_yaw, bool& split_obstacle_detected) {
+  split_obstacle_detected = false;
+  if (!wide_side_bypass_enabled_ || !sdf_map_ || !planner_manager_ ||
+      forward.head<2>().norm() < 1e-3)
+    return false;
+
+  const Vector3d travel(forward.head<2>().normalized().x(),
+                        forward.head<2>().normalized().y(), 0.0);
+  const Vector3d lateral(-travel.y(), travel.x(), 0.0);
+  const double sample_step = std::max(0.05, sdf_map_->getResolution());
+  const int side_samples = std::max(
+      1, static_cast<int>(std::floor(wide_side_bypass_lateral_range_ /
+                                    sample_step)));
+
+  struct SplitEvidence {
+    bool valid{false};
+    double forward_distance{0.0};
+    double obstacle_min_offset{0.0};
+    double obstacle_max_offset{0.0};
+    double left_free_min{0.0};
+    double left_free_max{0.0};
+    double right_free_min{0.0};
+    double right_free_max{0.0};
+    double left_width{0.0};
+    double right_width{0.0};
+  } split;
+  bool suspended_obstacle_seen = false;
+
+  auto knownFree = [&](double forward_distance, double side_offset) {
+    const Vector3d probe = pos + forward_distance * travel + side_offset * lateral;
+    return sdf_map_->isInMap(probe) &&
+           sdf_map_->getOccupancy(probe) == SDFMap::FREE;
+  };
+
+  // 找第一条包含“非连续墙占据”的横截面。墙本身只作为左右边界，柱子/箱体
+  // 等局部占据才视为把通道分成两条可选通路的障碍物。
+  for (double ahead = wide_side_bypass_min_lookahead_;
+       ahead <= wide_side_bypass_max_lookahead_ + 1e-6;
+       ahead += sample_step) {
+    int obstacle_min_idx = side_samples + 1;
+    int obstacle_max_idx = -side_samples - 1;
+    for (int side_idx = -side_samples; side_idx <= side_samples; ++side_idx) {
+      const double offset = side_idx * sample_step;
+      Vector3d probe = pos + ahead * travel + offset * lateral;
+      if (!cameraOccupancyColumn(probe, pos.z()) ||
+          cameraWallSupported(probe, travel.head<2>()))
+        continue;
+      if (!hasLowVerticalSupport(probe, pos.z())) {
+        suspended_obstacle_seen = true;
+        continue;
+      }
+      obstacle_min_idx = std::min(obstacle_min_idx, side_idx);
+      obstacle_max_idx = std::max(obstacle_max_idx, side_idx);
+    }
+    if (obstacle_max_idx < obstacle_min_idx) continue;
+
+    split.valid = true;
+    split.forward_distance = ahead;
+    split.obstacle_min_offset = obstacle_min_idx * sample_step;
+    split.obstacle_max_offset = obstacle_max_idx * sample_step;
+
+    // 从障碍物边缘分别向左右数连续的已知自由栅格。未知区域不增加宽度，
+    // 但也不会直接否决另一侧；最终能否飞仍由统一A*和足迹检查决定。
+    int left_count = 0;
+    for (int idx = obstacle_min_idx - 1; idx >= -side_samples; --idx) {
+      if (!knownFree(ahead, idx * sample_step)) break;
+      ++left_count;
+    }
+    int right_count = 0;
+    for (int idx = obstacle_max_idx + 1; idx <= side_samples; ++idx) {
+      if (!knownFree(ahead, idx * sample_step)) break;
+      ++right_count;
+    }
+    split.left_width = left_count * sample_step;
+    split.right_width = right_count * sample_step;
+    split.left_free_max = split.obstacle_min_offset - sample_step;
+    split.left_free_min = split.left_free_max -
+                          std::max(0, left_count - 1) * sample_step;
+    split.right_free_min = split.obstacle_max_offset + sample_step;
+    split.right_free_max = split.right_free_min +
+                           std::max(0, right_count - 1) * sample_step;
+    break;
+  }
+
+  split_obstacle_detected = split.valid;
+  if (!split.valid && suspended_obstacle_seen) {
+    ROS_INFO_THROTTLE(
+        0.5,
+        "[wide_side_bypass] current-height obstacle has no continuous low support; "
+        "classify as suspended/undetermined and leave it to low-height probing.");
+  }
+  if (!split.valid || std::max(split.left_width, split.right_width) <
+                          wide_side_bypass_min_lane_width_)
+    return false;
+
+  const bool choose_right = split.right_width > split.left_width;
+  const double chosen_width = choose_right ? split.right_width : split.left_width;
+  const double other_width = choose_right ? split.left_width : split.right_width;
+  const double lane_min = choose_right ? split.right_free_min : split.left_free_min;
+  const double lane_max = choose_right ? split.right_free_max : split.left_free_max;
+  const double lane_center = 0.5 * (lane_min + lane_max);
+  const double side_sign = choose_right ? 1.0 : -1.0;
+
+  struct BypassChoice {
+    bool valid{false};
+    Vector3d target{0.0, 0.0, 0.0};
+    double endpoint_clearance{-1.0};
+    double path_clearance{-1.0};
+    double lateral_offset{0.0};
+    double forward_step{0.0};
+  } best;
+
+  auto minimumPathClearance = [&](const vector<Vector3d>& path) {
+    double clearance = std::numeric_limits<double>::infinity();
+    for (size_t segment = 1; segment < path.size(); ++segment) {
+      const Vector3d delta = path[segment] - path[segment - 1];
+      const int samples =
+          std::max(1, static_cast<int>(std::ceil(delta.norm() / 0.05)));
+      for (int sample = 0; sample <= samples; ++sample) {
+        const Vector3d point = path[segment - 1] +
+            delta * static_cast<double>(sample) / static_cast<double>(samples);
+        clearance = std::min(clearance, sdf_map_->getDistance(point));
+      }
+    }
+    return std::isfinite(clearance) ? clearance : -1.0;
+  };
+
+  // 先横移到较宽通路的中部，并只附带最多0.20m前进量；不要求一次轨迹
+  // 穿完整个障碍，下一轮地图更新后会继续沿宽侧推进。
+  vector<double> forward_steps{
+      std::min(wide_side_bypass_forward_step_,
+               std::max(0.0, split.forward_distance - 0.10)),
+      0.10, 0.0};
+  const double max_shift = std::min(wide_side_bypass_max_lateral_step_,
+                                    std::fabs(lane_center));
+  for (double shift = max_shift; shift >= 0.15 - 1e-6; shift -= 0.05) {
+    const double lateral_offset = side_sign * shift;
+    for (const double forward_step : forward_steps) {
+      Vector3d candidate = pos + forward_step * travel + lateral_offset * lateral;
+      candidate.z() = task_search_manager_
+                          ? task_search_manager_->clampSearchHeight(pos.z())
+                          : pos.z();
+      if (!pointInsideWorkspaceLock(candidate) ||
+          !planner_manager_->isPositionSafe(candidate) ||
+          sdf_map_->getOccupancy(candidate) == SDFMap::UNKNOWN ||
+          (task_search_manager_ &&
+           !task_search_manager_->isRecoveryCandidateUseful(candidate)))
+        continue;
+
+      planner_manager_->path_finder_->reset();
+      if (planner_manager_->path_finder_->search(pos, candidate) != Astar::REACH_END)
+        continue;
+      const auto path = planner_manager_->path_finder_->getPath();
+      if (!pathInsideWorkspaceLock(path) || !planner_manager_->isPathSafe(path) ||
+          (task_search_manager_ &&
+           !task_search_manager_->isRecoveryPathAllowed(path, false)))
+        continue;
+
+      const double path_clearance = minimumPathClearance(path);
+      const double endpoint_clearance = sdf_map_->getDistance(candidate);
+      if (!best.valid || path_clearance > best.path_clearance + 0.01 ||
+          (std::fabs(path_clearance - best.path_clearance) <= 0.01 &&
+           endpoint_clearance > best.endpoint_clearance + 0.01)) {
+        best.valid = true;
+        best.target = candidate;
+        best.endpoint_clearance = endpoint_clearance;
+        best.path_clearance = path_clearance;
+        best.lateral_offset = lateral_offset;
+        best.forward_step = forward_step;
+      }
+    }
+  }
+
+  if (!best.valid) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[wide_side_bypass] split obstacle at %.2fm; widths left=%.2fm right=%.2fm, "
+        "preferred %s side has no safe horizontal step yet.",
+        split.forward_distance, split.left_width, split.right_width,
+        choose_right ? "right" : "left");
+    return false;
+  }
+
+  next_pos = best.target;
+  next_yaw = cur_yaw;
+  recovery_side_latched_ = true;
+  recovery_side_origin_ = pos;
+  recovery_side_dir_ = side_sign * lateral;
+  if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
+  ROS_WARN(
+      "[wide_side_bypass] split obstacle at %.2fm, widths left=%.2fm right=%.2fm; "
+      "choose %s lane (%.2fm vs %.2fm), horizontal shift=%.2fm forward=%.2fm "
+      "target=(%.2f,%.2f,%.2f), path_clearance=%.2fm, keep yaw=%.1fdeg.",
+      split.forward_distance, split.left_width, split.right_width,
+      choose_right ? "right" : "left", chosen_width, other_width,
+      std::fabs(best.lateral_offset), best.forward_step, next_pos.x(), next_pos.y(),
+      next_pos.z(), best.path_clearance, next_yaw * 180.0 / M_PI);
   return true;
 }
 
@@ -547,6 +953,12 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   const Vector3d recovery_forward = task_search_manager_
                                         ? task_search_manager_->recoveryForwardDirection(cur_yaw)
                                         : Vector3d(std::cos(cur_yaw), std::sin(cur_yaw), 0.0);
+  // 竖直障碍物把通道切成左右两路时，先直接去占据地图中净宽更大的一侧。
+  // 该场景不参与普通frontier总分，也不等待上下绕行接管。
+  bool split_obstacle_detected = false;
+  if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
+                          split_obstacle_detected))
+    return true;
   if (recovery_side_latched_ &&
       (pos - recovery_side_origin_).head<2>().norm() >= recovery_side_release_distance_) {
     recovery_side_latched_ = false;
@@ -606,6 +1018,7 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
     Vector3d direction{1.0, 0.0, 0.0};
     double distance{0.0};
     double clearance{-1.0};
+    double minimum_path_clearance{-1.0};
     bool short_backtrack{false};
   };
   RecoveryChoice best_micro_adjustment;
@@ -613,6 +1026,23 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   const double current_clearance = sdf_map_->getDistance(pos);
   const double micro_max_distance = 0.40;
   const double micro_min_clearance_gain = 0.02;
+
+  auto minimumPathClearance = [&](const vector<Vector3d>& path) {
+    if (path.empty()) return -1.0;
+    double minimum_clearance = std::numeric_limits<double>::infinity();
+    for (size_t segment = 1; segment < path.size(); ++segment) {
+      const Vector3d delta = path[segment] - path[segment - 1];
+      const int samples =
+          std::max(1, static_cast<int>(std::ceil(delta.norm() / 0.05)));
+      for (int sample = 0; sample <= samples; ++sample) {
+        const Vector3d point = path[segment - 1] +
+            delta * static_cast<double>(sample) / static_cast<double>(samples);
+        minimum_clearance =
+            std::min(minimum_clearance, sdf_map_->getDistance(point));
+      }
+    }
+    return std::isfinite(minimum_clearance) ? minimum_clearance : -1.0;
+  };
 
   auto commitRecoveryChoice = [&](const RecoveryChoice& choice, bool micro_adjustment) {
     next_pos = choice.position;
@@ -645,8 +1075,9 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
     }
     if (micro_adjustment) {
       ROS_WARN("[clearance_micro_adjust] choose %.2fm side/diagonal translation; clearance "
-               "%.2f -> %.2fm, keep yaw=%.1fdeg.",
+               "%.2f -> %.2fm, full-path minimum=%.2fm, keep yaw=%.1fdeg.",
                choice.distance, current_clearance, choice.clearance,
+               choice.minimum_path_clearance,
                next_yaw * 180.0 / M_PI);
     }
     ROS_WARN_THROTTLE(0.5,
@@ -737,6 +1168,7 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
       choice.direction = direction;
       choice.distance = dist;
       choice.clearance = sdf_map_->getDistance(candidate);
+      choice.minimum_path_clearance = minimumPathClearance(candidate_path);
       choice.short_backtrack = short_backtrack;
 
       // 直行仍是最高优先级，并保持从远到近选择；短回撤维持原有一次性规则。
@@ -753,16 +1185,28 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
                                                 recovery_forward.normalized())
                                           : -2.0;
         if (!best_micro_adjustment.valid ||
-            choice.clearance > best_micro_adjustment.clearance + 0.01 ||
-            (std::fabs(choice.clearance - best_micro_adjustment.clearance) <= 0.01 &&
-             (choice.distance < best_micro_adjustment.distance - 1e-3 ||
-              (std::fabs(choice.distance - best_micro_adjustment.distance) <= 1e-3 &&
-               alignment > best_alignment)))) {
+            vertical_detour::preferPathByMinimumClearance(
+                choice.minimum_path_clearance, choice.clearance,
+                best_micro_adjustment.minimum_path_clearance,
+                best_micro_adjustment.clearance, choice.distance,
+                best_micro_adjustment.distance, alignment, best_alignment)) {
           best_micro_adjustment = choice;
         }
-      } else if (!long_side_fallback.valid) {
-        // 没有改善净空的短微调时，仍保留原先的较长侧向绕行能力。
-        long_side_fallback = choice;
+      } else {
+        // 较长侧绕同样按整条A*路径的最低净空排序。终点很空但中途贴墙的路线
+        // 不能再因为方向枚举靠前而直接获胜。
+        const double alignment = direction.normalized().dot(recovery_forward.normalized());
+        const double best_alignment = long_side_fallback.valid
+                                          ? long_side_fallback.direction.normalized().dot(
+                                                recovery_forward.normalized())
+                                          : -2.0;
+        if (!long_side_fallback.valid ||
+            vertical_detour::preferPathByMinimumClearance(
+                choice.minimum_path_clearance, choice.clearance,
+                long_side_fallback.minimum_path_clearance,
+                long_side_fallback.clearance, choice.distance,
+                long_side_fallback.distance, alignment, best_alignment))
+          long_side_fallback = choice;
       }
     }
   }
@@ -771,6 +1215,20 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
     return commitRecoveryChoice(best_micro_adjustment, true);
   if (long_side_fallback.valid)
     return commitRecoveryChoice(long_side_fallback, false);
+  // 已知是水平分流障碍时，下降不会绕过贯穿当前高度的占据区。较宽侧
+  // 暂时还不能落点就等待下一轮地图，不能让低位探测抢占并锁死水平重选。
+  if (split_obstacle_detected) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[wide_side_bypass] horizontal split remains, but no safe side step is available; "
+        "skip vertical detour and retry from the updated map.");
+    return false;
+  }
+  // 没有水平分流证据、也没有任何安全侧向候选时，才把已确认的低位
+  // 通道交给原来的上下绕行逻辑。
+  if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
+                                  true))
+    return true;
   if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw))
     return true;
 
@@ -783,6 +1241,225 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
       rejected_progress, rejected_position, rejected_astar, rejected_path);
   next_yaw = cur_yaw;
   return false;
+}
+
+bool FastExplorationManager::planInflationHistoryEscape(
+    const Vector3d& pos, const Vector3d& vel, const Vector3d& acc,
+    const Vector3d& yaw) {
+  if (!inflation_history_escape_enabled_ || recovery_odom_history_.size() < 2 ||
+      !planner_manager_->isControlledEscapePosition(pos))
+    return false;
+
+  const double max_distance = inflation_history_escape_max_distance_;
+  const double sample_step = inflation_history_escape_sample_step_;
+  const double start_clearance = sdf_map_->getDistance(pos);
+  const int start_contacts = planner_manager_->rawFootprintCollisionCount(pos);
+  struct EscapeCandidate {
+    vector<Vector3d> path;
+    double length{0.0};
+    double end_clearance{-1.0};
+    int priority{1};
+    bool backward{false};
+    const char* label{"history-tangent"};
+  };
+  vector<EscapeCandidate> candidates;
+
+  auto validateAndTruncate = [&](const vector<Vector3d>& source, bool backward,
+                                 int priority, const char* label) {
+    if (source.size() < 2) return;
+    vector<Vector3d> checked{pos};
+    double traveled = 0.0;
+    bool reached_clear = false;
+    double clear_run = 0.0;
+    double previous_clearance = start_clearance;
+    int previous_contacts = start_contacts;
+    for (size_t segment = 1; segment < source.size() && traveled < max_distance - 1e-6;
+         ++segment) {
+      const Vector3d delta = source[segment] - source[segment - 1];
+      const double segment_length = delta.norm();
+      if (segment_length < 1e-6) continue;
+      const int samples =
+          std::max(1, static_cast<int>(std::ceil(segment_length / sample_step)));
+      for (int sample = 1; sample <= samples; ++sample) {
+        Vector3d point = source[segment - 1] +
+                         delta * static_cast<double>(sample) /
+                             static_cast<double>(samples);
+        double advance = (point - checked.back()).norm();
+        if (traveled + advance > max_distance) {
+          const double remaining = max_distance - traveled;
+          if (remaining <= 1e-6) break;
+          point = checked.back() + (point - checked.back()).normalized() * remaining;
+          advance = remaining;
+        }
+        if (!pointInsideWorkspaceLock(point)) return;
+        const int contacts = planner_manager_->rawFootprintCollisionCount(point);
+        const double clearance = sdf_map_->getDistance(point);
+        if (!std::isfinite(clearance) || contacts > previous_contacts ||
+            clearance + inflation_history_escape_clearance_tolerance_ <
+                previous_clearance)
+          return;
+        previous_contacts = std::min(previous_contacts, contacts);
+        previous_clearance = std::max(previous_clearance, clearance);
+        checked.push_back(point);
+        traveled += advance;
+        const bool fully_clear =
+            !planner_manager_->isPositionInflated(point) && contacts == 0;
+        if (fully_clear) {
+          if (!reached_clear) {
+            reached_clear = true;
+            clear_run = 0.0;
+          } else {
+            clear_run += advance;
+          }
+          if (clear_run + 1e-6 >= inflation_escape_clear_margin_) break;
+        } else if (reached_clear) {
+          // 离开膨胀层后禁止为了凑路径长度再次擦回墙面。
+          return;
+        }
+        if (traveled >= max_distance - 1e-6) break;
+      }
+      if ((reached_clear && clear_run + 1e-6 >= inflation_escape_clear_margin_) ||
+          traveled >= max_distance - 1e-6)
+        break;
+    }
+    if (!reached_clear || traveled < 0.03) return;
+    EscapeCandidate candidate;
+    candidate.path = std::move(checked);
+    candidate.length = traveled;
+    candidate.end_clearance = sdf_map_->getDistance(candidate.path.back());
+    candidate.priority = priority;
+    candidate.backward = backward;
+    candidate.label = label;
+    candidates.push_back(std::move(candidate));
+  };
+
+  // 先从当前位置向16个水平方向探测，选择原始足迹占据采样减少最快、ESDF净空
+  // 增长最大的方向。它直接把受风贴墙的飞机横向拉回通道，而不是继续沿旧航迹蹭墙。
+  if (inflation_wall_pull_enabled_) {
+    Vector3d recent_forward = recovery_odom_history_.back() -
+                              recovery_odom_history_[recovery_odom_history_.size() - 2];
+    recent_forward.z() = 0.0;
+    if (recent_forward.head<2>().norm() > 1e-3) recent_forward.normalize();
+    double best_score = -std::numeric_limits<double>::infinity();
+    Vector3d best_direction = Vector3d::Zero();
+    const double probe_distance = std::min(0.20, max_distance);
+    for (int sample = 0; sample < 16; ++sample) {
+      const double angle = 2.0 * M_PI * static_cast<double>(sample) / 16.0;
+      const Vector3d direction(std::cos(angle), std::sin(angle), 0.0);
+      if (recent_forward.head<2>().norm() > 1e-3 &&
+          direction.dot(recent_forward) < -0.10)
+        continue;
+      const Vector3d probe = pos + probe_distance * direction;
+      if (!pointInsideWorkspaceLock(probe)) continue;
+      const int contacts = planner_manager_->rawFootprintCollisionCount(probe);
+      const double clearance = sdf_map_->getDistance(probe);
+      if (!std::isfinite(clearance) || contacts > start_contacts ||
+          clearance + inflation_history_escape_clearance_tolerance_ < start_clearance)
+        continue;
+      const double lateral_bonus =
+          recent_forward.head<2>().norm() > 1e-3
+              ? 0.10 * (1.0 - std::fabs(direction.dot(recent_forward)))
+              : 0.0;
+      const double score = 2.0 * static_cast<double>(start_contacts - contacts) +
+                           clearance - start_clearance + lateral_bonus;
+      if (score > best_score) {
+        best_score = score;
+        best_direction = direction;
+      }
+    }
+    if (best_direction.head<2>().norm() > 1e-3 && best_score > 1e-3) {
+      validateAndTruncate(inflation_escape::buildDirectionalPath(
+                              pos, best_direction, max_distance, sample_step),
+                          false, 0, "wall-normal");
+    }
+  }
+
+  validateAndTruncate(inflation_escape::buildForwardTangentPath(
+                          pos, recovery_odom_history_, max_distance, sample_step),
+                      false, 1, "history-tangent");
+  validateAndTruncate(inflation_escape::buildBackwardHistoryPath(
+                          pos, recovery_odom_history_, max_distance,
+                          recovery_history_spacing_),
+                      true, 2, "history-backtrack");
+  if (candidates.empty()) {
+    ROS_WARN_THROTTLE(0.5,
+                      "[inflation_history_escape] no monotonic wall-pull/history exit "
+                      "within %.2fm (start_contacts=%d).",
+                      max_distance, start_contacts);
+    return false;
+  }
+
+  std::stable_sort(candidates.begin(), candidates.end(),
+                   [](const EscapeCandidate& lhs, const EscapeCandidate& rhs) {
+    if (lhs.priority != rhs.priority) return lhs.priority < rhs.priority;
+    if (std::fabs(lhs.length - rhs.length) > 0.02) return lhs.length < rhs.length;
+    return lhs.end_clearance > rhs.end_clearance;
+  });
+  for (auto& candidate : candidates) {
+    if (candidate.path.size() == 2)
+      candidate.path.insert(candidate.path.begin() + 1,
+                            0.5 * (candidate.path.front() + candidate.path.back()));
+    if (!planner_manager_->isPathSafe(candidate.path, true)) continue;
+    Vector3d escape_vel = Vector3d::Zero();
+    const Vector3d escape_direction =
+        (candidate.path[1] - candidate.path.front()).normalized();
+    const double outward_speed = std::max(0.0, vel.dot(escape_direction));
+    escape_vel = std::min(0.20, outward_speed) * escape_direction;
+    if (!planner_manager_->planExploreTraj(candidate.path, escape_vel, acc, 0.0) ||
+        !planner_manager_->isTrajectorySafe(0.03, true) ||
+        !planner_manager_->trajectoryClearsInflation(max_distance, 0.02, true))
+      continue;
+
+    ed_->path_next_goal_ = candidate.path;
+    ed_->next_goal_ = candidate.path.back();
+    last_requested_goal_ = ed_->next_goal_;
+    has_last_requested_goal_ = true;
+    planner_manager_->planYawExplore(yaw, yaw[0], false, ep_->relax_time_);
+    ROS_ERROR("[inflation_history_escape] publish %s %s escape %.2fm "
+              "to (%.2f %.2f %.2f), yaw held at %.1fdeg, start_contacts=%d.",
+              candidate.backward ? "BACKWARD" : "FORWARD", candidate.label,
+              candidate.length,
+              ed_->next_goal_.x(), ed_->next_goal_.y(), ed_->next_goal_.z(),
+              yaw[0] * 180.0 / M_PI, start_contacts);
+    return true;
+  }
+
+  ROS_WARN_THROTTLE(0.5,
+                    "[inflation_history_escape] geometric exits exist but optimized "
+                    "trajectories failed monotonic contact/inflation clearance validation.");
+  return false;
+}
+
+bool FastExplorationManager::buildTurnInPlacePlan(
+    const Vector3d& pos, const Vector3d& yaw,
+    const Vector3d& turn_direction) {
+  if (!turn_in_place_enabled_ || !task_search_manager_ ||
+      !task_search_manager_->turnYawAlignmentPending() ||
+      turn_direction.head<2>().norm() < 1e-3)
+    return false;
+
+  const double target_yaw =
+      std::atan2(turn_direction.y(), turn_direction.x());
+  const double yaw_error =
+      std::atan2(std::sin(target_yaw - yaw[0]),
+                 std::cos(target_yaw - yaw[0]));
+  const double yaw_rate =
+      std::max(5.0, turn_in_place_yaw_rate_deg_) * M_PI / 180.0;
+  const double duration = std::max(
+      turn_in_place_min_duration_,
+      std::min(turn_in_place_max_duration_, std::fabs(yaw_error) / yaw_rate));
+  if (!planner_manager_->planStationaryTraj(pos, duration)) return false;
+
+  ed_->path_next_goal_ = {pos};
+  ed_->next_goal_ = pos;
+  planner_manager_->planYawExplore(
+      yaw, target_yaw, false, ep_->relax_time_);
+  turn_in_place_plan_ = true;
+  ROS_ERROR("[turn_in_place] hold XY and rotate yaw %.1fdeg -> %.1fdeg "
+            "over %.2fs; translation resumes after alignment.",
+            yaw[0] * 180.0 / M_PI, target_yaw * 180.0 / M_PI,
+            planner_manager_->local_data_.duration_);
+  return true;
 }
 
 void FastExplorationManager::initialize(ros::NodeHandle& nh) {
@@ -803,6 +1480,79 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/short_backtrack_max_chain", short_backtrack_max_chain_, 1);
   nh.param("mission/short_backtrack_min_direction_change_deg",
            short_backtrack_min_direction_change_deg_, 35.0);
+  nh.param("mission/inflation_history_escape/enabled",
+           inflation_history_escape_enabled_, true);
+  nh.param("mission/inflation_history_escape/max_distance",
+           inflation_history_escape_max_distance_, 0.45);
+  nh.param("mission/inflation_history_escape/sample_step",
+           inflation_history_escape_sample_step_, 0.05);
+  nh.param("mission/inflation_history_escape/clearance_tolerance",
+           inflation_history_escape_clearance_tolerance_, 0.02);
+  nh.param("mission/inflation_history_escape/wall_pull_enabled",
+           inflation_wall_pull_enabled_, true);
+  nh.param("mission/inflation_history_escape/clear_margin",
+           inflation_escape_clear_margin_, 0.10);
+  nh.param("mission/inflation_history_escape/history_spacing",
+           recovery_history_spacing_, 0.03);
+  nh.param("mission/inflation_history_escape/history_max_size",
+           recovery_history_max_size_, 200);
+  nh.param("mission/task_search/recovery/turn_in_place_enabled",
+           turn_in_place_enabled_, true);
+  nh.param("mission/task_search/recovery/turn_in_place_yaw_rate_deg",
+           turn_in_place_yaw_rate_deg_, 40.0);
+  nh.param("mission/task_search/recovery/turn_in_place_min_duration",
+           turn_in_place_min_duration_, 1.0);
+  nh.param("mission/task_search/recovery/turn_in_place_max_duration",
+           turn_in_place_max_duration_, 4.0);
+  nh.param("mission/wide_side_bypass/enabled", wide_side_bypass_enabled_, true);
+  nh.param("mission/wide_side_bypass/min_lookahead",
+           wide_side_bypass_min_lookahead_, 0.20);
+  nh.param("mission/wide_side_bypass/max_lookahead",
+           wide_side_bypass_max_lookahead_, 0.90);
+  nh.param("mission/wide_side_bypass/lateral_range",
+           wide_side_bypass_lateral_range_, 0.90);
+  nh.param("mission/wide_side_bypass/min_lane_width",
+           wide_side_bypass_min_lane_width_, 0.25);
+  nh.param("mission/wide_side_bypass/max_lateral_step",
+           wide_side_bypass_max_lateral_step_, 0.45);
+  nh.param("mission/wide_side_bypass/forward_step",
+           wide_side_bypass_forward_step_, 0.20);
+  nh.param("mission/wide_side_bypass/low_support_height",
+           wide_side_bypass_low_support_height_, 0.20);
+  nh.param("mission/wide_side_bypass/min_vertical_support_layers",
+           wide_side_bypass_min_vertical_support_layers_, 2);
+  inflation_history_escape_max_distance_ =
+      std::max(0.10, std::min(0.45, inflation_history_escape_max_distance_));
+  inflation_history_escape_sample_step_ =
+      std::max(0.02, std::min(0.10, inflation_history_escape_sample_step_));
+  inflation_history_escape_clearance_tolerance_ =
+      std::max(0.0, inflation_history_escape_clearance_tolerance_);
+  inflation_escape_clear_margin_ =
+      std::max(0.0, std::min(0.20, inflation_escape_clear_margin_));
+  recovery_history_spacing_ = std::max(0.01, recovery_history_spacing_);
+  recovery_history_max_size_ = std::max(20, recovery_history_max_size_);
+  turn_in_place_yaw_rate_deg_ =
+      std::max(5.0, std::min(90.0, turn_in_place_yaw_rate_deg_));
+  turn_in_place_min_duration_ =
+      std::max(0.30, turn_in_place_min_duration_);
+  turn_in_place_max_duration_ =
+      std::max(turn_in_place_min_duration_, turn_in_place_max_duration_);
+  wide_side_bypass_min_lookahead_ =
+      std::max(0.10, wide_side_bypass_min_lookahead_);
+  wide_side_bypass_max_lookahead_ =
+      std::max(wide_side_bypass_min_lookahead_, wide_side_bypass_max_lookahead_);
+  wide_side_bypass_lateral_range_ =
+      std::max(0.30, wide_side_bypass_lateral_range_);
+  wide_side_bypass_min_lane_width_ =
+      std::max(0.15, wide_side_bypass_min_lane_width_);
+  wide_side_bypass_max_lateral_step_ =
+      std::max(0.15, wide_side_bypass_max_lateral_step_);
+  wide_side_bypass_forward_step_ =
+      std::max(0.0, std::min(0.30, wide_side_bypass_forward_step_));
+  wide_side_bypass_low_support_height_ =
+      std::max(0.10, wide_side_bypass_low_support_height_);
+  wide_side_bypass_min_vertical_support_layers_ =
+      std::max(1, wide_side_bypass_min_vertical_support_layers_);
   nh.param("mission/vertical_detour/enabled", vertical_detour_enabled_, true);
   nh.param("mission/vertical_detour/low_height", vertical_detour_low_height_, 0.10);
   nh.param("mission/vertical_detour/forward_check_distance",
@@ -820,8 +1570,12 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/vertical_detour/xy_tolerance", vertical_detour_xy_tolerance_, 0.08);
   nh.param("mission/vertical_detour/verification_timeout",
            vertical_detour_verification_timeout_, 2.0);
+  nh.param("mission/vertical_detour/ascent_timeout",
+           vertical_detour_ascent_timeout_, 4.0);
   nh.param("mission/vertical_detour/required_confirmations",
            vertical_detour_required_confirmations_, 1);
+  nh.param("mission/vertical_detour/release_confirmations",
+           vertical_detour_release_confirmations_, 2);
   nh.param("mission/vertical_detour/footprint_radius",
            vertical_detour_footprint_radius_, 0.17);
   vertical_detour_low_height_ = std::max(0.10, vertical_detour_low_height_);
@@ -835,8 +1589,12 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
                vertical_detour_upper_forward_max_distance_);
   vertical_detour_footprint_radius_ =
       std::max(0.05, vertical_detour_footprint_radius_);
+  vertical_detour_ascent_timeout_ =
+      std::max(1.0, vertical_detour_ascent_timeout_);
   vertical_detour_required_confirmations_ =
       std::max(1, vertical_detour_required_confirmations_);
+  vertical_detour_release_confirmations_ =
+      std::max(1, vertical_detour_release_confirmations_);
   // 2026-07-13: 出口推断必须读取与规划器完全相同的累计 SDFMap，不能退化为实时雷达点云判断。
   task_search_manager_->setMap(sdf_map_);
   // view_finder_.reset(new ViewFinder(edt_environment_, nh));
@@ -1005,6 +1763,7 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
 
 int FastExplorationManager::planExploreMotion(
     const Vector3d& pos, const Vector3d& vel, const Vector3d& acc, const Vector3d& yaw) {
+  turn_in_place_plan_ = false;
   pending_short_backtrack_ = false;
   ros::Time t1 = ros::Time::now();
   auto t2 = t1;
@@ -1027,11 +1786,37 @@ int FastExplorationManager::planExploreMotion(
     ROS_WARN_THROTTLE(1.0, "[exit_mission] landing is active; exploration planning stopped.");
     return NO_FRONTIER;
   }
+  planner_manager_->path_finder_->clearProgressConstraint();
+  // 先处理地图确认转弯。真实转弯一旦成立，转弯前锁存的低空目标立即失效，
+  // 不能继续把无人机拉回旧通道。
+  Vector3d early_turn_direction;
+  if (mission_entered_search_region_ && task_search_manager_ &&
+      task_search_manager_->mappedCorridorDirection(
+          yaw[0], early_turn_direction)) {
+    cancelActiveLowProbe("mapped corridor turn confirmed");
+    if (turn_in_place_enabled_ &&
+        buildTurnInPlacePlan(pos, yaw, early_turn_direction))
+      return SUCCEED;
+  }
+  // 低空探测状态具有XY所有权。状态结束或被显式取消前，膨胀层历史逃逸不得
+  // 沿旧航迹横移，从而避免原地上升目标被带到数米之外仍继续生效。
+  const bool low_probe_was_active =
+      low_probe_phase_ != vertical_detour::LowProbePhase::IDLE;
   bool wait_for_low_confirmation = false;
   use_vertical_detour_target = handleActiveLowProbe(
       pos, next_pos, next_yaw, wait_for_low_confirmation);
   if (wait_for_low_confirmation) return FAIL;
-
+  if (!use_vertical_detour_target && !low_probe_was_active &&
+      vertical_detour::inflationEscapeAllowed(low_probe_phase_) &&
+      planInflationHistoryEscape(pos, vel, acc, yaw))
+    return SUCCEED;
+  // 除专用膨胀层逃逸外，普通搜索把禁回头直接放进A*展开。这样A*会寻找横移/斜前
+  // 绕障路线，不会先返回一条略向后的宽路、再被任务层整条丢弃。
+  Eigen::Vector3d astar_progress_direction;
+  if (task_search_manager_ &&
+      task_search_manager_->astarNoReturnDirection(astar_progress_direction)) {
+    planner_manager_->path_finder_->setProgressConstraint(astar_progress_direction, 0.0);
+  }
   if (!use_vertical_detour_target && shouldUseMissionEntryTransit(pos)) {
     // 2026-07-08 19:26: 在真正进入搜索区前，先强制把无人机送到门口/作业区入口，不再允许 frontier 收益把它绑在起飞区。
     use_forced_entry_target = true;
@@ -1316,10 +2101,18 @@ int FastExplorationManager::planExploreMotion(
   // 默认直段小幅快扫、转弯关闭附加扫描、新障碍物才做一次6秒全向扫描。
   bool camera_head_sweep_active = false;
   bool camera_continuous_rotation_active = false;
-  bool lateral_yaw_hold_requested = false;
-  bool mapped_turn_yaw_eligible = false;
+  const bool corridor_yaw_lock_scope =
+      !use_forced_entry_target && !use_stage3_target && task_search_manager_ &&
+      task_search_manager_->enabled() && !task_search_manager_->stage3Active();
+  const bool mapped_turn_yaw_eligible = corridor_yaw_lock_scope;
   double camera_rotation_rate =
       camera_head_scan_direction_ * 2.0 * M_PI / camera_head_sweep_period_;
+  if (corridor_yaw_lock_scope) {
+    if (camera_obstacle_scan_active_)
+      ROS_WARN("[corridor_yaw_lock] cancel camera yaw scan; only mapped turns may change yaw.");
+    camera_obstacle_scan_active_ = false;
+    camera_route_heading_valid_ = false;
+  }
   // 2026-07-24: 最新实测中出口候选1/5后，门框被相机障碍扫描误触发60deg/s环扫，
   // 下一帧雷达切面随即center_blocked并清票。候选验证期间立即取消环扫并沿路径朝前。
   const bool exit_verification_active =
@@ -1329,7 +2122,8 @@ int FastExplorationManager::planExploreMotion(
     camera_route_heading_valid_ = false;
     ROS_WARN("[camera_scan] CANCEL obstacle rotation: exit portal verification has priority.");
   }
-  if (camera_head_sweep_enabled_ && !use_forced_entry_target && !use_stage3_target &&
+  if (camera_head_sweep_enabled_ && !corridor_yaw_lock_scope &&
+      !use_forced_entry_target && !use_stage3_target &&
       task_search_manager_ && task_search_manager_->enabled() &&
       !task_search_manager_->stage3Active() &&
       !task_search_manager_->finalExitFrontierGuardActive() &&
@@ -1426,32 +2220,14 @@ int FastExplorationManager::planExploreMotion(
             camera_clear_sweep_period_);
       }
     }
-  } else if (exit_verification_active && motion_delta.norm() > 0.15) {
+  } else if (!corridor_yaw_lock_scope && exit_verification_active &&
+             motion_delta.norm() > 0.15) {
     // 2026-07-24: 连续5帧门验证期间只看飞行方向，不保持上一环扫角，也不叠加左右摆头。
     next_yaw = std::atan2(motion_delta.y(), motion_delta.x());
     camera_route_heading_valid_ = false;
     ROS_INFO_THROTTLE(
         1.0, "[camera_scan] EXIT_VERIFY forward yaw=%.1fdeg; all camera sweeps suspended.",
         next_yaw * 180.0 / M_PI);
-  }
-
-  // 普通任务frontier也可能要求横移。相对当前机头夹角约45度以上时只执行XY平移，
-  // 最终覆盖上面“航向跟随运动方向/相机扫头”的结果，保持雷达持续看原前方。
-  if (!use_forced_entry_target && !use_stage3_target && task_search_manager_ &&
-      task_search_manager_->enabled() && !task_search_manager_->stage3Active() &&
-      motion_delta.norm() > 0.15) {
-    mapped_turn_yaw_eligible = true;
-    const Eigen::Vector2d heading(std::cos(yaw[0]), std::sin(yaw[0]));
-    const double heading_alignment = motion_delta.normalized().dot(heading);
-    if (task_search::holdYawForLateralTranslation(heading_alignment)) {
-      next_yaw = yaw[0];
-      lateral_yaw_hold_requested = true;
-      camera_head_sweep_active = false;
-      camera_continuous_rotation_active = false;
-      ROS_WARN_THROTTLE(0.5,
-                        "[lateral_translation] hold yaw=%.1fdeg while moving at alignment=%.2f.",
-                        yaw[0] * 180.0 / M_PI, heading_alignment);
-    }
   }
 
   // 2026-07-14: 记录任务层原始目的地，后续路径截断不能覆盖碰撞失败应冷却的目标。
@@ -1714,16 +2490,26 @@ int FastExplorationManager::planExploreMotion(
       mapped_turn_yaw_eligible && task_search_manager_ &&
       task_search_manager_->mappedCorridorDirection(yaw[0], mapped_direction);
   if (mapped_turn_detected) {
-    // 地图墙体轮廓独立于本次轨迹方向触发：轨迹即使仍在横移，也能在弯前把机头对准新通道。
+    // 地图墙体轮廓独立于本次轨迹方向触发：yaw只朝向双墙确认的新通道轴线，
+    // 不能跟随局部A*绕柱切线，否则一次普通侧绕也会带着机头误转。
     next_yaw = std::atan2(mapped_direction.y(), mapped_direction.x());
-    look_forward_along_trajectory = true;
+    look_forward_along_trajectory = false;
     camera_head_sweep_active = false;
     camera_continuous_rotation_active = false;
-    ROS_WARN("[turn_yaw_follow] mapped wall contour detected ahead; finish yaw=%.1fdeg.",
+    ROS_WARN("[turn_yaw_follow] mapped bilateral-wall turn latched; hold wall-parallel target yaw=%.1fdeg.",
              next_yaw * 180.0 / M_PI);
-  } else if (lateral_yaw_hold_requested) {
-    // 地图没有形成前墙+连续侧墙轮廓时仍按普通绕障横移，不让临时轨迹改变机头。
+    // 若本轮普通规划才累计到第二票，丢弃刚生成的平移轨迹，先停住把机头转正。
+    if (buildTurnInPlacePlan(pos, yaw, mapped_direction)) return SUCCEED;
+  } else if (task_search::holdYawInCorridor(
+                 corridor_yaw_lock_scope, mapped_turn_detected)) {
+    // 通道内除累计地图确认的真实拐弯外，任何位置运动都不能改变机头方向。
+    next_yaw = yaw[0];
     look_forward_along_trajectory = false;
+    camera_head_sweep_active = false;
+    camera_continuous_rotation_active = false;
+    ROS_INFO_THROTTLE(0.5,
+                      "[corridor_yaw_lock] hold yaw=%.1fdeg; no mapped turn confirmed.",
+                      yaw[0] * 180.0 / M_PI);
   }
   planner_manager_->planYawExplore(
       yaw, next_yaw, look_forward_along_trajectory, ep_->relax_time_,
@@ -1763,7 +2549,31 @@ void FastExplorationManager::reportTrajectoryCollision() {
 
 void FastExplorationManager::updateMissionOdometry(const Vector3d& pos, double yaw) {
   // 2026-07-22: 连续里程计航迹是任务完成路段的唯一依据；规划器预测起点不再污染真实历史。
+  if (recovery_odom_history_.empty() ||
+      (pos - recovery_odom_history_.back()).norm() >= recovery_history_spacing_) {
+    recovery_odom_history_.push_back(pos);
+    while (static_cast<int>(recovery_odom_history_.size()) > recovery_history_max_size_)
+      recovery_odom_history_.pop_front();
+  }
   if (task_search_manager_) task_search_manager_->updateRobotPose(pos, yaw);
+}
+
+bool FastExplorationManager::detectMappedTurnDuringExecution(
+    double yaw, Vector3d& direction) {
+  if (!turn_in_place_enabled_ || !mission_entered_search_region_ ||
+      !task_search_manager_ ||
+      !task_search_manager_->enabled() || task_search_manager_->stage3Active())
+    return false;
+  if (!task_search_manager_->mappedCorridorDirection(yaw, direction))
+    return false;
+  return task_search_manager_->turnYawAlignmentPending();
+}
+
+bool FastExplorationManager::shouldStartInflationHistoryEscape(
+    const Vector3d& odom_pos) const {
+  return inflation_history_escape_enabled_ && recovery_odom_history_.size() >= 2 &&
+         inflation_escape::shouldStartFromOdometry(
+             planner_manager_->isControlledEscapePosition(odom_pos));
 }
 
 void FastExplorationManager::shortenPath(vector<Vector3d>& path) {

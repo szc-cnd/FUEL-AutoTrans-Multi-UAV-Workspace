@@ -4,6 +4,7 @@
 #include <ros/ros.h>
 #include <Eigen/Eigen>
 #include <memory>
+#include <deque>
 #include <vector>
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PointStamped.h>
@@ -38,6 +39,9 @@ public:
   void reportTrajectoryCollision();
   // 2026-07-22: 由FSM里程计回调连续更新任务航迹，旧路判断不再只依赖稀疏重规划时刻。
   void updateMissionOdometry(const Vector3d& pos, double yaw);
+  bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
+  bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
+  bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }
 
   // Benchmark method, classic frontier and rapid frontier
   int classicFrontier(const Vector3d& pos, const double& yaw);
@@ -101,6 +105,16 @@ private:
   Vector3d recovery_side_origin_{0.0, 0.0, 0.0};
   Vector3d recovery_side_dir_{1.0, 0.0, 0.0};
   double recovery_side_release_distance_{0.20};
+  // 前方竖直障碍把通道横向分开时，优先横移到占据地图中净宽更大的一侧。
+  bool wide_side_bypass_enabled_{true};
+  double wide_side_bypass_min_lookahead_{0.20};
+  double wide_side_bypass_max_lookahead_{0.90};
+  double wide_side_bypass_lateral_range_{0.90};
+  double wide_side_bypass_min_lane_width_{0.25};
+  double wide_side_bypass_max_lateral_step_{0.45};
+  double wide_side_bypass_forward_step_{0.20};
+  double wide_side_bypass_low_support_height_{0.20};
+  int wide_side_bypass_min_vertical_support_layers_{2};
   // 可选的一次性短回撤；比赛窄通道默认关闭。
   bool short_backtrack_enabled_{false};
   bool short_backtrack_latched_{false};
@@ -119,6 +133,21 @@ private:
   double short_backtrack_retry_cooldown_{1.5};
   int short_backtrack_max_chain_{1};
   double short_backtrack_min_direction_change_deg_{35.0};
+  // 仅在当前位置落入膨胀层时，沿高密度真实航迹切线前后脱困；不改变普通任务禁回头规则。
+  bool inflation_history_escape_enabled_{true};
+  double inflation_history_escape_max_distance_{0.45};
+  double inflation_history_escape_sample_step_{0.05};
+  double inflation_history_escape_clearance_tolerance_{0.02};
+  bool inflation_wall_pull_enabled_{true};
+  double inflation_escape_clear_margin_{0.10};
+  double recovery_history_spacing_{0.03};
+  int recovery_history_max_size_{200};
+  std::deque<Vector3d> recovery_odom_history_;
+  bool turn_in_place_enabled_{true};
+  bool turn_in_place_plan_{false};
+  double turn_in_place_yaw_rate_deg_{40.0};
+  double turn_in_place_min_duration_{1.0};
+  double turn_in_place_max_duration_{4.0};
   // 水平绕障全部失败后的三维恢复。下绕必须先原地下降并连续确认，不能生成斜向俯冲轨迹。
   bool vertical_detour_enabled_{true};
   double vertical_detour_low_height_{0.10};
@@ -131,17 +160,23 @@ private:
   double vertical_detour_height_tolerance_{0.06};
   double vertical_detour_xy_tolerance_{0.08};
   double vertical_detour_verification_timeout_{2.0};
+  double vertical_detour_ascent_timeout_{4.0};
   double vertical_detour_footprint_radius_{0.17};
   int vertical_detour_required_confirmations_{1};
+  int vertical_detour_release_confirmations_{2};
   vertical_detour::LowProbePhase low_probe_phase_{
       vertical_detour::LowProbePhase::IDLE};
   int low_probe_confirmations_{0};
+  int low_probe_release_confirmations_{0};
+  double low_probe_advanced_distance_{0.0};
   Vector3d low_probe_origin_{0.0, 0.0, 0.0};
   Vector3d low_probe_direction_{1.0, 0.0, 0.0};
   Vector3d low_probe_target_{0.0, 0.0, 0.0};
   double low_probe_return_height_{0.60};
   double low_probe_yaw_{0.0};
   ros::Time low_probe_verify_start_;
+  ros::Time low_probe_ascent_start_;
+  Vector3d low_probe_ascent_origin_{0.0, 0.0, 0.0};
 
   // Find optimal tour for coarse viewpoints of all frontiers
   void findGlobalTour(const Vector3d& cur_pos, const Vector3d& cur_vel, const Vector3d cur_yaw,
@@ -167,16 +202,29 @@ private:
   // 2026-07-13: 动态门后阶段改为多方向任务搜索恢复，不再永久沿入口朝向直飞。
   bool buildMissionForwardFallback(const Vector3d& pos, double cur_yaw, Vector3d& next_pos,
                                    double& next_yaw);
+  bool buildWideSideBypass(const Vector3d& pos, double cur_yaw,
+                           const Vector3d& forward, Vector3d& next_pos,
+                           double& next_yaw, bool& split_obstacle_detected);
+  bool occupiedNearHeight(const Vector3d& point, double height) const;
+  bool hasLowVerticalSupport(const Vector3d& point,
+                             double current_height) const;
+  bool planInflationHistoryEscape(const Vector3d& pos, const Vector3d& vel,
+                                  const Vector3d& acc, const Vector3d& yaw);
+  bool buildTurnInPlacePlan(const Vector3d& pos, const Vector3d& yaw,
+                            const Vector3d& turn_direction);
   bool buildVerticalDetourFallback(const Vector3d& pos, double cur_yaw,
                                    const Vector3d& forward, Vector3d& next_pos,
-                                   double& next_yaw);
+                                   double& next_yaw,
+                                   bool require_map_confirmed_underpass = false);
   bool handleActiveLowProbe(const Vector3d& pos, Vector3d& next_pos, double& next_yaw,
                             bool& wait_for_confirmation);
+  void cancelActiveLowProbe(const char* reason);
   bool isKnownSafeHorizontalCorridor(const Vector3d& start, const Vector3d& direction,
                                      double distance) const;
   bool isLowProbeCorridorSafe(const Vector3d& start, const Vector3d& direction,
                               double distance) const;
-  bool isKnownSafeVerticalPath(const Vector3d& start, double target_z) const;
+  bool isKnownSafeVerticalPath(const Vector3d& start, double target_z,
+                               bool allow_unknown = true) const;
   // 2026-07-24: 以当前高度附近的XY占据柱检测物体，并用沿通道方向的连续支撑剔除左右墙。
   bool cameraOccupancyColumn(const Vector3d& point, double reference_z) const;
   bool cameraWallSupported(const Vector3d& point, const Eigen::Vector2d& travel_dir) const;

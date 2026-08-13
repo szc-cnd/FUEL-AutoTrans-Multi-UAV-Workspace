@@ -9,6 +9,8 @@
 #include <plan_env/edt_environment.h>
 #include <plan_env/sdf_map.h>
 
+#include <limits>
+
 using Eigen::Vector4d;
 
 namespace fast_planner {
@@ -39,6 +41,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/trajectory_release_check_interval", fp_->trajectory_release_check_interval_, 0.04);
   nh.param("fsm/trajectory_release_max_start_error",
            fp_->trajectory_release_max_start_error_, 0.25);
+  nh.param("fsm/emergency_brake_horizon", fp_->emergency_brake_horizon_, 0.12);
 
   /* Initialize main modules */
   expl_manager_.reset(new FastExplorationManager);
@@ -54,6 +57,8 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   next_plan_retry_time_ = ros::Time(0);
   pending_traj_safe_since_ = ros::Time(0);
   next_pending_traj_check_ = ros::Time(0);
+  active_traj_valid_ = false;
+  active_traj_braked_ = false;
 
   /* Ros sub, pub and timer */
   exec_timer_ = nh.createTimer(ros::Duration(0.01), &FastExplorationFSM::FSMCallback, this);
@@ -76,6 +81,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   replan_pub_ = nh.advertise<std_msgs::Empty>("/planning/replan", 10);
   new_pub_ = nh.advertise<std_msgs::Empty>("/planning/new", 10);
   bspline_pub_ = nh.advertise<bspline::Bspline>("/planning/bspline", 10);
+  emergency_brake_pub_ = nh.advertise<std_msgs::Int32>("/planning/emergency_brake", 2);
   // 2026-07-13: latch 保证后启动的控制器也能收到当前安全门控状态。
   safety_hold_pub_ = nh.advertise<std_msgs::Bool>("/planning/safety_hold", 2, true);
   dynamic_detection_enable_pub_ =
@@ -97,6 +103,21 @@ void FastExplorationFSM::setSafetyHold(bool active, const string& reason) {
   msg.data = active;
   safety_hold_pub_.publish(msg);
   ROS_WARN("[safety_hold] %s reason=%s.", active ? "ACTIVE" : "RELEASED", reason.c_str());
+}
+
+void FastExplorationFSM::requestActiveTrajectoryBrake(const string& reason) {
+  if (!active_traj_valid_ || active_traj_braked_) return;
+
+  std_msgs::Int32 brake_msg;
+  brake_msg.data = active_traj_.traj_id_;
+  emergency_brake_pub_.publish(brake_msg);
+  const double elapsed = std::max(0.0, (ros::Time::now() - active_traj_.start_time_).toSec());
+  active_traj_.duration_ =
+      std::min(active_traj_.duration_, elapsed + std::max(0.02, fp_->emergency_brake_horizon_));
+  active_traj_braked_ = true;
+  fd_->static_state_ = true;
+  ROS_ERROR("[trajectory_brake] requested reason=%s horizon=%.2fs.", reason.c_str(),
+            fp_->emergency_brake_horizon_);
 }
 
 // 2026-07-27: 统一发布规划器判定后的门内检测授权，重复状态不打断 LDOT 跟踪会话。
@@ -157,6 +178,44 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
     case PLAN_TRAJ: {
       // 2026-07-22: 失败冷却期间不发布replan、不重新选点也不刷新规划可视化。
       if (!next_plan_retry_time_.isZero() && ros::Time::now() < next_plan_retry_time_) return;
+      // exploration_node 是单线程 spinner，规划函数运行期间安全定时器不能插入执行。
+      // 因此每次开始一次可能耗时的重规划前，先同步复核 traj_server 正在执行的旧轨迹。
+      if (active_traj_valid_ && !active_traj_braked_) {
+        double active_collision_distance = 0.0;
+        const bool raw_escape_safe =
+            !inflation_escape_active_ ||
+            planner_manager_->isRawPositionSafe(fd_->odom_pos_) ||
+            planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
+        const bool active_safe = raw_escape_safe && planner_manager_->checkTrajCollision(
+                                                        active_traj_, active_collision_distance,
+                                                        inflation_escape_active_);
+        if (!active_safe) {
+          requestActiveTrajectoryBrake("unsafe old trajectory before replanning");
+          expl_manager_->reportTrajectoryCollision();
+          ROS_WARN("[trajectory_brake] old trajectory rejected before planner call, "
+                   "path_dist=%.2fm.",
+                   active_collision_distance);
+        }
+      }
+      // 膨胀层脱困必须从真实里程计起点生成。这里只切换规划起点，不发布safety_hold，
+      // 控制器仍会继续接收当前控制状态，直到替代轨迹通过复核并发布。
+      if (!fd_->static_state_ &&
+          expl_manager_->shouldStartInflationHistoryEscape(fd_->odom_pos_)) {
+        fd_->static_state_ = true;
+        ROS_WARN("[inflation_history_escape] switch replanning start from 0.2s prediction "
+                 "to live odometry; controller hold remains disabled.");
+      }
+      // local_data_ 会被本轮候选规划改写；动态重规划起点必须来自上一条已经发布的轨迹。
+      if (!fd_->static_state_) {
+        const double active_replan_time =
+            active_traj_valid_
+                ? (ros::Time::now() - active_traj_.start_time_).toSec() + fp_->replan_time_
+                : std::numeric_limits<double>::infinity();
+        if (!active_traj_valid_ || active_traj_braked_ ||
+            active_replan_time >= active_traj_.duration_) {
+          fd_->static_state_ = true;
+        }
+      }
       if (fd_->static_state_) {
         // Plan from static state (hover)
         fd_->start_pt_ = fd_->odom_pos_;
@@ -167,7 +226,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         fd_->start_yaw_(1) = fd_->start_yaw_(2) = 0.0;
       } else {
         // Replan from non-static state, starting from 'replan_time' seconds later
-        LocalTrajData* info = &planner_manager_->local_data_;
+        LocalTrajData* info = &active_traj_;
         double t_r = (ros::Time::now() - info->start_time_).toSec() + fp_->replan_time_;
 
         fd_->start_pt_ = info->position_traj_.evaluateDeBoorT(t_r);
@@ -180,10 +239,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
 
       int res = callExplorationPlanner();
       if (res == SUCCEED) {
-        // 只有替代轨迹已经成功生成后才让traj_server准备交接。规划失败时继续执行
-        // 原有安全轨迹，不能先截断再原地等待下一次尝试。
-        if (exploration_policy::shouldInterruptCurrentTrajectory(true))
-          replan_pub_.publish(std_msgs::Empty());
+        // 候选轨迹还要经过 PUB_TRAJ 的连续地图复核；复核通过前不能截断旧轨迹。
         next_plan_retry_time_ = ros::Time(0);
         pending_traj_safe_since_ = ros::Time(0);
         next_pending_traj_check_ = ros::Time(0);
@@ -215,20 +271,25 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         auto& trajectory = planner_manager_->local_data_.position_traj_;
         const Eigen::Vector3d trajectory_start = trajectory.evaluateDeBoorT(0.0);
         const double start_error = (trajectory_start - fd_->odom_pos_).norm();
-        const bool raw_start_safe = planner_manager_->isRawPositionSafe(fd_->odom_pos_);
+        const bool controlled_escape_start =
+            planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
         const bool starts_in_inflation = planner_manager_->isPositionInflated(fd_->odom_pos_);
+        const bool raw_start_safe = planner_manager_->isRawPositionSafe(fd_->odom_pos_) ||
+                                    controlled_escape_start;
         const bool clears_inflation =
-            !starts_in_inflation || planner_manager_->trajectoryClearsInflation();
+            !controlled_escape_start ||
+            planner_manager_->trajectoryClearsInflation(
+                0.80, 0.02, controlled_escape_start);
         const bool release_safe = raw_start_safe && clears_inflation &&
                                   start_error <= fp_->trajectory_release_max_start_error_ &&
-                                  planner_manager_->isTrajectorySafe();
+                                  planner_manager_->isTrajectorySafe(
+                                      0.03, controlled_escape_start);
         if (!release_safe) {
           ROS_ERROR("[trajectory_release] reject before publish: start_error=%.2fm raw_safe=%d "
                     "inflated=%d clears=%d.",
                     start_error, static_cast<int>(raw_start_safe),
                     static_cast<int>(starts_in_inflation), static_cast<int>(clears_inflation));
           pending_traj_safe_since_ = ros::Time(0);
-          setSafetyHold(true, "trajectory release validation failed");
           fd_->static_state_ = true;
           next_plan_retry_time_ =
               now + ros::Duration(std::max(0.05, fp_->plan_failure_retry_interval_));
@@ -245,7 +306,13 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         const ros::Time release_start = now;
         planner_manager_->local_data_.start_time_ = release_start;
         fd_->newest_traj_.start_time = release_start;
+        // bspline 本身会原子替换 traj_server 的旧轨迹；这里不再跨话题先发 replan，
+        // 避免消息乱序后 replan 反而把刚收到的新轨迹截短。
         bspline_pub_.publish(fd_->newest_traj_);
+        active_traj_ = planner_manager_->local_data_;
+        active_traj_valid_ = true;
+        active_traj_braked_ = false;
+        active_turn_in_place_ = pending_turn_in_place_;
         // 2026-07-27: 发布顺序固定为“轨迹先、检测使能后”，满足入口目标下发后才开始识别。
         if (!first_corridor_traj_published_) {
           first_corridor_traj_published_ = true;
@@ -253,7 +320,8 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
                                     "first corridor trajectory published");
         }
         // 2026-07-13: 只有新轨迹已经发布后才解除安全悬停，避免规划成功与轨迹服务器接收之间的空窗。
-        inflation_escape_active_ = planner_manager_->isPositionInflated(fd_->odom_pos_);
+        inflation_escape_active_ =
+            planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
         inflation_escape_clear_since_ = ros::Time(0);
         setSafetyHold(false, inflation_escape_active_
                                  ? "validated inflation escape trajectory published"
@@ -269,12 +337,23 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
     }
 
     case EXEC_TRAJ: {
-      LocalTrajData* info = &planner_manager_->local_data_;
+      LocalTrajData* info = active_traj_valid_ ? &active_traj_ : &planner_manager_->local_data_;
       double t_cur = (ros::Time::now() - info->start_time_).toSec();
 
       // Replan if traj is almost fully executed
       double time_to_end = info->duration_ - t_cur;
-      if (time_to_end < fp_->replan_thresh1_) {
+      if (active_turn_in_place_) {
+        // 原地转向要执行到yaw终点，不能按普通平移轨迹在“剩余1秒”时提前打断。
+        if (time_to_end <= 0.05) {
+          active_turn_in_place_ = false;
+          fd_->static_state_ = true;
+          transitState(PLAN_TRAJ, "turn-in-place-complete");
+          ROS_ERROR("[turn_in_place] yaw completed; replan translation from live odometry.");
+        }
+        return;
+      }
+      if (exploration_policy::shouldReplanNearTrajectoryEnd(
+              time_to_end, fp_->replan_thresh1_)) {
         transitState(PLAN_TRAJ, "FSM");
         ROS_WARN("Replan: traj fully executed=================================");
         return;
@@ -303,6 +382,8 @@ int FastExplorationFSM::callExplorationPlanner() {
 
   int res = expl_manager_->planExploreMotion(fd_->start_pt_, fd_->start_vel_, fd_->start_acc_,
                                              fd_->start_yaw_);
+  pending_turn_in_place_ =
+      res == SUCCEED && expl_manager_->currentPlanIsTurnInPlace();
   classic_ = false;
 
   // int res = expl_manager_->classicFrontier(fd_->start_pt_, fd_->start_yaw_[0]);
@@ -481,73 +562,101 @@ void FastExplorationFSM::triggerCallback(const nav_msgs::PathConstPtr& msg) {
 }
 
 void FastExplorationFSM::safetyCallback(const ros::TimerEvent& e) {
-  if (state_ == EXPL_STATE::EXEC_TRAJ) {
-    // 2026-07-13: 碰撞检查不能只看理想轨迹，还要检查真实 /Odometry 与当前样条的偏差。
-    // 2026-07-13: 该仓库的 evaluateDeBoorT 接口不是 const，使用可变引用仅用于读取当前期望位置。
-    auto& trajectory = planner_manager_->local_data_.position_traj_;
-    const double traj_time = std::max(
-        0.0, std::min((ros::Time::now() - planner_manager_->local_data_.start_time_).toSec(),
-                      planner_manager_->local_data_.duration_));
-    const Eigen::Vector3d desired = trajectory.evaluateDeBoorT(traj_time);
-    const Eigen::Vector3d tracking_error = fd_->odom_pos_ - desired;
-    const double error_xy = tracking_error.head<2>().norm();
-    const double error_z = std::fabs(tracking_error.z());
-    const bool in_handover_grace = traj_time < fp_->tracking_error_grace_time_;
-    const bool tracking_exceeded = error_xy > fp_->max_tracking_error_xy_ ||
-                                   error_z > fp_->max_tracking_error_z_;
-    if (in_handover_grace || !tracking_exceeded) {
+  const bool replacement_pending =
+      state_ == EXPL_STATE::PLAN_TRAJ || state_ == EXPL_STATE::PUB_TRAJ;
+  const bool execution_stage = replacement_pending || state_ == EXPL_STATE::EXEC_TRAJ;
+  if (!execution_stage || !exploration_policy::shouldMonitorPublishedTrajectory(
+                              active_traj_valid_, replacement_pending,
+                              active_traj_braked_))
+    return;
+
+  // 正常平移执行期间同步累计地图转弯证据。第二次命中后立刻短制动并切换到
+  // 原地yaw轨迹，不再等当前平移轨迹接近终点才发现拐角。
+  if (state_ == EXPL_STATE::EXEC_TRAJ && !active_turn_in_place_ &&
+      !inflation_escape_active_) {
+    Eigen::Vector3d turn_direction;
+    if (expl_manager_->detectMappedTurnDuringExecution(
+            fd_->odom_yaw_, turn_direction)) {
+      requestActiveTrajectoryBrake("mapped turn confirmed; stop before yaw alignment");
+      fd_->static_state_ = true;
+      transitState(PLAN_TRAJ, "safetyCallback-turn-in-place");
+      ROS_ERROR("[turn_in_place] mapped turn confirmed during execution; brake translation "
+                "and rotate toward %.1fdeg.",
+                std::atan2(turn_direction.y(), turn_direction.x()) * 180.0 / M_PI);
+      return;
+    }
+  }
+
+  // 候选规划会改写 planner_manager_->local_data_，这里只检查 traj_server 真正执行的快照。
+  auto& trajectory = active_traj_.position_traj_;
+  const double traj_time = std::max(
+      0.0, std::min((ros::Time::now() - active_traj_.start_time_).toSec(),
+                    active_traj_.duration_));
+  const Eigen::Vector3d desired = trajectory.evaluateDeBoorT(traj_time);
+  const Eigen::Vector3d tracking_error = fd_->odom_pos_ - desired;
+  const double error_xy = tracking_error.head<2>().norm();
+  const double error_z = std::fabs(tracking_error.z());
+  const bool in_handover_grace = traj_time < fp_->tracking_error_grace_time_;
+  const bool tracking_exceeded = error_xy > fp_->max_tracking_error_xy_ ||
+                                 error_z > fp_->max_tracking_error_z_;
+  if (in_handover_grace || !tracking_exceeded) {
+    tracking_error_since_ = ros::Time(0);
+  } else {
+    if (tracking_error_since_.isZero()) tracking_error_since_ = ros::Time::now();
+    const double exceeded_time = (ros::Time::now() - tracking_error_since_).toSec();
+    const bool hard_error = error_xy > fp_->hard_tracking_error_xy_ ||
+                            error_z > fp_->hard_tracking_error_z_;
+    if (hard_error || exceeded_time >= fp_->tracking_error_confirm_time_) {
+      if (hard_error) requestActiveTrajectoryBrake("hard tracking error");
+      fd_->static_state_ = true;
+      ROS_ERROR("[tracking_safety] %s replan: error_xy=%.2fm error_z=%.2fm duration=%.2fs.",
+                hard_error ? "short-brake" : "odometry", error_xy, error_z, exceeded_time);
       tracking_error_since_ = ros::Time(0);
-    } else {
-      if (tracking_error_since_.isZero()) tracking_error_since_ = ros::Time::now();
-      const double exceeded_time = (ros::Time::now() - tracking_error_since_).toSec();
-      const bool hard_error = error_xy > fp_->hard_tracking_error_xy_ ||
-                              error_z > fp_->hard_tracking_error_z_;
-      if (hard_error || exceeded_time >= fp_->tracking_error_confirm_time_) {
-        // 2026-07-13: 普通持续偏差从真实里程计柔和重规划，不把目标误判为碰撞；严重偏差才清空轨迹急停。
-        if (hard_error) setSafetyHold(true, "hard tracking error");
-        fd_->static_state_ = true;
-        ROS_ERROR("[tracking_safety] %s replan: error_xy=%.2fm error_z=%.2fm duration=%.2fs.",
-                  hard_error ? "hard-stop" : "odometry", error_xy, error_z, exceeded_time);
-        tracking_error_since_ = ros::Time(0);
+      if (state_ != EXPL_STATE::PLAN_TRAJ)
         transitState(PLAN_TRAJ, "safetyCallback-tracking");
-        return;
-      }
-      ROS_WARN_THROTTLE(0.5,
-                        "[tracking_safety] confirming error_xy=%.2fm error_z=%.2fm for %.2f/%.2fs.",
-                        error_xy, error_z, exceeded_time, fp_->tracking_error_confirm_time_);
+    } else {
+      ROS_WARN_THROTTLE(
+          0.5, "[tracking_safety] confirming error_xy=%.2fm error_z=%.2fm for %.2f/%.2fs.",
+          error_xy, error_z, exceeded_time, fp_->tracking_error_confirm_time_);
     }
-    // Check safety and trigger replan if necessary
-    double dist;
-    // 2026-07-28: 已通过发布门控的膨胀层逃逸，在真正离开膨胀层前使用单调净空判据，
-    // 防止普通检查在path_dist=0处立即否决同一条轨迹。
-    if (inflation_escape_active_) {
-      if (!planner_manager_->isRawPositionSafe(fd_->odom_pos_)) {
-        setSafetyHold(true, "raw footprint collision during inflation escape");
-        fd_->static_state_ = true;
-        inflation_escape_active_ = false;
+  }
+
+  // 已通过发布门控的膨胀层逃逸，在真正离开膨胀层前使用单调净空判据。
+  if (inflation_escape_active_) {
+    const bool still_inflated = planner_manager_->isPositionInflated(fd_->odom_pos_);
+    const bool raw_safe = planner_manager_->isRawPositionSafe(fd_->odom_pos_);
+    const bool still_needs_escape = still_inflated || !raw_safe;
+    if (still_needs_escape &&
+        !planner_manager_->isControlledEscapePosition(fd_->odom_pos_)) {
+      requestActiveTrajectoryBrake("footprint contact worsened during inflation escape");
+      fd_->static_state_ = true;
+      inflation_escape_active_ = false;
+      if (state_ != EXPL_STATE::PLAN_TRAJ)
         transitState(PLAN_TRAJ, "safetyCallback-raw-escape");
-        return;
-      }
-      if (!planner_manager_->isPositionInflated(fd_->odom_pos_)) {
-        if (inflation_escape_clear_since_.isZero())
-          inflation_escape_clear_since_ = ros::Time::now();
-        if ((ros::Time::now() - inflation_escape_clear_since_).toSec() >= 0.20) {
-          inflation_escape_active_ = false;
-          ROS_WARN("[footprint_safety] inflation escape completed after 0.20s continuous clearance.");
-        }
-      } else {
-        inflation_escape_clear_since_ = ros::Time(0);
-      }
+      return;
     }
-    bool safe = planner_manager_->checkTrajCollision(dist, inflation_escape_active_);
-    if (!safe) {
-      // 2026-07-13: 碰撞预测先刹停再重规划，修复仅切 FSM 状态但控制器仍执行旧轨迹的问题。
-      setSafetyHold(true, "future footprint collision");
-      // 2026-07-13: 同步通知任务选点层冷却碰撞目标，防止安全重规划反复选择同一柱边点。
-      expl_manager_->reportTrajectoryCollision();
-      ROS_WARN("Replan: collision detected==================================");
+    if (!still_needs_escape) {
+      if (inflation_escape_clear_since_.isZero())
+        inflation_escape_clear_since_ = ros::Time::now();
+      if ((ros::Time::now() - inflation_escape_clear_since_).toSec() >= 0.20) {
+        inflation_escape_active_ = false;
+        ROS_WARN("[footprint_safety] inflation escape completed after 0.20s continuous clearance.");
+      }
+    } else {
+      inflation_escape_clear_since_ = ros::Time(0);
+    }
+  }
+
+  double dist;
+  const bool safe =
+      planner_manager_->checkTrajCollision(active_traj_, dist, inflation_escape_active_);
+  if (exploration_policy::shouldBrakePublishedTrajectory(active_traj_valid_, !safe,
+                                                          active_traj_braked_)) {
+    requestActiveTrajectoryBrake("future footprint collision");
+    expl_manager_->reportTrajectoryCollision();
+    ROS_WARN("Replan: collision detected, old trajectory short-braked at path_dist=%.2fm", dist);
+    if (state_ != EXPL_STATE::PLAN_TRAJ)
       transitState(PLAN_TRAJ, "safetyCallback");
-    }
   }
 }
 

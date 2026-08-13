@@ -90,4 +90,10 @@ if(CATKIN_ENABLE_TESTING)
   add_test(NAME frontier_clearance_policy_test COMMAND frontier_clearance_policy_test)
   add_executable(path_shortening_policy_test test/path_shortening_policy_test.cpp)
   add_test(NAME path_shortening_policy_test COMMAND path_shortening_policy_test)
+  add_executable(replan_execution_policy_test test/replan_execution_policy_test.cpp)
+  add_test(NAME replan_execution_policy_test COMMAND replan_execution_policy_test)
+  add_executable(inflation_history_escape_policy_test
+    test/inflation_history_escape_policy_test.cpp)
+  add_test(NAME inflation_history_escape_policy_test
+    COMMAND inflation_history_escape_policy_test)
 endif()

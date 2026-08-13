@@ -42,9 +42,13 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
            footprint_min_occupied_support_, 2);
   nh.param("manager/supported_occupancy_hard_reject_enabled",
            supported_occupancy_hard_reject_enabled_, true);
+  nh.param("manager/escape_max_initial_occupied_samples",
+           escape_max_initial_occupied_samples_, 6);
   footprint_check_radius_ = std::max(0.0, footprint_check_radius_);
   footprint_check_samples_ = std::max(4, footprint_check_samples_);
   footprint_min_occupied_support_ = std::max(1, footprint_min_occupied_support_);
+  escape_max_initial_occupied_samples_ =
+      std::max(0, escape_max_initial_occupied_samples_);
 
   bool use_geometric_path, use_kinodynamic_path, use_topo_path, use_optimization,
       use_active_perception;
@@ -105,25 +109,52 @@ void FastPlannerManager::setGlobalWaypoints(vector<Eigen::Vector3d>& waypoints) 
 }
 
 bool FastPlannerManager::checkTrajCollision(double& distance, bool allow_inflation_escape) {
-  double t_now = (ros::Time::now() - local_data_.start_time_).toSec();
+  return checkTrajCollision(local_data_, distance, allow_inflation_escape);
+}
 
-  Eigen::Vector3d cur_pt = local_data_.position_traj_.evaluateDeBoorT(t_now);
+bool FastPlannerManager::checkTrajCollision(LocalTrajData& trajectory, double& distance,
+                                            bool allow_inflation_escape) {
+  const double t_now = std::max(
+      0.0, std::min((ros::Time::now() - trajectory.start_time_).toSec(), trajectory.duration_));
+
+  Eigen::Vector3d cur_pt = trajectory.position_traj_.evaluateDeBoorT(t_now);
   double radius = 0.0;
   Eigen::Vector3d fut_pt;
   double fut_t = 0.02;
-  // 2026-07-28: 仅在当前轨迹点确实位于膨胀层时启用逃逸判据；离开后永久恢复普通硬检查。
-  bool escaping_inflation =
-      allow_inflation_escape && sdf_map_->getInflateOccupancy(cur_pt) != 0;
   double previous_clearance = sdf_map_->getDistance(cur_pt);
+  int previous_contacts = rawFootprintCollisionCount(cur_pt);
+  // 机体半径大于建图膨胀时，中心可能尚未进入膨胀层但旋翼边缘已经触墙；
+  // 这两种起点都使用同一套“接触不增加、净空不下降”逃逸规则。
+  bool escaping_inflation =
+      allow_inflation_escape &&
+      (sdf_map_->getInflateOccupancy(cur_pt) != 0 || previous_contacts > 0);
+  if (escaping_inflation &&
+      previous_contacts > escape_max_initial_occupied_samples_) {
+    distance = 0.0;
+    return false;
+  }
+  if (!escaping_inflation && !isPositionSafe(cur_pt)) {
+    distance = 0.0;
+    ROS_WARN_THROTTLE(0.5,
+                      "[footprint_safety] active trajectory point is occupied at %.2f %.2f %.2f, "
+                      "radius=%.2f.",
+                      cur_pt.x(), cur_pt.y(), cur_pt.z(), footprint_check_radius_);
+    return false;
+  }
 
-  while (radius < 6.0 && t_now + fut_t < local_data_.duration_) {
-    fut_pt = local_data_.position_traj_.evaluateDeBoorT(t_now + fut_t);
+  while (radius < 6.0 && t_now + fut_t < trajectory.duration_) {
+    fut_pt = trajectory.position_traj_.evaluateDeBoorT(t_now + fut_t);
     // double dist = edt_environment_->sdf_map_->getDistance(fut_pt);
     // 2026-07-13: 不能只检查轨迹中心点；橙色柱旁中心安全时，Iris 旋翼仍可能已经接触障碍物。
     bool safe = false;
-    if (escaping_inflation && sdf_map_->getInflateOccupancy(fut_pt) != 0) {
+    const int contacts = rawFootprintCollisionCount(fut_pt);
+    const bool still_needs_escape =
+        sdf_map_->getInflateOccupancy(fut_pt) != 0 || contacts > 0;
+    if (escaping_inflation && still_needs_escape) {
       const double clearance = sdf_map_->getDistance(fut_pt);
-      safe = isRawFootprintSafe(fut_pt) && clearance + 0.02 >= previous_clearance;
+      safe = contacts <= previous_contacts &&
+             clearance + 0.02 >= previous_clearance;
+      previous_contacts = std::min(previous_contacts, contacts);
       previous_clearance = std::max(previous_clearance, clearance);
     } else {
       escaping_inflation = false;
@@ -175,10 +206,17 @@ bool FastPlannerManager::isSupportedOccupied(const Eigen::Vector3d& position) co
 }
 
 bool FastPlannerManager::isRawFootprintSafe(const Eigen::Vector3d& position) const {
-  if (!sdf_map_ || !sdf_map_->isInMap(position)) return false;
+  return rawFootprintCollisionCount(position) == 0;
+}
+
+int FastPlannerManager::rawFootprintCollisionCount(
+    const Eigen::Vector3d& position) const {
+  if (!sdf_map_ || !sdf_map_->isInMap(position))
+    return std::numeric_limits<int>::max();
 
   // 2026-07-23: 不再只采最外圆周；按中心、半径一半和最外沿组成真实圆盘，
   // 防止放宽膨胀层硬拒绝后漏掉位于旋翼圆盘内部、但恰好不在圆周采样点上的体素。
+  int occupied_samples = 0;
   const double z_offsets[] = {-0.06, 0.0, 0.06};
   for (double z_offset : z_offsets) {
     for (int ring = 0; ring <= 2; ++ring) {
@@ -191,12 +229,12 @@ bool FastPlannerManager::isRawFootprintSafe(const Eigen::Vector3d& position) con
         probe.x() += radius * std::cos(angle);
         probe.y() += radius * std::sin(angle);
         probe.z() += z_offset;
-        if (!sdf_map_->isInMap(probe) || isSupportedOccupied(probe))
-          return false;
+        if (!sdf_map_->isInMap(probe)) return std::numeric_limits<int>::max();
+        if (isSupportedOccupied(probe)) ++occupied_samples;
       }
     }
   }
-  return true;
+  return occupied_samples;
 }
 
 bool FastPlannerManager::isPositionSafe(const Eigen::Vector3d& position) const {
@@ -218,18 +256,31 @@ bool FastPlannerManager::isRawPositionSafe(const Eigen::Vector3d& position) cons
   return isRawFootprintSafe(position);
 }
 
+bool FastPlannerManager::isControlledEscapePosition(
+    const Eigen::Vector3d& position) const {
+  const int contacts = rawFootprintCollisionCount(position);
+  return contacts <= escape_max_initial_occupied_samples_ &&
+         (isPositionInflated(position) || contacts > 0);
+}
+
 // 2026-07-28: 不把地图外误当成普通膨胀接触；地图外仍由原始足迹检查直接拒绝。
 bool FastPlannerManager::isPositionInflated(const Eigen::Vector3d& position) const {
   return sdf_map_ && sdf_map_->isInMap(position) &&
          sdf_map_->getInflateOccupancy(position) != 0;
 }
 
-bool FastPlannerManager::isPathSafe(const vector<Eigen::Vector3d>& path) const {
+bool FastPlannerManager::isPathSafe(const vector<Eigen::Vector3d>& path,
+                                    bool allow_contact_escape) const {
   if (path.empty()) return false;
   // 2026-07-13: A* 使用中心栅格；按 0.05m 插值复核完整足迹，不能让稀疏路径点跨过细柱。
   // 2026-07-27: 起点位于膨胀层时，仅允许净空不下降的连续脱困段；一旦离开后严禁重新进入。
-  if (!isRawFootprintSafe(path.front())) return false;
-  bool escaping_inflation = sdf_map_->getInflateOccupancy(path.front()) != 0;
+  int previous_contacts = rawFootprintCollisionCount(path.front());
+  if ((!allow_contact_escape && previous_contacts != 0) ||
+      previous_contacts > escape_max_initial_occupied_samples_)
+    return false;
+  bool escaping_inflation =
+      sdf_map_->getInflateOccupancy(path.front()) != 0 ||
+      (allow_contact_escape && previous_contacts > 0);
   double previous_clearance = sdf_map_->getDistance(path.front());
   if (escaping_inflation) {
     ROS_WARN_THROTTLE(1.0,
@@ -241,9 +292,14 @@ bool FastPlannerManager::isPathSafe(const vector<Eigen::Vector3d>& path) const {
     for (int sample = 1; sample <= samples; ++sample) {
       const Eigen::Vector3d point =
           path[segment - 1] + delta * static_cast<double>(sample) / static_cast<double>(samples);
-      if (escaping_inflation && sdf_map_->getInflateOccupancy(point) != 0) {
+      const int contacts = rawFootprintCollisionCount(point);
+      const bool still_needs_escape =
+          sdf_map_->getInflateOccupancy(point) != 0 || contacts > 0;
+      if (escaping_inflation && still_needs_escape) {
         const double clearance = sdf_map_->getDistance(point);
-        if (!isRawFootprintSafe(point) || clearance + 0.02 < previous_clearance) return false;
+        if (contacts > previous_contacts || clearance + 0.02 < previous_clearance)
+          return false;
+        previous_contacts = std::min(previous_contacts, contacts);
         previous_clearance = std::max(previous_clearance, clearance);
       } else {
         escaping_inflation = false;
@@ -254,7 +310,8 @@ bool FastPlannerManager::isPathSafe(const vector<Eigen::Vector3d>& path) const {
   return true;
 }
 
-bool FastPlannerManager::isTrajectorySafe(double sample_dt) {
+bool FastPlannerManager::isTrajectorySafe(double sample_dt,
+                                          bool allow_contact_escape) {
   // 2026-07-14: 此检查不依赖 start_time_，用于新轨迹写入 local_data_ 后、发布给控制器前的静态复核。
   const double duration = local_data_.position_traj_.getTimeSum();
   if (duration <= 0.0) return false;
@@ -263,22 +320,34 @@ bool FastPlannerManager::isTrajectorySafe(double sample_dt) {
   const int samples = std::max(1, static_cast<int>(std::ceil(duration / sample_dt)));
   bool escaping_inflation = false;
   double previous_clearance = 0.0;
+  int previous_contacts = 0;
   for (int sample = 0; sample <= samples; ++sample) {
     const double t = duration * static_cast<double>(sample) / static_cast<double>(samples);
     const Eigen::Vector3d point = local_data_.position_traj_.evaluateDeBoorT(t);
     // 2026-07-27: 与几何路径一致，轨迹起点若已在膨胀层只能沿ESDF净空不下降方向连续退出。
     bool safe = false;
     if (sample == 0) {
-      escaping_inflation = sdf_map_->getInflateOccupancy(point) != 0;
       previous_clearance = sdf_map_->getDistance(point);
-      safe = isRawFootprintSafe(point);
-    } else if (escaping_inflation && sdf_map_->getInflateOccupancy(point) != 0) {
-      const double clearance = sdf_map_->getDistance(point);
-      safe = isRawFootprintSafe(point) && clearance + 0.02 >= previous_clearance;
-      previous_clearance = std::max(previous_clearance, clearance);
+      previous_contacts = rawFootprintCollisionCount(point);
+      escaping_inflation = sdf_map_->getInflateOccupancy(point) != 0 ||
+                           (allow_contact_escape && previous_contacts > 0);
+      safe = previous_contacts == 0 ||
+             (allow_contact_escape && escaping_inflation &&
+              previous_contacts <= escape_max_initial_occupied_samples_);
     } else {
-      escaping_inflation = false;
-      safe = isPositionSafe(point);
+      const double clearance = sdf_map_->getDistance(point);
+      const int contacts = rawFootprintCollisionCount(point);
+      const bool still_needs_escape =
+          sdf_map_->getInflateOccupancy(point) != 0 || contacts > 0;
+      if (escaping_inflation && still_needs_escape) {
+        safe = contacts <= previous_contacts &&
+               clearance + 0.02 >= previous_clearance;
+        previous_contacts = std::min(previous_contacts, contacts);
+        previous_clearance = std::max(previous_clearance, clearance);
+      } else {
+        escaping_inflation = false;
+        safe = isPositionSafe(point);
+      }
     }
     if (!safe) {
       ROS_WARN_THROTTLE(0.5,
@@ -292,12 +361,17 @@ bool FastPlannerManager::isTrajectorySafe(double sample_dt) {
 }
 
 bool FastPlannerManager::trajectoryClearsInflation(double max_path_distance,
-                                                   double sample_dt) {
+                                                   double sample_dt,
+                                                   bool allow_contact_escape) {
   const double duration = local_data_.position_traj_.getTimeSum();
   if (duration <= 0.0) return false;
   const Eigen::Vector3d start = local_data_.position_traj_.evaluateDeBoorT(0.0);
-  if (!isPositionInflated(start)) return true;
-  if (!isRawFootprintSafe(start)) return false;
+  int previous_contacts = rawFootprintCollisionCount(start);
+  if (!isPositionInflated(start) && previous_contacts == 0) return true;
+  if (previous_contacts != 0 &&
+      (!allow_contact_escape ||
+       previous_contacts > escape_max_initial_occupied_samples_))
+    return false;
 
   sample_dt = std::max(0.01, sample_dt);
   max_path_distance = std::max(0.20, max_path_distance);
@@ -309,8 +383,10 @@ bool FastPlannerManager::trajectoryClearsInflation(double max_path_distance,
         local_data_.position_traj_.evaluateDeBoorT(std::min(t, duration));
     traveled += (point - previous).norm();
     previous = point;
-    if (!isRawFootprintSafe(point)) return false;
-    if (!isPositionInflated(point)) return true;
+    const int contacts = rawFootprintCollisionCount(point);
+    if (contacts > previous_contacts) return false;
+    previous_contacts = std::min(previous_contacts, contacts);
+    if (!isPositionInflated(point) && contacts == 0) return true;
     const double clearance = sdf_map_->getDistance(point);
     if (clearance + 0.02 < previous_clearance) return false;
     previous_clearance = std::max(previous_clearance, clearance);
@@ -577,6 +653,26 @@ bool FastPlannerManager::planExploreTraj(const vector<Eigen::Vector3d>& tour,
   }
 
   updateTrajInfo();
+  return true;
+}
+
+bool FastPlannerManager::planStationaryTraj(
+    const Eigen::Vector3d& position, double duration) {
+  if (!position.allFinite() || !std::isfinite(duration)) return false;
+  duration = std::max(0.30, duration);
+  const int degree = std::max(1, pp_.bspline_degree_);
+  const int control_point_count = degree + 5;
+  Eigen::MatrixXd control_points(control_point_count, 3);
+  for (int row = 0; row < control_point_count; ++row)
+    control_points.row(row) = position.transpose();
+  const double knot_span =
+      duration / static_cast<double>(control_point_count - degree);
+  local_data_.position_traj_.setUniformBspline(
+      control_points, degree, knot_span);
+  updateTrajInfo();
+  ROS_ERROR("[turn_in_place] stationary position trajectory %.2fs at "
+            "(%.2f %.2f %.2f).",
+            local_data_.duration_, position.x(), position.y(), position.z());
   return true;
 }
 

@@ -3,10 +3,12 @@
 #include "bspline/Bspline.h"
 #include "quadrotor_msgs/PositionCommand.h"
 #include "std_msgs/Empty.h"
+#include "std_msgs/Int32.h"
 #include "visualization_msgs/Marker.h"
 #include <ros/ros.h>
 #include <poly_traj/polynomial_traj.h>
 #include <active_perception/perception_utils.h>
+#include <algorithm>
 #include <fstream>
 
 #include <plan_manage/backward.hpp>
@@ -21,6 +23,7 @@ using fast_planner::PerceptionUtils;
 ros::Publisher cmd_vis_pub, pos_cmd_pub, traj_pub, traj_started_pub;
 // 2026-07-13: 每次收到有效 B-spline 后发布车辆隔离的轨迹启动事件，让对应 ego_start 停止重复发送交接信号。
 nav_msgs::Odometry odom;
+bool odom_received_ = false;
 quadrotor_msgs::PositionCommand cmd;
 
 // Info of generated traj
@@ -35,6 +38,12 @@ shared_ptr<PerceptionUtils> percep_utils_;
 // Info of replan
 bool receive_traj_ = false;
 double replan_time_;
+double emergency_brake_horizon_ = 0.12;
+bool emergency_brake_active_ = false;
+ros::Time emergency_brake_start_time_;
+Eigen::Vector3d emergency_brake_start_pos_{0.0, 0.0, 0.0};
+Eigen::Vector3d emergency_brake_start_vel_{0.0, 0.0, 0.0};
+double emergency_brake_yaw_ = 0.0;
 
 // 添加文件输出变量
 std::ofstream flight_data_file;
@@ -178,6 +187,43 @@ void replanCallback(std_msgs::Empty msg) {
   traj_duration_ = min(t_stop, traj_duration_);
 }
 
+void emergencyBrakeCallback(const std_msgs::Int32& msg) {
+  if (!receive_traj_) return;
+  if (msg.data != traj_id_) {
+    ROS_WARN("[Traj server]: ignore stale short brake for traj_id=%d, active=%d.", msg.data,
+             traj_id_);
+    return;
+  }
+  const ros::Time now = ros::Time::now();
+  const double t_cur = std::max(0.0, std::min((now - start_time_).toSec(), traj_duration_));
+  if (odom_received_) {
+    emergency_brake_start_pos_ = Eigen::Vector3d(
+        odom.pose.pose.position.x, odom.pose.pose.position.y, odom.pose.pose.position.z);
+    emergency_brake_start_vel_ = Eigen::Vector3d(
+        odom.twist.twist.linear.x, odom.twist.twist.linear.y, odom.twist.twist.linear.z);
+  } else {
+    emergency_brake_start_pos_ = traj_[0].evaluateDeBoorT(t_cur);
+    emergency_brake_start_vel_ = traj_[1].evaluateDeBoorT(t_cur);
+  }
+  // 异常里程计尖峰不能把短制动变成一次长距离冲刺。
+  const double max_brake_start_speed = 0.50;
+  if (emergency_brake_start_vel_.norm() > max_brake_start_speed)
+    emergency_brake_start_vel_ =
+        emergency_brake_start_vel_.normalized() * max_brake_start_speed;
+  emergency_brake_yaw_ = cmd.yaw;
+  emergency_brake_start_time_ = now;
+  emergency_brake_active_ = true;
+  const double horizon = std::max(0.02, emergency_brake_horizon_);
+  const Eigen::Vector3d stop_pos =
+      emergency_brake_start_pos_ + 0.5 * horizon * emergency_brake_start_vel_;
+  ROS_ERROR("[Traj server]: odometry short brake traj_id=%d from=(%.2f %.2f %.2f) "
+            "velocity=(%.2f %.2f %.2f) stop=(%.2f %.2f %.2f) horizon=%.2fs.",
+            traj_id_, emergency_brake_start_pos_.x(), emergency_brake_start_pos_.y(),
+            emergency_brake_start_pos_.z(), emergency_brake_start_vel_.x(),
+            emergency_brake_start_vel_.y(), emergency_brake_start_vel_.z(), stop_pos.x(),
+            stop_pos.y(), stop_pos.z(), horizon);
+}
+
 void newCallback(std_msgs::Empty msg) {
   // Clear the executed traj data
   traj_cmd_.clear();
@@ -187,6 +233,7 @@ void newCallback(std_msgs::Empty msg) {
 void odomCallbck(const nav_msgs::Odometry& msg) {
   if (msg.child_frame_id == "X" || msg.child_frame_id == "O") return;
   odom = msg;
+  odom_received_ = true;
   traj_real_.push_back(
       Eigen::Vector3d(odom.pose.pose.position.x, odom.pose.pose.position.y, odom.pose.pose.position.z));
 
@@ -253,6 +300,7 @@ void bsplineCallback(const bspline::BsplineConstPtr& msg) {
   traj_duration_ = traj_[0].getTimeSum();
 
   receive_traj_ = true;
+  emergency_brake_active_ = false;
   std_msgs::Empty traj_started_msg;
   traj_started_pub.publish(traj_started_msg);
 
@@ -282,10 +330,31 @@ void cmdCallback(const ros::TimerEvent& e) {
 
   ros::Time time_now = ros::Time::now();
   double t_cur = (time_now - start_time_).toSec();
-  Eigen::Vector3d pos, vel, acc, jer;
-  double yaw, yawdot;
+  Eigen::Vector3d pos = Eigen::Vector3d::Zero();
+  Eigen::Vector3d vel = Eigen::Vector3d::Zero();
+  Eigen::Vector3d acc = Eigen::Vector3d::Zero();
+  Eigen::Vector3d jer = Eigen::Vector3d::Zero();
+  double yaw = cmd.yaw;
+  double yawdot = 0.0;
 
-  if (t_cur < traj_duration_ && t_cur >= 0.0) {
+  if (emergency_brake_active_) {
+    const double duration = std::max(0.02, emergency_brake_horizon_);
+    const double brake_t = std::max(
+        0.0, std::min((time_now - emergency_brake_start_time_).toSec(), duration));
+    const double ratio = brake_t / duration;
+    pos = emergency_brake_start_pos_ +
+          emergency_brake_start_vel_ *
+              (brake_t - 0.5 * brake_t * brake_t / duration);
+    vel = (1.0 - ratio) * emergency_brake_start_vel_;
+    acc = -emergency_brake_start_vel_ / duration;
+    if (brake_t >= duration - 1e-6) {
+      vel.setZero();
+      acc.setZero();
+    }
+    yaw = emergency_brake_yaw_;
+    yawdot = 0.0;
+    jer.setZero();
+  } else if (t_cur < traj_duration_ && t_cur >= 0.0) {
     // Current time within range of planned traj
     pos = traj_[0].evaluateDeBoorT(t_cur);
     vel = traj_[1].evaluateDeBoorT(t_cur);
@@ -484,6 +553,8 @@ int main(int argc, char** argv) {
 
   ros::Subscriber bspline_sub = node.subscribe("planning/bspline", 10, bsplineCallback);
   ros::Subscriber replan_sub = node.subscribe("planning/replan", 10, replanCallback);
+  ros::Subscriber emergency_brake_sub =
+      node.subscribe("planning/emergency_brake", 10, emergencyBrakeCallback);
   ros::Subscriber new_sub = node.subscribe("planning/new", 10, newCallback);
   ros::Subscriber odom_sub = node.subscribe("/odom_world", 50, odomCallbck);
   ros::Subscriber pg_T_vio_sub = node.subscribe("/loop_fusion/pg_T_vio", 10, pgTVioCallback);
@@ -498,6 +569,7 @@ int main(int argc, char** argv) {
 
   nh.param("traj_server/pub_traj_id", pub_traj_id_, -1);
   nh.param("fsm/replan_time", replan_time_, 0.1);
+  nh.param("traj_server/emergency_brake_horizon", emergency_brake_horizon_, 0.12);
   nh.param("loop_correction/isLoopCorrection", isLoopCorrection, false);
 
   Eigen::Vector3d init_pos;

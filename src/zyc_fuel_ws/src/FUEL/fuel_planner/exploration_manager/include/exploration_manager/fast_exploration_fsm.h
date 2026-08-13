@@ -6,10 +6,12 @@
 #include <ros/ros.h>
 #include <nav_msgs/Path.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/Int32.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>  // 2026-07-27: 将任务门内/门外阶段转换为 LDOT 明确使能。
 #include <nav_msgs/Odometry.h>
 #include <visualization_msgs/Marker.h>
+#include <plan_manage/plan_container.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -50,7 +52,8 @@ private:
   ros::NodeHandle node_;
   ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
-  ros::Publisher replan_pub_, new_pub_, bspline_pub_, safety_hold_pub_, dynamic_detection_enable_pub_;
+  ros::Publisher replan_pub_, new_pub_, bspline_pub_, emergency_brake_pub_, safety_hold_pub_,
+      dynamic_detection_enable_pub_;
   bool safety_hold_active_{false};
   bool safety_hold_enabled_{true};
   bool hold_on_plan_failure_{true};
@@ -64,6 +67,13 @@ private:
   ros::Time next_pending_traj_check_;
   bool inflation_escape_active_{false};
   ros::Time inflation_escape_clear_since_;
+  // 规划器生成下一条候选轨迹时会改写 local_data_。单独保存 traj_server 当前正在执行的
+  // 已发布轨迹，保证 PLAN_TRAJ/PUB_TRAJ 阶段仍能检查旧轨迹安全性。
+  LocalTrajData active_traj_;
+  bool active_traj_valid_{false};
+  bool active_traj_braked_{false};
+  bool pending_turn_in_place_{false};
+  bool active_turn_in_place_{false};
   // 2026-07-27: 必须先发布首条通道内轨迹，且任务仍在门内/穿出口阶段，才允许 LDOT 工作。
   bool first_corridor_traj_published_{false};
   bool mission_allows_dynamic_detection_{false};
@@ -75,6 +85,7 @@ private:
   void transitState(EXPL_STATE new_state, string pos_call);
   // 2026-07-13: 规划碰撞或失败时显式通知控制器刹停，禁止继续消费上一条轨迹。
   void setSafetyHold(bool active, const string& reason);
+  void requestActiveTrajectoryBrake(const string& reason);
   void setDynamicDetectionEnable(bool active, const string& reason, bool force = false);
 
   /* ROS functions */

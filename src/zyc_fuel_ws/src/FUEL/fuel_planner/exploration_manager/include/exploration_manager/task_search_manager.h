@@ -6,8 +6,10 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <exploration_manager/motion_direction_rules.h>
 
 #include <deque>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,8 +34,11 @@ public:
   std::vector<Eigen::Vector3d> recoveryDirections(double cur_yaw);
   // 2026-07-28: 仅供局部脱困判断真实最近航向和短回撤方向；普通frontier仍执行全局禁回头。
   Eigen::Vector3d recoveryForwardDirection(double cur_yaw);
-  // 只读查询累计占据地图轮廓推断的局部通道转向，供yaw提前对准；不修改任务状态。
-  bool mappedCorridorDirection(double cur_yaw, Eigen::Vector3d& direction) const;
+  // 向A*提供当前通道的单调前进轴；地图确认转弯后自动切换到新通道方向。
+  bool astarNoReturnDirection(Eigen::Vector3d& direction) const;
+  // 查询并锁存累计占据地图确认的真实转弯，直到机头对准新通道，防止位置恢复先消费结果。
+  bool mappedCorridorDirection(double cur_yaw, Eigen::Vector3d& direction);
+  bool turnYawAlignmentPending() const { return turn_yaw_follow_latch_.active(); }
   bool isRecoveryDirectionBackward(const Eigen::Vector3d& direction,
                                    double cur_yaw);
   bool isRecoveryCandidateUseful(const Eigen::Vector3d& candidate) const;
@@ -43,6 +48,7 @@ public:
   bool isRecoveryPathAllowed(const std::vector<Eigen::Vector3d>& path,
                              bool allow_initial_reverse) const;
   double clampSearchHeight(double z) const;
+  double preferredSearchHeight() const;
   // 2026-07-13: 窄通道任务点优先保持水平飞行，仅以有限步长向巡航高度收敛。
   double projectSearchHeight(double candidate_z, double current_z) const;
   void recordSelectedGoal(const Eigen::Vector3d& goal);
@@ -151,6 +157,9 @@ private:
                                    Eigen::Vector3d& turn_direction,
                                    double& forward_free_length,
                                    double& turn_free_length) const;
+  void commitCorridorTurn(const Eigen::Vector3d& turn_direction);
+  bool confirmCorridorTurnEvidence(const Eigen::Vector3d& turn_direction);
+  void clearPendingTurnEvidence();
   bool allStage2TargetsFound() const;
   bool goalTemporarilyBlocked(const Eigen::Vector3d& goal) const;
   void publishLandingRequest(bool active);
@@ -185,6 +194,16 @@ private:
   Eigen::Vector3d corridor_dir_{1.0, 0.0, 0.0};
   Eigen::Vector2d stable_progress_direction_{1.0, 0.0};
   bool stable_progress_direction_valid_{false};
+  task_search::TurnYawFollowLatch turn_yaw_follow_latch_;
+  Eigen::Vector2d pending_turn_direction_{1.0, 0.0};
+  Eigen::Vector3d pending_turn_probe_origin_{0.0, 0.0, 0.0};
+  bool pending_turn_probe_origin_valid_{false};
+  ros::Time pending_turn_last_evidence_;
+  int pending_turn_confirmations_{0};
+  std::uint64_t pending_turn_pose_sequence_{0};
+  Eigen::Vector2d latest_turn_anchor_{0.0, 0.0};
+  Eigen::Vector2d latest_turn_incoming_direction_{1.0, 0.0};
+  bool latest_turn_anchor_valid_{false};
   std::deque<Eigen::Vector3d> visited_positions_;
   std::deque<Eigen::Vector3d> selected_goals_;
   // 2026-07-23: 每帧保留雷达原点和近水平回波的世界XY；不保存/比较世界z，从源头隔离高度退化。
@@ -198,6 +217,7 @@ private:
   Eigen::Vector3d latest_robot_pos_{0.0, 0.0, 0.0};
   double latest_robot_yaw_{0.0};
   bool latest_robot_pose_valid_{false};
+  std::uint64_t latest_robot_pose_sequence_{0};
   // 2026-07-23: 任务区域只允许“起点外 -> 入口 -> 通道内 -> 最终出口 -> 终点外”
   // 一次性状态推进；入口穿越一旦锁存，任何局部墙端/拐角都不能把状态重新解释成门外。
   bool corridor_entry_crossed_{false};
@@ -290,6 +310,20 @@ private:
   double recovery_turn_wall_min_half_width_{0.35};
   double recovery_turn_wall_max_half_width_{1.05};
   int recovery_turn_min_wall_support_{2};
+  int recovery_turn_confirmation_count_{2};
+  double recovery_turn_confirmation_min_interval_{0.15};
+  double recovery_turn_confirmation_angle_deg_{15.0};
+  double recovery_turn_confirmation_accumulation_window_{8.0};
+  double recovery_turn_long_view_length_{4.50};
+  double recovery_turn_long_view_step_{0.25};
+  double recovery_turn_long_view_min_depth_{2.00};
+  int recovery_turn_long_view_min_free_sections_{5};
+  int recovery_turn_long_view_min_wall_sections_{3};
+  int recovery_turn_long_view_min_paired_wall_sections_{4};
+  double recovery_turn_long_view_width_tolerance_{0.30};
+  double recovery_turn_long_view_center_tolerance_{0.25};
+  double recovery_turn_no_return_margin_{0.20};
+  double recovery_turn_yaw_release_angle_deg_{15.0};
 
 
   // 2026-07-13: 第三阶段地图拓扑、出口确认、二维码扫描和降落触发参数。
