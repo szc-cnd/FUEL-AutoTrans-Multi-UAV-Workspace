@@ -1470,6 +1470,17 @@ bool TaskSearchManager::isTaskPathAllowed(
 
 bool TaskSearchManager::isRecoveryPathAllowed(
     const std::vector<Eigen::Vector3d>& path, bool allow_initial_reverse) const {
+  // 2026-08-13: 普通搜索/恢复路径不得把障碍物下方因遮挡而暂时清空的体素当成
+  // 可下穿通道。目标高度限制本身挡不住A*中间节点下探，因此逐点限制相对规划
+  // 起点的最大下降量；确需改变高度只能走显式、可复核的专用状态机。
+  if (!path.empty()) {
+    const double minimum_path_height =
+        std::max(min_search_height_, path.front().z() - std::max(0.0, max_goal_descent_));
+    for (const auto& point : path) {
+      if (point.z() < minimum_path_height - 1e-3) return false;
+    }
+  }
+
   // 所有普通/恢复路径都不得从规划起点向入口方向倒退；侧移(dot=0)允许。
   // short_backtrack 开关不再能绕过这条多机硬约束。
   if (corridor_frame_received_ && path.size() >= 2) {
