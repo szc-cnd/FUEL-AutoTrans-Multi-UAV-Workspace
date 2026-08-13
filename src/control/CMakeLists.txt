@@ -53,3 +53,8 @@ target_link_libraries(cxr_egoctrl_v1
 target_link_libraries(leader_safe_path_follower
   ${catkin_LIBRARIES}
 )
+
+install(TARGETS cxr_egoctrl_v1 leader_safe_path_follower
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(DIRECTORY launch/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch)

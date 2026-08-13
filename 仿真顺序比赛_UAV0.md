@@ -333,13 +333,15 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
 ```bash
 cd ~/match_ws/src/control/src
 source ~/match_ws/devel/setup.bash
-rosrun exploration_control cxr_egoctrl_v1 \
-  __name:=UAV0_controller \
-  _vehicle_ns:=/UAV0 \
-  _planner_enable_height:=0.5
+roslaunch exploration_control simple_controller.launch \
+  vehicle_ns:=UAV0 \
+  node_name:=UAV0_controller
 ```
 
-规划器和控制器分开启动，规划器输出的位置指令由 UAV0 原控制器接收。
+规划器和控制器分开启动。简单控制器先向
+`/UAV0/control/position_setpoint` 发布，精确降落入口中启动的仲裁器再唯一转发到
+`/UAV0/mavros/setpoint_raw/local`。降落接管后控制器仍可运行，但其输出不再进入
+MAVROS。
 
 ## 8. 启动后检查
 
@@ -349,6 +351,7 @@ rostopic echo /UAV0/fast_lio/Odometry
 rostopic echo /UAV0/mavros/vision_pose/pose
 rostopic echo /UAV0/planning/pos_cmd
 rostopic echo /UAV0/target_reporting/markers
+rostopic echo /UAV0/landing/control_owner
 ```
 
 确认上述话题持续有数据后，再进入飞行模式操作。`dual_ego_start.py` 是双机同步起飞工具，不属于 UAV0 单机启动的必要步骤。

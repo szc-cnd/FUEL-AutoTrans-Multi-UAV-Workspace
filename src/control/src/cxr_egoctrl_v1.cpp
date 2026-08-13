@@ -102,7 +102,7 @@ public:
     double timeout_hold_x, timeout_hold_y, timeout_hold_yaw;
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
-    std::string odom_topic;
+    std::string odom_topic, setpoint_topic;
     // 2026-07-13: 控制输入、任务门控和 MAVROS 输出按车辆参数隔离，默认实例为 iris_0。
     std::string vehicle_ns, position_cmd_topic, safety_hold_topic;
     std::string landing_request_topic, goal_topic, marker_topic, world_frame, drone_frame;
@@ -141,6 +141,9 @@ Ctrl::Ctrl()
     if (vehicle_ns.front() != '/') vehicle_ns.insert(vehicle_ns.begin(), '/');
     pnh.param<std::string>("odom_topic", odom_topic, vehicle_ns + "/fast_lio/Odometry");
     pnh.param<std::string>("position_cmd_topic", position_cmd_topic, vehicle_ns + "/planning/pos_cmd");
+    // 默认先进入降落仲裁器；若仲裁器未启动则不向 MAVROS 输出，安全失败关闭。
+    pnh.param<std::string>("setpoint_topic", setpoint_topic,
+                           vehicle_ns + "/control/position_setpoint");
     pnh.param<std::string>("safety_hold_topic", safety_hold_topic, vehicle_ns + "/planning/safety_hold");
     pnh.param<std::string>("landing_request_topic", landing_request_topic,
                            vehicle_ns + "/mission/landing_request");
@@ -164,7 +167,7 @@ Ctrl::Ctrl()
         nh.subscribe(landing_request_topic, 2, &Ctrl::landing_request_cb, this);
     set_mode_client = nh.serviceClient<mavros_msgs::SetMode>(vehicle_ns + "/mavros/set_mode");
 
-    local_pos_pub = nh.advertise<mavros_msgs::PositionTarget>(vehicle_ns + "/mavros/setpoint_raw/local", 10);
+    local_pos_pub = nh.advertise<mavros_msgs::PositionTarget>(setpoint_topic, 10);
     pubMarker = nh.advertise<visualization_msgs::Marker>(marker_topic, 5);
 
     get_now_pos = false;

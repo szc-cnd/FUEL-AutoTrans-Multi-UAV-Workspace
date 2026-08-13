@@ -9,6 +9,23 @@
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
   <arg name="set_mode_service" default="$(arg topic_prefix)/mavros/set_mode"/>
+  <arg name="enable_setpoint_arbiter" default="true"/>
+  <arg name="controller_position_input" default="$(arg topic_prefix)/control/position_setpoint"/>
+  <arg name="controller_attitude_input" default="$(arg topic_prefix)/control/attitude_setpoint"/>
+  <arg name="landing_setpoint_input" default="$(arg topic_prefix)/landing/setpoint_raw/local"/>
+
+  <node if="$(arg enable_setpoint_arbiter)" pkg="precision_landing"
+        type="landing_setpoint_arbiter_node" name="landing_setpoint_arbiter"
+        ns="$(arg vehicle_ns)" output="screen" required="true">
+    <param name="trigger_topic" value="$(arg trigger_topic)"/>
+    <param name="controller_position_input" value="$(arg controller_position_input)"/>
+    <param name="controller_attitude_input" value="$(arg controller_attitude_input)"/>
+    <param name="landing_position_input" value="$(arg landing_setpoint_input)"/>
+    <param name="mavros_position_output" value="$(arg setpoint_topic)"/>
+    <param name="mavros_attitude_output" value="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
+    <param name="active_topic" value="$(arg topic_prefix)/landing/control_active"/>
+    <param name="owner_topic" value="$(arg topic_prefix)/landing/control_owner"/>
+  </node>
 
   <node pkg="precision_landing" type="precision_landing_node"
         name="precision_landing_node" ns="$(arg vehicle_ns)" output="screen">
@@ -22,7 +39,7 @@
     <param name="topics/mavros_state" value="$(arg mavros_state_topic)"/>
     <param name="topics/trigger" value="$(arg trigger_topic)"/>
     <param name="topics/target_id" value="$(arg target_id_topic)"/>
-    <param name="topics/setpoint" value="$(arg setpoint_topic)"/>
+    <param name="topics/setpoint" value="$(arg landing_setpoint_input)"/>
     <param name="topics/set_mode_service" value="$(arg set_mode_service)"/>
     <param name="topics/landing_state" value="$(arg topic_prefix)/landing/state"/>
     <param name="topics/operator_status" value="$(arg topic_prefix)/landing/status"/>
