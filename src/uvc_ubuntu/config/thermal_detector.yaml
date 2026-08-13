@@ -7,7 +7,8 @@ roi_margin_y: 20
 threshold_k: 2.0
 min_area: 20
 max_area: 5000
-reject_roi_border_touching: true
+# 比赛热源可能位于视野边缘；保留 border 状态用于调试，但不禁止确认。
+reject_roi_border_touching: false
 publish_rate: 20
 display: false
 uvc_demo_path: "uvc_demo"

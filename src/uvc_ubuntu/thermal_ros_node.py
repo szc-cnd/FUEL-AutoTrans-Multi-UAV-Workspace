@@ -111,7 +111,7 @@ class ThermalDetectorNode:
         self.min_area = float(rospy.get_param("~min_area", 20))
         self.max_area = float(rospy.get_param("~max_area", 5000))
         self.reject_roi_border_touching = bool(
-            rospy.get_param("~reject_roi_border_touching", True)
+            rospy.get_param("~reject_roi_border_touching", False)
         )
         self.publish_rate = float(rospy.get_param("~publish_rate", 20))
         self.display = bool(rospy.get_param("~display", False))
