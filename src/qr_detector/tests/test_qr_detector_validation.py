@@ -12,11 +12,12 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 try:
-    from qr_detector_node import QRDetectorNode
+    from qr_detector_node import QRDetectorNode, ZBarQRDecoder
 except ModuleNotFoundError:
     # The source-only CI environment may not have ROS Python modules.  The
     # test still runs automatically on the aircraft after sourcing Noetic.
     QRDetectorNode = None
+    ZBarQRDecoder = None
 
 
 @unittest.skipIf(QRDetectorNode is None, "ROS Python modules are unavailable")
@@ -24,6 +25,7 @@ class QRDetectorValidationTests(unittest.TestCase):
     def make_detector(self):
         detector = QRDetectorNode.__new__(QRDetectorNode)
         detector.qr_detector = cv2.QRCodeDetector()
+        detector.zbar_decoder = ZBarQRDecoder()
         detector.preprocess_mode = "gray"
         detector.upscale_factor = 1.5
         detector.enable_preprocess_fallbacks = False
@@ -48,6 +50,37 @@ class QRDetectorValidationTests(unittest.TestCase):
         detector.startup_warmup_finished = False
         detector.configure_qr_detector()
         return detector
+
+    def test_libzbar_decoder_is_available_on_aircraft(self):
+        detector = self.make_detector()
+        self.assertTrue(detector.zbar_decoder.available)
+
+    def test_libzbar_fallback_supplies_payload_and_corners(self):
+        detector = self.make_detector()
+
+        class OpenCVWithoutDecoder(object):
+            def detect(self, _image):
+                return True, np.asarray(
+                    [[[10, 10], [90, 10], [90, 90], [10, 90]]],
+                    dtype=np.float32,
+                )
+
+            def detectAndDecode(self, _image):
+                return "", None, None
+
+        class WorkingFallback(object):
+            def decode(self, _image):
+                return "AR03", np.asarray(
+                    [[[10, 10], [90, 10], [90, 90], [10, 90]]],
+                    dtype=np.float32,
+                )
+
+        detector.qr_detector = OpenCVWithoutDecoder()
+        detector.zbar_decoder = WorkingFallback()
+        result = detector.run_qr_detector(np.zeros((100, 100), dtype=np.uint8))
+        self.assertTrue(result["decoded_valid"])
+        self.assertEqual(result["decoded_data"], "AR03")
+        self.assertIsNotNone(result["decoded_points"])
 
     def test_one_decode_authenticates_nearby_frames_only(self):
         detector = self.make_detector()

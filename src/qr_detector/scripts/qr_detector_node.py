@@ -16,6 +16,8 @@ without changing the ROS IO, depth, projection, or temporal filtering code.
 The decoded payload can be displayed/reported without changing planner inputs.
 """
 
+import ctypes
+import ctypes.util
 import json
 import math
 import os
@@ -30,10 +32,160 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
 
+class ZBarQRDecoder(object):
+    """Minimal libzbar QR decoder used when OpenCV has no QUIRC support."""
+
+    ZBAR_NONE = 0
+    ZBAR_QRCODE = 64
+    ZBAR_CFG_ENABLE = 0
+    Y800 = ord("Y") | (ord("8") << 8) | (ord("0") << 16) | (ord("0") << 24)
+
+    def __init__(self):
+        self.library_name = ctypes.util.find_library("zbar")
+        self.library = None
+        self.scanner = None
+        if not self.library_name:
+            return
+
+        try:
+            self.library = ctypes.CDLL(self.library_name)
+            self._configure_api()
+            self.scanner = self.library.zbar_image_scanner_create()
+            if not self.scanner:
+                self.library = None
+                return
+            self.library.zbar_image_scanner_set_config(
+                self.scanner, self.ZBAR_NONE, self.ZBAR_CFG_ENABLE, 0
+            )
+            self.library.zbar_image_scanner_set_config(
+                self.scanner, self.ZBAR_QRCODE, self.ZBAR_CFG_ENABLE, 1
+            )
+        except (AttributeError, OSError):
+            self.close()
+            self.library = None
+
+    @property
+    def available(self):
+        return self.library is not None and self.scanner is not None
+
+    def _configure_api(self):
+        pointer = ctypes.c_void_p
+        self.library.zbar_image_scanner_create.restype = pointer
+        self.library.zbar_image_scanner_destroy.argtypes = [pointer]
+        self.library.zbar_image_scanner_set_config.argtypes = [
+            pointer,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        self.library.zbar_image_create.restype = pointer
+        self.library.zbar_image_destroy.argtypes = [pointer]
+        self.library.zbar_image_set_format.argtypes = [pointer, ctypes.c_ulong]
+        self.library.zbar_image_set_size.argtypes = [
+            pointer,
+            ctypes.c_uint,
+            ctypes.c_uint,
+        ]
+        self.library.zbar_image_set_data.argtypes = [
+            pointer,
+            pointer,
+            ctypes.c_ulong,
+            pointer,
+        ]
+        self.library.zbar_scan_image.argtypes = [pointer, pointer]
+        self.library.zbar_scan_image.restype = ctypes.c_int
+        self.library.zbar_image_first_symbol.argtypes = [pointer]
+        self.library.zbar_image_first_symbol.restype = pointer
+        self.library.zbar_symbol_next.argtypes = [pointer]
+        self.library.zbar_symbol_next.restype = pointer
+        self.library.zbar_symbol_get_type.argtypes = [pointer]
+        self.library.zbar_symbol_get_type.restype = ctypes.c_int
+        self.library.zbar_symbol_get_data.argtypes = [pointer]
+        self.library.zbar_symbol_get_data.restype = pointer
+        self.library.zbar_symbol_get_data_length.argtypes = [pointer]
+        self.library.zbar_symbol_get_data_length.restype = ctypes.c_uint
+        self.library.zbar_symbol_get_loc_size.argtypes = [pointer]
+        self.library.zbar_symbol_get_loc_size.restype = ctypes.c_uint
+        self.library.zbar_symbol_get_loc_x.argtypes = [pointer, ctypes.c_uint]
+        self.library.zbar_symbol_get_loc_x.restype = ctypes.c_int
+        self.library.zbar_symbol_get_loc_y.argtypes = [pointer, ctypes.c_uint]
+        self.library.zbar_symbol_get_loc_y.restype = ctypes.c_int
+
+    def decode(self, image):
+        if not self.available or image is None:
+            return "", None
+
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        gray = np.ascontiguousarray(gray, dtype=np.uint8)
+        zbar_image = self.library.zbar_image_create()
+        if not zbar_image:
+            return "", None
+
+        try:
+            height, width = gray.shape[:2]
+            self.library.zbar_image_set_format(zbar_image, self.Y800)
+            self.library.zbar_image_set_size(zbar_image, width, height)
+            # gray remains alive until scanning and symbol extraction finish.
+            self.library.zbar_image_set_data(
+                zbar_image, gray.ctypes.data, gray.nbytes, None
+            )
+            if self.library.zbar_scan_image(self.scanner, zbar_image) <= 0:
+                return "", None
+
+            symbol = self.library.zbar_image_first_symbol(zbar_image)
+            while symbol:
+                if self.library.zbar_symbol_get_type(symbol) == self.ZBAR_QRCODE:
+                    length = self.library.zbar_symbol_get_data_length(symbol)
+                    data_ptr = self.library.zbar_symbol_get_data(symbol)
+                    payload = (
+                        ctypes.string_at(data_ptr, length).decode(
+                            "utf-8", errors="replace"
+                        )
+                        if data_ptr and length
+                        else ""
+                    )
+                    point_count = self.library.zbar_symbol_get_loc_size(symbol)
+                    points = [
+                        [
+                            self.library.zbar_symbol_get_loc_x(symbol, index),
+                            self.library.zbar_symbol_get_loc_y(symbol, index),
+                        ]
+                        for index in range(point_count)
+                    ]
+                    if payload:
+                        return payload, self._quad_from_points(points)
+                symbol = self.library.zbar_symbol_next(symbol)
+            return "", None
+        finally:
+            self.library.zbar_image_destroy(zbar_image)
+
+    @staticmethod
+    def _quad_from_points(points):
+        if len(points) < 4:
+            return None
+        points = np.asarray(points, dtype=np.float32)
+        if len(points) == 4:
+            return points.reshape(1, 4, 2)
+        rectangle = cv2.minAreaRect(points)
+        return cv2.boxPoints(rectangle).reshape(1, 4, 2)
+
+    def close(self):
+        if self.library is not None and self.scanner is not None:
+            self.library.zbar_image_scanner_destroy(self.scanner)
+        self.scanner = None
+
+    def __del__(self):
+        self.close()
+
+
 class QRDetectorNode(object):
     def __init__(self):
         self.bridge = CvBridge()
         self.qr_detector = cv2.QRCodeDetector()
+        self.zbar_decoder = ZBarQRDecoder()
 
         self.image_topic = rospy.get_param("~image_topic", "/camera/color/image_raw")
         self.depth_topic = rospy.get_param(
@@ -193,6 +345,12 @@ class QRDetectorNode(object):
 
         rospy.loginfo("qr_detector_node started")
         rospy.loginfo("OpenCV version: %s", cv2.__version__)
+        if self.zbar_decoder.available:
+            rospy.loginfo("QR decode fallback: %s", self.zbar_decoder.library_name)
+        else:
+            rospy.logwarn(
+                "libzbar is unavailable; this OpenCV build may detect but not decode QR"
+            )
         rospy.loginfo("OpenCV threads: %d", cv2.getNumThreads())
         rospy.loginfo("color image: %s", self.image_topic)
         rospy.loginfo("aligned depth: %s", self.depth_topic)
@@ -492,6 +650,18 @@ class QRDetectorNode(object):
                 rospy.logwarn_throttle(
                     1.0, "QRCodeDetector detectAndDecode failed: %s", exc
                 )
+
+            # Ubuntu's OpenCV 4.2 package can be built without QUIRC: it still
+            # detects QR corners, but always returns an empty payload.  Decode
+            # the same image with the already-installed libzbar in that case.
+            zbar_decoder = getattr(self, "zbar_decoder", None)
+            if not decoded_data and zbar_decoder is not None:
+                try:
+                    decoded_data, zbar_points = zbar_decoder.decode(image)
+                    if decoded_data and zbar_points is not None:
+                        decoded_points = zbar_points
+                except (AttributeError, ValueError, ctypes.Error) as exc:
+                    rospy.logwarn_throttle(1.0, "libzbar QR decode failed: %s", exc)
 
         if detected_points is None and decoded_points is not None:
             detected_points = decoded_points
