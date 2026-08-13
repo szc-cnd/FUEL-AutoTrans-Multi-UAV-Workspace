@@ -116,6 +116,12 @@ class RosPackageLayoutTest(unittest.TestCase):
         )
         self.assertIn("d435_debug_image_pub", source)
         self.assertIn("publish_d435_debug_image", source)
+        self.assertIn("map_thermal_bbox_to_d435", source)
+        self.assertIn("D435 XYZ=", source)
+        self.assertIn(
+            "thermal_candidate_status_topic: /UAV0/thermal/target_candidate_status",
+            config,
+        )
         self.assertIn("d435_color_topic: /camera/color/image_raw", config)
         self.assertIn(
             "d435_debug_image_topic: /UAV0/thermal/d435_debug_image",

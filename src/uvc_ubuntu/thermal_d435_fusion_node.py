@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import math
 import os
 import threading
@@ -11,7 +12,7 @@ import tf2_ros
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point, PointStamped
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 import yaml
 
 
@@ -36,6 +37,9 @@ class ThermalD435FusionNode:
         )
         self.thermal_candidate_pixel_topic = self.get_param(
             "thermal_candidate_pixel_topic", "/UAV0/thermal/target_candidate_pixel"
+        )
+        self.thermal_candidate_status_topic = self.get_param(
+            "thermal_candidate_status_topic", "/UAV0/thermal/target_candidate_status"
         )
         self.thermal_candidate_camera_point_topic = self.get_param(
             "thermal_candidate_camera_point_topic",
@@ -81,6 +85,7 @@ class ThermalD435FusionNode:
         self.thermal_pixel_msg = None
         self.candidate_target_detected = False
         self.candidate_thermal_pixel_msg = None
+        self.candidate_thermal_bbox = None
         self.camera_info = None
         self.depth_image = None
         self.depth_encoding = None
@@ -119,6 +124,11 @@ class ThermalD435FusionNode:
             self.thermal_candidate_pixel_topic,
             rospy.AnyMsg,
             self.candidate_pixel_callback,
+        )
+        rospy.Subscriber(
+            self.thermal_candidate_status_topic,
+            String,
+            self.candidate_status_callback,
         )
         rospy.Subscriber(self.d435_camera_info_topic, CameraInfo, self.camera_info_callback)
         rospy.Subscriber(self.d435_depth_topic, Image, self.depth_callback, queue_size=1)
@@ -159,6 +169,21 @@ class ThermalD435FusionNode:
 
     def candidate_pixel_callback(self, msg):
         self._pixel_callback(msg, candidate=True)
+
+    def candidate_status_callback(self, msg):
+        try:
+            status = json.loads(msg.data)
+            bbox = status.get("bbox")
+            if bbox is not None:
+                if len(bbox) != 4:
+                    raise ValueError("bbox must contain x, y, width, height")
+                bbox = tuple(float(value) for value in bbox)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            rospy.logwarn_throttle(2.0, "Invalid thermal candidate bbox: %s", exc)
+            return
+
+        with self.lock:
+            self.candidate_thermal_bbox = bbox
 
     def _pixel_callback(self, msg, candidate):
         msg_type = msg._connection_header.get("type", "")
@@ -224,6 +249,17 @@ class ThermalD435FusionNode:
         v_d = int(round(float(d435_pt[0, 0, 1])))
         return u_d, v_d
 
+    def map_thermal_bbox_to_d435(self, bbox):
+        if bbox is None:
+            return None
+        x, y, width, height = bbox
+        corners = np.array(
+            [[[x, y], [x + width, y], [x + width, y + height], [x, y + height]]],
+            dtype=np.float32,
+        )
+        mapped = cv2.perspectiveTransform(corners, self.homography.astype(np.float32))[0]
+        return np.rint(mapped).astype(np.int32)
+
     def depth_to_meters(self, value, encoding=None):
         if value is None:
             return None
@@ -288,6 +324,8 @@ class ThermalD435FusionNode:
         thermal_pixel_msg,
         candidate_detected,
         candidate_pixel_msg,
+        thermal_bbox,
+        camera_info,
         depth_image,
         depth_encoding,
     ):
@@ -330,6 +368,15 @@ class ThermalD435FusionNode:
             in_image = 0 <= u_d < width and 0 <= v_d < height
             color = (0, 255, 0) if depth is not None and in_image else (0, 0, 255)
             if in_image:
+                mapped_bbox = self.map_thermal_bbox_to_d435(thermal_bbox)
+                if mapped_bbox is not None:
+                    cv2.polylines(
+                        debug_image,
+                        [mapped_bbox.reshape((-1, 1, 2))],
+                        True,
+                        color,
+                        2,
+                    )
                 cv2.circle(
                     debug_image,
                     (u_d, v_d),
@@ -357,6 +404,24 @@ class ThermalD435FusionNode:
                 color,
                 2,
             )
+            camera_point = None
+            if depth is not None and camera_info is not None:
+                camera_point = self.pixel_to_camera_point(u_d, v_d, depth, camera_info)
+            if camera_point is not None:
+                cv2.putText(
+                    debug_image,
+                    "D435 XYZ=(%.3f, %.3f, %.3f) m"
+                    % (
+                        camera_point.point.x,
+                        camera_point.point.y,
+                        camera_point.point.z,
+                    ),
+                    (20, 72),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    color,
+                    2,
+                )
 
         debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8")
         if color_header is not None:
@@ -387,6 +452,7 @@ class ThermalD435FusionNode:
             thermal_pixel_msg = self.thermal_pixel_msg
             candidate_detected = self.candidate_target_detected
             candidate_pixel_msg = self.candidate_thermal_pixel_msg
+            candidate_thermal_bbox = self.candidate_thermal_bbox
             camera_info = self.camera_info
             depth_image = None if self.depth_image is None else self.depth_image.copy()
             depth_encoding = self.depth_encoding
@@ -400,6 +466,8 @@ class ThermalD435FusionNode:
             thermal_pixel_msg,
             candidate_detected,
             candidate_pixel_msg,
+            candidate_thermal_bbox,
+            camera_info,
             depth_image,
             depth_encoding,
         )

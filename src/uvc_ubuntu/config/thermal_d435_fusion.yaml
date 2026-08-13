@@ -2,6 +2,7 @@ thermal_target_detected_topic: /UAV0/thermal/target_detected
 thermal_target_pixel_topic: /UAV0/thermal/target_pixel
 thermal_candidate_detected_topic: /UAV0/thermal/target_candidate_detected
 thermal_candidate_pixel_topic: /UAV0/thermal/target_candidate_pixel
+thermal_candidate_status_topic: /UAV0/thermal/target_candidate_status
 thermal_candidate_camera_point_topic: /UAV0/thermal/target_candidate_camera_point
 thermal_width: 384
 thermal_height: 288
