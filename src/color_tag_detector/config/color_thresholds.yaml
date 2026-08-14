@@ -82,7 +82,8 @@ colors:
       - lower: [86, 35, 105]
         upper: [127, 255, 255]
     min_mean_hue: 86
-    min_mean_saturation: 45
+    # 实测保护膜蓝色印刷的平均饱和度约为 82..115；真色标应明显更鲜艳。
+    min_mean_saturation: 120
     min_mean_value: 115
     min_valid_depth_ratio: 0.60
     max_depth_std: 0.12
@@ -134,6 +135,14 @@ confirmation_depth_max: 2.5
 preferred_rectangularity: 0.84
 min_candidate_rectangularity: 0.84
 min_confirmation_rectangularity: 0.84
+# 2026-08-13 的误检主要是保护膜上的细长印刷条（短边 2..5 cm）。
+# 正式确认要求目标具有基本的实体短边和紧凑比例；候选流仍保留供现场观察。
+min_confirmation_real_short_side: 0.06
+confirmation_aspect_ratio_min: 0.30
+confirmation_aspect_ratio_max: 3.0
+# 上下端宽度差过大的梯形通常是路障锥，不是平面颜色标签。
+# 2026-08-14 红色路障约为 0.81，未完全入镜的正确黄色标签约为 0.89。
+min_confirmation_end_width_ratio: 0.83
 min_surface_depth_valid_ratio: 0.60
 max_surface_plane_residual_std: 0.05
 surface_depth_max_samples: 2500
@@ -152,6 +161,8 @@ stable_window: 12
 stable_min_count: 8
 max_pixel_jump: 50
 max_depth_jump: 0.25
+# 同色轮廓面积突变通常意味着切换到了另一个物体，不能继承稳定计数。
+max_area_ratio_jump: 2.0
 
 morph_open_kernel: 3
 morph_close_kernel: 7
