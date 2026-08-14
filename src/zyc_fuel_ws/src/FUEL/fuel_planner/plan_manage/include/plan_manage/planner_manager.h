@@ -93,6 +93,8 @@ private:
   double footprint_support_radius_{0.10};
   bool supported_occupancy_hard_reject_enabled_{true};
   int escape_max_initial_occupied_samples_{6};
+  double turn_slowdown_angle_deg_{30.0};
+  double turn_time_scale_{1.5};
   // 2026-07-23: 真实圆盘足迹检查供路径/轨迹最终复核；膨胀图仅用于A*引导，
   // 避免当前位置被膨胀层擦到后所有前向脱困路径因共享同一起点而全部失败。
   bool isRawFootprintSafe(const Eigen::Vector3d& position) const;

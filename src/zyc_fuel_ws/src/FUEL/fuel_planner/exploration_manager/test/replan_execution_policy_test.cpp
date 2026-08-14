@@ -4,6 +4,7 @@
 
 int main() {
   using fast_planner::exploration_policy::shouldInterruptCurrentTrajectory;
+  using fast_planner::exploration_policy::shouldHoldAtTrajectoryEnd;
   using fast_planner::exploration_policy::shouldReplanNearTrajectoryEnd;
   using fast_planner::exploration_policy::shouldPeriodicReplan;
   using fast_planner::exploration_policy::shouldBrakePublishedTrajectory;
@@ -28,6 +29,12 @@ int main() {
 
   assert(shouldReplanNearTrajectoryEnd(0.99, 1.0));
   assert(!shouldReplanNearTrajectoryEnd(1.01, 1.0));
+
+  // 下一条轨迹尚未发布时只在旧轨迹真正到达终点才锁点，不能提前一秒刹停。
+  assert(!shouldHoldAtTrajectoryEnd(true, false, false, 0.06, 0.05));
+  assert(shouldHoldAtTrajectoryEnd(true, false, false, 0.05, 0.05));
+  assert(!shouldHoldAtTrajectoryEnd(true, true, false, 0.00, 0.05));
+  assert(!shouldHoldAtTrajectoryEnd(true, false, true, 0.00, 0.05));
 
   // 通道模式关闭无条件周期重规划；碰撞与临近终点由FSM的独立分支处理。
   assert(!shouldPeriodicReplan(30.0, 3.0, false));

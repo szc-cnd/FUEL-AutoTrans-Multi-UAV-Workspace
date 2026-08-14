@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 namespace fast_planner {
 namespace exploration_policy {
 
@@ -22,6 +24,16 @@ inline bool shouldBrakePublishedTrajectory(bool published_trajectory_active,
 
 inline bool shouldReplanNearTrajectoryEnd(double time_to_end, double threshold) {
   return threshold >= 0.0 && time_to_end < threshold;
+}
+
+inline bool shouldHoldAtTrajectoryEnd(bool published_trajectory_active,
+                                      bool replacement_published,
+                                      bool brake_already_requested,
+                                      double time_to_end,
+                                      double hold_lead_time) {
+  return published_trajectory_active && !replacement_published &&
+         !brake_already_requested &&
+         time_to_end <= std::max(0.0, hold_lead_time);
 }
 
 inline bool shouldPeriodicReplan(double trajectory_time, double threshold,

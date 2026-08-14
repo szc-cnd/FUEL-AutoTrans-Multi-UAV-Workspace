@@ -1689,6 +1689,16 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/use_forward_fallback", ep_->mission_use_forward_fallback_, true);
   // 2026-07-22: 远端frontier只提供方向，实际轨迹每次最多发布一段短安全路线点。
   nh.param("mission/max_route_segment_length", ep_->mission_max_route_segment_length_, 0.80);
+  nh.param("mission/straight_run_extension/enabled",
+           straight_run_extension_enabled_, true);
+  nh.param("mission/straight_run_extension/distance",
+           straight_run_extension_distance_, 0.30);
+  nh.param("mission/straight_run_extension/min_turn_deg",
+           straight_run_extension_min_turn_deg_, 35.0);
+  straight_run_extension_distance_ =
+      std::max(0.0, straight_run_extension_distance_);
+  straight_run_extension_min_turn_deg_ =
+      std::max(10.0, std::min(90.0, straight_run_extension_min_turn_deg_));
   nh.param("mission/entry_arrive_dist", ep_->mission_entry_arrive_dist_, 0.6);
   nh.param("mission/entry_yaw", ep_->mission_entry_yaw_, 0.0);
   nh.param("mission/door_back_margin", ep_->mission_door_back_margin_, 0.25);
@@ -2394,6 +2404,7 @@ int FastExplorationManager::planExploreMotion(
     return FAIL;
   }
   shortenPath(ed_->path_next_goal_);
+  extendSafeStraightRuns(ed_->path_next_goal_);
   // 2026-07-14: shortenPath 会用中心射线删除 A* 转折点，删除后必须重新做完整机体足迹检查。
   if (!planner_manager_->isPathSafe(ed_->path_next_goal_)) {
     ROS_ERROR_THROTTLE(
@@ -2638,7 +2649,11 @@ void FastExplorationManager::shortenPath(vector<Vector3d>& path) {
               original_min_clearance, edt_environment_->sdf_map_->getDistance(path[j]));
         }
         preserve_waypoint = path_shortening::preserveWaypointForClearance(
-            original_min_clearance, shortcut_min_clearance, clearance_loss_tolerance);
+            original_min_clearance, shortcut_min_clearance,
+            clearance_loss_tolerance) ||
+            path_shortening::preserveWaypointForObstacleTurn(
+                path[i - 1], path[i], path[i + 1], original_min_clearance,
+                0.50, 30.0 * M_PI / 180.0);
       }
       if (preserve_waypoint) {
         short_tour.push_back(path[i]);
@@ -2652,6 +2667,52 @@ void FastExplorationManager::shortenPath(vector<Vector3d>& path) {
   if (short_tour.size() == 2)
     short_tour.insert(short_tour.begin() + 1, 0.5 * (short_tour[0] + short_tour[1]));
   path = short_tour;
+}
+
+void FastExplorationManager::extendSafeStraightRuns(vector<Vector3d>& path) {
+  if (!straight_run_extension_enabled_ ||
+      straight_run_extension_distance_ < 0.05 || path.size() < 3)
+    return;
+
+  const double minimum_turn =
+      straight_run_extension_min_turn_deg_ * M_PI / 180.0;
+  vector<Vector3d> extended;
+  extended.reserve(path.size() * 2);
+  extended.push_back(path.front());
+  for (size_t i = 1; i + 1 < path.size(); ++i) {
+    extended.push_back(path[i]);
+    const Vector3d incoming_3d = path[i] - path[i - 1];
+    const Vector3d outgoing_3d = path[i + 1] - path[i];
+    const Eigen::Vector2d incoming = incoming_3d.head<2>();
+    const Eigen::Vector2d outgoing = outgoing_3d.head<2>();
+    if (incoming.norm() < 0.10 || outgoing.norm() < 0.10 ||
+        std::fabs(incoming_3d.z()) > 0.08 ||
+        std::fabs(outgoing_3d.z()) > 0.08 ||
+        sdf_map_->getDistance(path[i]) > 0.50 ||
+        path_shortening::turnAngleRadians(path[i - 1], path[i], path[i + 1]) <
+            minimum_turn ||
+        incoming.normalized().dot(outgoing.normalized()) < -0.10)
+      continue;
+
+    Vector3d extension = path[i];
+    extension.head<2>() +=
+        straight_run_extension_distance_ * incoming.normalized();
+    if ((extension - path[i + 1]).norm() < 0.08) continue;
+
+    const vector<Vector3d> delayed_turn{path[i], extension, path[i + 1]};
+    if (!planner_manager_->isPathSafe(delayed_turn)) continue;
+
+    extended.push_back(extension);
+    ROS_WARN("[straight_run_extension] delay %.1fdeg turn by %.2fm at "
+             "(%.2f,%.2f)->(%.2f,%.2f); full footprint path is safe.",
+             path_shortening::turnAngleRadians(
+                 path[i - 1], path[i], path[i + 1]) * 180.0 / M_PI,
+             straight_run_extension_distance_, path[i].x(), path[i].y(),
+             extension.x(), extension.y());
+  }
+  if ((path.back() - extended.back()).norm() > 1e-3)
+    extended.push_back(path.back());
+  path.swap(extended);
 }
 
 void FastExplorationManager::findGlobalTour(

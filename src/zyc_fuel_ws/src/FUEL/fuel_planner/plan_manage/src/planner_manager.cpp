@@ -46,12 +46,17 @@ void FastPlannerManager::initPlanModules(ros::NodeHandle& nh) {
            supported_occupancy_hard_reject_enabled_, true);
   nh.param("manager/escape_max_initial_occupied_samples",
            escape_max_initial_occupied_samples_, 6);
+  nh.param("manager/turn_slowdown_angle_deg", turn_slowdown_angle_deg_, 30.0);
+  nh.param("manager/turn_time_scale", turn_time_scale_, 1.5);
   footprint_check_radius_ = std::max(0.0, footprint_check_radius_);
   footprint_check_samples_ = std::max(4, footprint_check_samples_);
   footprint_min_occupied_support_ = std::max(1, footprint_min_occupied_support_);
   footprint_support_radius_ = std::max(0.0, footprint_support_radius_);
   escape_max_initial_occupied_samples_ =
       std::max(0, escape_max_initial_occupied_samples_);
+  turn_slowdown_angle_deg_ =
+      std::max(5.0, std::min(90.0, turn_slowdown_angle_deg_));
+  turn_time_scale_ = std::max(1.0, turn_time_scale_);
 
   bool use_geometric_path, use_kinodynamic_path, use_topo_path, use_optimization,
       use_active_perception;
@@ -569,6 +574,27 @@ bool FastPlannerManager::planExploreTraj(const vector<Eigen::Vector3d>& tour,
   Eigen::VectorXd times(pt_num - 1);
   for (int i = 0; i < pt_num - 1; ++i)
     times(i) = (pos.row(i + 1) - pos.row(i)).norm() / (pp_.max_vel_ * 0.5);
+
+  // 急弯两侧分段额外留时间，让简单控制器在进入横向段前先完成减速，
+  // 避免参考点已经转弯而机体中后部仍在障碍物侧面的情况下斜切追点。
+  const double slowdown_angle = turn_slowdown_angle_deg_ * M_PI / 180.0;
+  for (int i = 1; i < pt_num - 1; ++i) {
+    Eigen::Vector3d incoming = pos.row(i).transpose() - pos.row(i - 1).transpose();
+    Eigen::Vector3d outgoing = pos.row(i + 1).transpose() - pos.row(i).transpose();
+    incoming.z() = 0.0;
+    outgoing.z() = 0.0;
+    if (incoming.norm() < 1e-6 || outgoing.norm() < 1e-6) continue;
+    const double cosine = std::max(
+        -1.0, std::min(1.0, incoming.normalized().dot(outgoing.normalized())));
+    const double angle = std::acos(cosine);
+    if (angle < slowdown_angle) continue;
+    const double normalized_angle = std::min(
+        1.0, (angle - slowdown_angle) /
+                 std::max(1e-6, M_PI_2 - slowdown_angle));
+    const double scale = 1.0 + (turn_time_scale_ - 1.0) * normalized_angle;
+    times(i - 1) *= scale;
+    times(i) *= scale;
+  }
 
   PolynomialTraj init_traj;
   PolynomialTraj::waypointsTraj(pos, cur_vel, zero, cur_acc, zero, times, init_traj);

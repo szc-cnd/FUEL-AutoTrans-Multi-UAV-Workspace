@@ -44,6 +44,7 @@
     <remap from="/planning/new" to="$(arg topic_prefix)/planning/new"/>
     <remap from="/planning/bspline" to="$(arg topic_prefix)/planning/bspline"/>
     <remap from="/planning/safety_hold" to="$(arg topic_prefix)/planning/safety_hold"/>
+    <remap from="/planning/endpoint_hold" to="$(arg topic_prefix)/planning/endpoint_hold"/>
     <remap from="/sdf_map/occupancy_all" to="$(arg topic_prefix)/sdf_map/occupancy_all"/>
     <remap from="/sdf_map/occupancy_local" to="$(arg topic_prefix)/sdf_map/occupancy_local"/>
     <remap from="/sdf_map/occupancy_local_inflate" to="$(arg topic_prefix)/sdf_map/occupancy_local_inflate"/>
@@ -222,8 +223,11 @@
     <param name="manager/footprint_min_occupied_support" value="2" type="int"/>
     <param name="manager/footprint_support_radius" value="0.10" type="double"/>
     <param name="manager/supported_occupancy_hard_reject_enabled" value="true" type="bool"/>
+    <!-- 急弯两侧放慢到约1.5倍时长，防止控制器滞后后直接斜切追赶转弯后的参考点。 -->
+    <param name="manager/turn_slowdown_angle_deg" value="30.0" type="double"/>
+    <param name="manager/turn_time_scale" value="1.5" type="double"/>
     <!-- 2026-07-16: 控制点间距缩到0.25m，使轨迹在窄道拐角更贴近已验证A*折线。 -->
-    <param name="manager/control_points_distance" value="0.25" type="double"/>
+    <param name="manager/control_points_distance" value="0.20" type="double"/>
     <param name="manager/use_geometric_path" value="true" type="bool"/>
     <param name="manager/use_kinodynamic_path" value="true" type="bool"/>
     <param name="manager/use_topo_path" value="true" type="bool"/>

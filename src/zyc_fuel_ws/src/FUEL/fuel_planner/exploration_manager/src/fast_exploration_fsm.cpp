@@ -35,6 +35,9 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/plan_failure_retry_interval", fp_->plan_failure_retry_interval_, 0.50);
   nh.param("fsm/safety_hold_enabled", safety_hold_enabled_, true);
   nh.param("fsm/hold_on_plan_failure", hold_on_plan_failure_, true);
+  nh.param("fsm/endpoint_hold_enabled", endpoint_hold_enabled_, true);
+  nh.param("fsm/endpoint_hold_lead_time", endpoint_hold_lead_time_, 0.05);
+  endpoint_hold_lead_time_ = std::max(0.0, endpoint_hold_lead_time_);
   nh.param("fsm/periodic_replan_enabled", periodic_replan_enabled_, true);
   // 2026-07-28: 连续复核覆盖至少两次20Hz地图/安全周期；起点误差过大则从真实里程计重规划。
   nh.param("fsm/trajectory_release_confirm_time", fp_->trajectory_release_confirm_time_, 0.12);
@@ -84,9 +87,11 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   emergency_brake_pub_ = nh.advertise<std_msgs::Int32>("/planning/emergency_brake", 2);
   // 2026-07-13: latch 保证后启动的控制器也能收到当前安全门控状态。
   safety_hold_pub_ = nh.advertise<std_msgs::Bool>("/planning/safety_hold", 2, true);
+  endpoint_hold_pub_ = nh.advertise<std_msgs::Bool>("/planning/endpoint_hold", 2, true);
   dynamic_detection_enable_pub_ =
       nh.advertise<std_msgs::Bool>(dynamic_detection_enable_topic, 2, true);
   setSafetyHold(false, "initialization");
+  setEndpointHold(false, "initialization");
   // 2026-07-27: 锁存 false，后启动的 LDOT 在首条通道内轨迹前也必须保持冻结。
   setDynamicDetectionEnable(false, "initialization", true);
 }
@@ -103,6 +108,17 @@ void FastExplorationFSM::setSafetyHold(bool active, const string& reason) {
   msg.data = active;
   safety_hold_pub_.publish(msg);
   ROS_WARN("[safety_hold] %s reason=%s.", active ? "ACTIVE" : "RELEASED", reason.c_str());
+}
+
+void FastExplorationFSM::setEndpointHold(bool active, const string& reason) {
+  if (!endpoint_hold_enabled_ && active) return;
+  if (endpoint_hold_active_ == active && reason != "initialization") return;
+  endpoint_hold_active_ = active;
+  std_msgs::Bool msg;
+  msg.data = active;
+  endpoint_hold_pub_.publish(msg);
+  ROS_WARN("[endpoint_hold] %s reason=%s.", active ? "ACTIVE" : "RELEASED",
+           reason.c_str());
 }
 
 void FastExplorationFSM::requestActiveTrajectoryBrake(const string& reason) {
@@ -149,6 +165,20 @@ void FastExplorationFSM::missionStatusCallback(const std_msgs::StringConstPtr &m
 
 void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
   ROS_INFO_STREAM_THROTTLE(1.0, "[FSM]: state: " << fd_->state_str_[int(state_)]);
+
+  // 已开始准备下一条轨迹但旧轨迹先到终点时，明确结束旧轨迹并让控制器锁住实时XY。
+  // 仅在PLAN/PUB等待阶段触发；正常EXEC阶段仍提前1秒开始规划，不会提前刹停。
+  if ((state_ == PLAN_TRAJ || state_ == PUB_TRAJ) && active_traj_valid_) {
+    const double elapsed =
+        std::max(0.0, (ros::Time::now() - active_traj_.start_time_).toSec());
+    const double time_to_end = active_traj_.duration_ - elapsed;
+    if (exploration_policy::shouldHoldAtTrajectoryEnd(
+            true, false, active_traj_braked_, time_to_end,
+            endpoint_hold_lead_time_)) {
+      requestActiveTrajectoryBrake("old trajectory ended before replacement publish");
+      setEndpointHold(true, "wait for validated replacement at old trajectory endpoint");
+    }
+  }
 
   switch (state_) {
     case INIT: {
@@ -326,6 +356,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         setSafetyHold(false, inflation_escape_active_
                                  ? "validated inflation escape trajectory published"
                                  : "validated new trajectory published");
+        setEndpointHold(false, "validated new trajectory published");
         fd_->static_state_ = false;
         transitState(EXEC_TRAJ, "FSM");
 

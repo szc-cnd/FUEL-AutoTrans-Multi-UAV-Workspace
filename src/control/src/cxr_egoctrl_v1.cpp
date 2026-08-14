@@ -53,6 +53,7 @@ public:
     void target_cb(const geometry_msgs::PoseStamped::ConstPtr& msg);
     void twist_cb(const quadrotor_msgs::PositionCommand::ConstPtr& msg);
     void safety_hold_cb(const std_msgs::Bool::ConstPtr& msg);
+    void endpoint_hold_cb(const std_msgs::Bool::ConstPtr& msg);
     void landing_request_cb(const std_msgs::Bool::ConstPtr& msg);
     void control(const ros::TimerEvent&);
 
@@ -91,6 +92,9 @@ public:
     bool safety_hold_active;
     // 2026-07-27: safety hold 锁存 PX4 本地位置，避免仅发零速度时在长时间规划失败期间持续漂移。
     bool safety_hold_position_latched;
+    // 旧轨迹到终点但替代轨迹尚未发布时，使用FAST-LIO闭环锁住实时位置。
+    bool endpoint_hold_active;
+    bool endpoint_hold_position_latched;
     bool have_mavros_pose;
     // 2026-07-28: 保存 MAVROS 与规划里程计的初始平移关系，运行中检查两者是否灾难性分裂。
     bool mavros_odom_alignment_ready;
@@ -99,12 +103,13 @@ public:
     double mavros_odom_max_horizontal_error, mavros_odom_max_vertical_error;
     double mavros_position_x, mavros_position_y, mavros_position_z, mavros_yaw;
     double safety_hold_x, safety_hold_y, safety_hold_z, safety_hold_yaw;
+    double endpoint_hold_x, endpoint_hold_y, endpoint_hold_z, endpoint_hold_yaw;
     double timeout_hold_x, timeout_hold_y, timeout_hold_yaw;
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
     std::string odom_topic, setpoint_topic;
     // 2026-07-13: 控制输入、任务门控和 MAVROS 输出按车辆参数隔离，默认实例为 iris_0。
-    std::string vehicle_ns, position_cmd_topic, safety_hold_topic;
+    std::string vehicle_ns, position_cmd_topic, safety_hold_topic, endpoint_hold_topic;
     std::string landing_request_topic, goal_topic, marker_topic, world_frame, drone_frame;
     double traj_cmd_timeout; // 规划轨迹超时保护
     double planner_enable_height; // FAST-LIO z 高度接管门限
@@ -119,11 +124,15 @@ public:
     double max_cmd_speed_z;
     double max_cmd_acc_xy;
     double max_cmd_acc_z;
+    double endpoint_hold_kp_xy;
+    double endpoint_hold_kp_z;
+    double endpoint_hold_max_speed_xy;
+    double endpoint_hold_max_speed_z;
     double last_cmd_vx, last_cmd_vy, last_cmd_vz;
     ros::Time last_control_stamp;
 
     ros::Subscriber state_sub, twist_sub, target_sub, position_sub, mavros_pose_sub;
-    ros::Subscriber safety_hold_sub, landing_request_sub;
+    ros::Subscriber safety_hold_sub, endpoint_hold_sub, landing_request_sub;
     ros::Publisher local_pos_pub, pubMarker;
     ros::ServiceClient set_mode_client;
     ros::Timer timer;
@@ -145,6 +154,8 @@ Ctrl::Ctrl()
     pnh.param<std::string>("setpoint_topic", setpoint_topic,
                            vehicle_ns + "/control/position_setpoint");
     pnh.param<std::string>("safety_hold_topic", safety_hold_topic, vehicle_ns + "/planning/safety_hold");
+    pnh.param<std::string>("endpoint_hold_topic", endpoint_hold_topic,
+                           vehicle_ns + "/planning/endpoint_hold");
     pnh.param<std::string>("landing_request_topic", landing_request_topic,
                            vehicle_ns + "/mission/landing_request");
     pnh.param<std::string>("goal_topic", goal_topic, vehicle_ns + "/move_base_simple/goal");
@@ -163,6 +174,8 @@ Ctrl::Ctrl()
     twist_sub = nh.subscribe(position_cmd_topic, 10, &Ctrl::twist_cb, this);
     // 2026-07-13: 规划失败立即刹停；终点二维码确认后由独立请求切换 PX4 AUTO.LAND。
     safety_hold_sub = nh.subscribe(safety_hold_topic, 5, &Ctrl::safety_hold_cb, this);
+    endpoint_hold_sub =
+        nh.subscribe(endpoint_hold_topic, 5, &Ctrl::endpoint_hold_cb, this);
     landing_request_sub =
         nh.subscribe(landing_request_topic, 2, &Ctrl::landing_request_cb, this);
     set_mode_client = nh.serviceClient<mavros_msgs::SetMode>(vehicle_ns + "/mavros/set_mode");
@@ -177,6 +190,8 @@ Ctrl::Ctrl()
     planner_cmd_enabled = false;
     safety_hold_active = false;
     safety_hold_position_latched = false;
+    endpoint_hold_active = false;
+    endpoint_hold_position_latched = false;
     have_mavros_pose = false;
     mavros_odom_alignment_ready = false;
     mavros_pose_consistent = false;
@@ -186,6 +201,7 @@ Ctrl::Ctrl()
     pnh.param("mavros_odom_max_vertical_error", mavros_odom_max_vertical_error, 0.50);
     mavros_position_x = mavros_position_y = mavros_position_z = mavros_yaw = 0.0;
     safety_hold_x = safety_hold_y = safety_hold_z = safety_hold_yaw = 0.0;
+    endpoint_hold_x = endpoint_hold_y = endpoint_hold_z = endpoint_hold_yaw = 0.0;
     timeout_hold_x = timeout_hold_y = timeout_hold_yaw = 0.0;
     safety_hold_uses_mavros_frame = false;
     landing_requested = false;
@@ -205,6 +221,10 @@ Ctrl::Ctrl()
     // 2026-07-13: 加速度前馈同样限制到本次保守规划范围，避免柱边速度虽限幅但前馈仍瞬间推得过猛。
     pnh.param("max_cmd_acc_xy", max_cmd_acc_xy, 1.00);
     pnh.param("max_cmd_acc_z", max_cmd_acc_z, 0.80);
+    pnh.param("endpoint_hold_kp_xy", endpoint_hold_kp_xy, 1.0);
+    pnh.param("endpoint_hold_kp_z", endpoint_hold_kp_z, 0.8);
+    pnh.param("endpoint_hold_max_speed_xy", endpoint_hold_max_speed_xy, 0.12);
+    pnh.param("endpoint_hold_max_speed_z", endpoint_hold_max_speed_z, 0.12);
     last_cmd_vx = 0.0;
     last_cmd_vy = 0.0;
     last_cmd_vz = 0.0;
@@ -406,6 +426,40 @@ void Ctrl::safety_hold_cb(const std_msgs::Bool::ConstPtr& msg)
     }
 }
 
+void Ctrl::endpoint_hold_cb(const std_msgs::Bool::ConstPtr& msg)
+{
+    const bool entering_hold = msg->data && !endpoint_hold_active;
+    endpoint_hold_active = msg->data;
+    if (endpoint_hold_active)
+    {
+        receive = false;
+        if (entering_hold || !endpoint_hold_position_latched)
+        {
+            last_cmd_vx = last_cmd_vy = last_cmd_vz = 0.0;
+            if (have_odom)
+            {
+                endpoint_hold_x = position_x;
+                endpoint_hold_y = position_y;
+                endpoint_hold_z = position_z;
+                endpoint_hold_yaw = current_yaw;
+                endpoint_hold_position_latched = true;
+                ROS_ERROR("[endpoint_hold] 终点刹停并锁存FAST-LIO位置 (%.3f,%.3f,%.3f)",
+                          endpoint_hold_x, endpoint_hold_y, endpoint_hold_z);
+            }
+            else
+            {
+                endpoint_hold_position_latched = false;
+                ROS_ERROR("[endpoint_hold] 终点刹停，等待首帧FAST-LIO后锁点");
+            }
+        }
+    }
+    else
+    {
+        endpoint_hold_position_latched = false;
+        ROS_WARN("[endpoint_hold] 安全新轨迹已发布，解除终点XY PID锁点");
+    }
+}
+
 void Ctrl::landing_request_cb(const std_msgs::Bool::ConstPtr& msg)
 {
     // 2026-07-16: true表示任务层已锁定最终落点；来源可以是二维码确认，也可以是当前启用的地图直降模式。
@@ -541,6 +595,49 @@ void Ctrl::control(const ros::TimerEvent&)
                           "[safety_hold] 锁点悬停中 target=(%.2f,%.2f,%.2f) source=%s，等待安全新轨迹",
                           safety_hold_x, safety_hold_y, safety_hold_z,
                           safety_hold_uses_mavros_frame ? "mavros_local" : "fastlio_fallback");
+        return;
+    }
+
+    // 替代轨迹没有及时到达时，终点保持拥有高于旧PositionCommand的优先级。
+    // XY/Z均使用FAST-LIO误差闭环，进入时目标就是实时位置，因此首先输出零速刹停，
+    // 后续只以小速度抵消漂移，不再追赶已经结束的旧轨迹终点。
+    if (endpoint_hold_active)
+    {
+        if (!endpoint_hold_position_latched)
+        {
+            endpoint_hold_x = position_x;
+            endpoint_hold_y = position_y;
+            endpoint_hold_z = position_z;
+            endpoint_hold_yaw = current_yaw;
+            endpoint_hold_position_latched = true;
+        }
+        double hold_vx = endpoint_hold_kp_xy * (endpoint_hold_x - position_x);
+        double hold_vy = endpoint_hold_kp_xy * (endpoint_hold_y - position_y);
+        const double hold_speed_xy = std::hypot(hold_vx, hold_vy);
+        if (hold_speed_xy > endpoint_hold_max_speed_xy && hold_speed_xy > 1e-6)
+        {
+            hold_vx *= endpoint_hold_max_speed_xy / hold_speed_xy;
+            hold_vy *= endpoint_hold_max_speed_xy / hold_speed_xy;
+        }
+        const double hold_vz = std::max(-endpoint_hold_max_speed_z, std::min(
+            endpoint_hold_max_speed_z,
+            endpoint_hold_kp_z * (endpoint_hold_z - position_z)));
+        current_goal.type_mask = velocity_mask;
+        current_goal.velocity.x = hold_vx;
+        current_goal.velocity.y = hold_vy;
+        current_goal.velocity.z = hold_vz;
+        current_goal.acceleration_or_force.x = 0.0;
+        current_goal.acceleration_or_force.y = 0.0;
+        current_goal.acceleration_or_force.z = 0.0;
+        current_goal.yaw = endpoint_hold_yaw;
+        local_pos_pub.publish(current_goal);
+        last_cmd_vx = hold_vx;
+        last_cmd_vy = hold_vy;
+        last_cmd_vz = hold_vz;
+        ROS_WARN_THROTTLE(1.0,
+                          "[endpoint_hold] XY PID锁点 target=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f)",
+                          endpoint_hold_x, endpoint_hold_y, endpoint_hold_z,
+                          hold_vx, hold_vy, hold_vz);
         return;
     }
 

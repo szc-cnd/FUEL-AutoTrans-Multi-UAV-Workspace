@@ -53,10 +53,13 @@ private:
   ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
   ros::Publisher replan_pub_, new_pub_, bspline_pub_, emergency_brake_pub_, safety_hold_pub_,
-      dynamic_detection_enable_pub_;
+      endpoint_hold_pub_, dynamic_detection_enable_pub_;
   bool safety_hold_active_{false};
   bool safety_hold_enabled_{true};
   bool hold_on_plan_failure_{true};
+  bool endpoint_hold_active_{false};
+  bool endpoint_hold_enabled_{true};
+  double endpoint_hold_lead_time_{0.05};
   bool periodic_replan_enabled_{true};
   // 2026-07-13: 记录连续跟踪误差起点，区分短时控制滞后与真实失控。
   ros::Time tracking_error_since_;
@@ -85,6 +88,7 @@ private:
   void transitState(EXPL_STATE new_state, string pos_call);
   // 2026-07-13: 规划碰撞或失败时显式通知控制器刹停，禁止继续消费上一条轨迹。
   void setSafetyHold(bool active, const string& reason);
+  void setEndpointHold(bool active, const string& reason);
   void requestActiveTrajectoryBrake(const string& reason);
   void setDynamicDetectionEnable(bool active, const string& reason, bool force = false);
 

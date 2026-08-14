@@ -105,6 +105,10 @@ private:
   Vector3d recovery_side_origin_{0.0, 0.0, 0.0};
   Vector3d recovery_side_dir_{1.0, 0.0, 0.0};
   double recovery_side_release_distance_{0.20};
+  // 绕障路径转回主方向前，若地图允许则继续沿当前直线多走一段，给机体后部留出通过距离。
+  bool straight_run_extension_enabled_{true};
+  double straight_run_extension_distance_{0.30};
+  double straight_run_extension_min_turn_deg_{35.0};
   // 前方竖直障碍把通道横向分开时，优先横移到占据地图中净宽更大的一侧。
   bool wide_side_bypass_enabled_{true};
   double wide_side_bypass_min_lookahead_{0.20};
@@ -188,6 +192,7 @@ private:
                        vector<Vector3d>& refined_pts, vector<double>& refined_yaws);
 
   void shortenPath(vector<Vector3d>& path);
+  void extendSafeStraightRuns(vector<Vector3d>& path);
 
   // 2026-07-08 19:26: 为比赛任务层提供最小约束工具，把“先过门进入搜索区、起飞区禁搜、未完成任务不结束”
   // 直接接进 exploration_manager，避免继续只按 frontier 覆盖率行事。
