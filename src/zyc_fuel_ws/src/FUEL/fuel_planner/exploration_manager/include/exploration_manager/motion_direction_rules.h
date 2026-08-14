@@ -34,6 +34,16 @@ private:
   bool active_{false};
 };
 
+inline bool isStationaryVerticalMotion(const Eigen::Vector3d& start,
+                                       const Eigen::Vector3d& target,
+                                       double xy_tolerance,
+                                       double minimum_height_change = 0.01) {
+  return (target - start).head<2>().norm() <=
+             std::max(0.0, xy_tolerance) + 1e-9 &&
+         std::fabs(target.z() - start.z()) + 1e-9 >=
+             std::max(0.0, minimum_height_change);
+}
+
 inline bool boundaryPathRejectRequiresGoalSwitch() { return true; }
 
 inline double viewpointDirectionScoreAdjustment(double forward_alignment,

@@ -89,6 +89,17 @@ int main() {
                                      turn_direction));
   assert(!turn_latch.arm(Eigen::Vector2d::Zero()));
 
+  // 悬空障碍下探只豁免原地改变高度，带明显XY移动的斜向俯冲仍不能走该通道。
+  assert(fast_planner::task_search::isStationaryVerticalMotion(
+      Eigen::Vector3d(4.95, 1.28, 0.59),
+      Eigen::Vector3d(4.95, 1.28, 0.10), 0.08));
+  assert(!fast_planner::task_search::isStationaryVerticalMotion(
+      Eigen::Vector3d(4.95, 1.28, 0.59),
+      Eigen::Vector3d(5.10, 1.28, 0.10), 0.08));
+  assert(!fast_planner::task_search::isStationaryVerticalMotion(
+      Eigen::Vector3d(4.95, 1.28, 0.59),
+      Eigen::Vector3d(4.95, 1.28, 0.59), 0.08));
+
   // 通道搜索中只有地图确认的真实转弯可以解除yaw锁定。
   assert(fast_planner::task_search::holdYawInCorridor(true, false));
   assert(!fast_planner::task_search::holdYawInCorridor(true, true));

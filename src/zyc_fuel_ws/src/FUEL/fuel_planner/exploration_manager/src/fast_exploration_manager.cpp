@@ -2247,7 +2247,15 @@ int FastExplorationManager::planExploreMotion(
   // 面向普通FUEL frontier的“旧航迹禁回头”过滤器误杀；占据、A*和机体足迹安全检查仍完整保留。
   const bool exit_transit_active =
       task_search_manager_ && task_search_manager_->exitTransitActive();
+  // 低位探测原地只改高度，不应被“最近拐角禁止退回旧通道”的XY半平面误杀。
+  // 这里只豁免最近拐角规则，入口/最终出口单向边界、占据、A*和机体足迹仍保留。
+  const bool stationary_vertical_detour =
+      use_vertical_detour_target && task_search_manager_ &&
+      task_search::isStationaryVerticalMotion(
+          pos, next_pos, vertical_detour_xy_tolerance_) &&
+      task_search_manager_->isMissionBoundaryMotionAllowed(next_pos);
   if (task_search_manager_ && !exit_transit_active &&
+      !stationary_vertical_detour &&
       !task_search_manager_->isTaskMotionAllowed(next_pos)) {
     ROS_ERROR_THROTTLE(1.0,
                        "[task_progress] reject goal in completed route %.2f %.2f %.2f.",
@@ -2311,9 +2319,20 @@ int FastExplorationManager::planExploreMotion(
   if ((next_pos - normalized_path.back()).norm() >= 1e-3) normalized_path.push_back(next_pos);
   ed_->path_next_goal_.swap(normalized_path);
 
+  const bool stationary_vertical_path =
+      stationary_vertical_detour &&
+      std::all_of(
+          ed_->path_next_goal_.begin(), ed_->path_next_goal_.end(),
+          [&](const Vector3d& point) {
+            return (point - pos).head<2>().norm() <=
+                       vertical_detour_xy_tolerance_ + 1e-6 &&
+                   task_search_manager_->isMissionBoundaryMotionAllowed(point);
+          });
+
   // 2026-07-23: 普通搜索路径继续执行全局禁回头；出口任务路径允许跨越最近实飞航迹和门平面，
   // 否则CROSS_EXIT会在门口被“completed route”永久拒绝。
   if (task_search_manager_ && !exit_transit_active &&
+      !stationary_vertical_path &&
       !task_search_manager_->isRecoveryPathAllowed(ed_->path_next_goal_,
                                                    pending_short_backtrack_)) {
     ROS_ERROR_THROTTLE(1.0,
@@ -2352,6 +2371,7 @@ int FastExplorationManager::planExploreMotion(
   }
   // 2026-07-23: 截断后的出口任务短步同样豁免旧航迹门控，但不豁免后续障碍物/足迹检查。
   if (task_search_manager_ && !exit_transit_active &&
+      !stationary_vertical_path &&
       !task_search_manager_->isTaskMotionAllowed(ed_->path_next_goal_.back())) {
     ROS_ERROR_THROTTLE(1.0,
                        "[entrance_plane_reject] route segment ends outside the locked entrance; "
@@ -2383,6 +2403,7 @@ int FastExplorationManager::planExploreMotion(
   }
   // 2026-07-23: shortenPath后只对普通探索路径再次做禁回头判定，任务出口路径由门状态机约束方向。
   if (task_search_manager_ && !exit_transit_active &&
+      !stationary_vertical_path &&
       !task_search_manager_->isRecoveryPathAllowed(ed_->path_next_goal_,
                                                    pending_short_backtrack_)) {
     ROS_ERROR_THROTTLE(1.0,

@@ -1426,7 +1426,8 @@ bool TaskSearchManager::astarNoReturnDirection(Eigen::Vector3d& direction) const
   return true;
 }
 
-bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) const {
+bool TaskSearchManager::isMissionBoundaryMotionAllowed(
+    const Eigen::Vector3d& candidate) const {
   if (!global_no_return_ || !corridor_frame_received_) return true;
   // 普通搜索永远不能重新穿回初始入口外侧。最终出口的专用状态由上层
   // exit_transit_active 绕过普通任务路径过滤，不受这里影响。
@@ -1445,6 +1446,12 @@ bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) co
   if (!task_search::passesMissionBoundaryNoReturn(
           door_progress, inside_return_margin_, final_exit_guard_active, exit_side))
     return false;
+  return true;
+}
+
+bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) const {
+  if (!isMissionBoundaryMotionAllowed(candidate)) return false;
+  if (!global_no_return_ || !corridor_frame_received_) return true;
   // 入口平面只防止回到场外；每次地图确认转弯后再冻结最近一段已完成通道，
   // 防止候选沿旧方向穿过拐点倒回去。新通道的横移和大角度弯道仍允许。
   return !latest_turn_anchor_valid_ ||
