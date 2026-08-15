@@ -89,5 +89,21 @@
     <param name="battery_topic" value="$(arg battery_topic)"/>
     <param name="trajectory_topic" value="$(arg trajectory_topic)"/>
     <param name="raw_trajectory_topic" value="$(arg raw_trajectory_topic)"/>
+    <rosparam param="rosbag_topics" subst_value="true">
+      - "$(arg odom_topic)"
+      - "$(arg force_attitude_odom_topic)"
+      - "$(arg imu_topic)"
+      - "/UAV1/livox/imu"
+      - "/UAV1/livox/imu_body"
+      - "/UAV1/livox/imu_mps2"
+      - "$(arg state_topic)"
+      - "$(arg extended_state_topic)"
+      - "$(arg rc_topic)"
+      - "$(arg battery_topic)"
+      - "$(arg esc_status_topic)"
+      - "$(arg setpoint_topic)"
+      - "$(arg trajectory_topic)"
+      - "$(arg raw_trajectory_topic)"
+    </rosparam>
   </node>
 </launch>
