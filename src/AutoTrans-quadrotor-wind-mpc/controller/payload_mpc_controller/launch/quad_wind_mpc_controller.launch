@@ -93,6 +93,7 @@
       - "$(arg odom_topic)"
       - "$(arg force_attitude_odom_topic)"
       - "$(arg imu_topic)"
+      - "/UAV1/mavros/local_position/odom"
       - "/UAV1/livox/imu"
       - "/UAV1/livox/imu_body"
       - "/UAV1/livox/imu_mps2"
