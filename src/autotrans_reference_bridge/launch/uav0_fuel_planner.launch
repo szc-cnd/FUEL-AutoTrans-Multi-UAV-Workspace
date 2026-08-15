@@ -1,7 +1,7 @@
 <launch>
   <!-- 只启动 UAV0 的 FUEL 规划器；桥接节点和控制器在另一个终端启动。 -->
   <arg name="enable_rviz" default="true"/>
-  <arg name="enable_ldop_detection" default="false"/>
+  <arg name="enable_ldop_detection" default="true"/>
   <arg name="enable_follower_ldop_detection" default="false"/>
 
   <!-- 规划器使用 UAV0 FAST-LIO 的雷达世界系位置和注册点云。 -->

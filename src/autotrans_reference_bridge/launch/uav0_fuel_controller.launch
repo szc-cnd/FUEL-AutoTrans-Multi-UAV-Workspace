@@ -2,7 +2,7 @@
   <!-- UAV0 FUEL 规划 + 控制器互斥入口；不在飞行中切换 controller_mode。 -->
   <arg name="controller_mode" default="simple" doc="simple 或 autotrans"/>
   <arg name="enable_rviz" default="true"/>
-  <arg name="enable_ldop_detection" default="false"/>
+  <arg name="enable_ldop_detection" default="true"/>
   <arg name="enable_follower_ldop_detection" default="false"/>
   <arg name="enable_logger" default="true"/>
 
