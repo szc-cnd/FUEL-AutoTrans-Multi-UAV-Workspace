@@ -1,7 +1,7 @@
 <launch>
     <!-- 2026-07-28: 后机新增独立Diff接力规划器；接收前机释放的离散目标，使用UAV1自身里程计和点云避障。 -->
     <!-- CAV1 为单机工作区，Diff-Planner 与 AutoTrans 共用 FAST-LIO 的雷达状态。 -->
-    <arg name="odom_topic" default="/UAV1/fast_lio/Odometry"/>
+    <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
     <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
     <arg name="goal_topic" default="/UAV1/planning/goal"/>
     <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>

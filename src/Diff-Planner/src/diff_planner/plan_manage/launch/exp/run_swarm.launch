@@ -1,5 +1,5 @@
 <launch>
-    <arg name="odom_topic" value="/Odometry"/>
+    <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
     <arg name="drone_id"  value="$(env DRONE_ID)"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>

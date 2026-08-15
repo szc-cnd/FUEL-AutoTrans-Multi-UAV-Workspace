@@ -1,12 +1,12 @@
 <launch>
   <!-- CAV1 单机集成入口：传感器/MAVROS 由 start_autotrans_quad_wind_lidar.sh 启动。 -->
-  <arg name="odom_topic" default="/UAV1/fast_lio/Odometry"/>
+  <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
   <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <arg name="frame_id" default="UAV1/camera_init"/>
   <arg name="imu_topic" default="/UAV1/mavros/imu/data"/>
-  <!-- ?????? UAV1 ? MAVROS ????????????? MAVROS ??? -->
-  <arg name="force_attitude_odom_topic" default="/UAV1/mavros/local_position/odom"/>
+  <!-- 外力估计姿态与 NMPC 统一使用 FAST-LIO 高频预测里程计。 -->
+  <arg name="force_attitude_odom_topic" default="$(arg odom_topic)"/>
   <arg name="state_topic" default="/UAV1/mavros/state"/>
   <arg name="extended_state_topic" default="/UAV1/mavros/extended_state"/>
   <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
