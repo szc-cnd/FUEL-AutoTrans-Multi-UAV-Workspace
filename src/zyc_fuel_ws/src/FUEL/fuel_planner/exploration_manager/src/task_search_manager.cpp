@@ -279,8 +279,8 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/exit/footprint_samples", exit_footprint_samples_, 8);
   nh.param("mission/task_search/exit/scan_radius", scan_radius_, 0.35);
   nh.param("mission/task_search/exit/scan_dwell_time", scan_dwell_time_, 1.2);
-  nh.param("mission/task_search/exit/outside_landing_search_height",
-           outside_landing_search_height_, 2.00);
+  nh.param("mission/task_search/exit/external_landing_planner",
+           external_landing_planner_, false);
   nh.param("mission/task_search/exit/require_final_landing_marker",
            require_final_landing_marker_, true);
   // 2026-07-20: 最终出口确认且路径足够远后，普通frontier不得把机体明显拉离出口；
@@ -3247,8 +3247,7 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
       mission_stage_start_ = ros::Time::now();
       active_goal_valid_ = false;
       outside_search_anchor_ = cur_pos;
-      // 通道内继续使用低巡航高度；确认出门后才爬升，扩大下视相机搜索覆盖面。
-      outside_search_anchor_.z() = clampSearchHeight(outside_landing_search_height_);
+      outside_search_anchor_.z() = cruise_height_;
       search_exhausted_since_ = ros::Time(0);
       publishSearchState();
       ROS_ERROR("[exit_mission] stage CROSS_EXIT -> SEARCH_OUTSIDE_LANDING, "
@@ -3266,6 +3265,9 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
   }
 
   if (mission_stage_ == SEARCH_OUTSIDE_LANDING) {
+    // 出口只是FUEL与Diff的职责分界。启用外部链路后，FUEL不再选择任何门外
+    // 搜索/接近目标，也不再发布降落请求；其残余轨迹输出由规划器仲裁器隔离。
+    if (external_landing_planner_) return false;
     if (final_landing_marker_.found) {
       mission_stage_ = APPROACH_LANDING;
       mission_stage_start_ = ros::Time::now();
@@ -3273,22 +3275,6 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
       publishSearchState();
       ROS_ERROR("[exit_mission] stage SEARCH_OUTSIDE_LANDING -> APPROACH_LANDING.");
     } else {
-      // 先在出口外原地爬升至下视相机搜索高度，再进行门外覆盖和环形扫描。
-      // 这样不会把通道内0.6m巡航高度误用到平台搜索阶段。
-      const double search_height = clampSearchHeight(outside_landing_search_height_);
-      if (std::fabs(cur_pos.z() - search_height) > 0.15) {
-        Eigen::Vector3d climb_goal = outside_search_anchor_;
-        climb_goal.z() = search_height;
-        if (!mapPointSafe(climb_goal) || goalTemporarilyBlocked(climb_goal)) {
-          ROS_WARN_THROTTLE(1.0,
-                            "[exit_mission] outside %.2fm search-height goal is blocked.",
-                            search_height);
-          return false;
-        }
-        goal = climb_goal;
-        goal_yaw = std::atan2(exit_outward_direction_.y(), exit_outward_direction_.x());
-        return true;
-      }
       // 门外仍有 frontier 时继续覆盖；耗尽后围绕出口锚点做局部平台搜索。
       if (!search_exhausted) return false;
       const int phase = static_cast<int>(

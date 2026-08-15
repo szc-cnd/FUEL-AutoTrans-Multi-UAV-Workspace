@@ -209,7 +209,9 @@ private:
   }
 
   bool stageAllowsHandoff() const {
-    return !require_stage_gate_ || mission_stage_ == "APPROACH_LANDING" ||
+    return !require_stage_gate_ || mission_stage_ == "SEARCH_OUTSIDE_LANDING" ||
+           mission_stage_ == "SEARCH_OUTSIDE_QR" ||
+           mission_stage_ == "APPROACH_LANDING" ||
            mission_stage_ == "LANDING";
   }
 

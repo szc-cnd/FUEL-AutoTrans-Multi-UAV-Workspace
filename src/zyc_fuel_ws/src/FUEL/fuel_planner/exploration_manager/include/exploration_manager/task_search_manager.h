@@ -427,8 +427,8 @@ private:
   int exit_footprint_samples_{8};
   double scan_radius_{0.35};
   double scan_dwell_time_{1.2};
-  // 穿出低矮通道后单独爬升搜索降落码，避免复用通道内巡航高度。
-  double outside_landing_search_height_{2.00};
+  // true时FUEL只发布出口切换阶段，门外搜索、平台接近和降落请求全部交给外部Diff链路。
+  bool external_landing_planner_{false};
   bool require_final_landing_marker_{true};
   // 2026-07-20: 最终出口确认后仍允许出口附近绕障微调，远处普通frontier只能有限增加
   // 到出口的距离，防止重新发布整段回头长路径。
