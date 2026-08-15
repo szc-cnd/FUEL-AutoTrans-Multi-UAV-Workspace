@@ -18,16 +18,18 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   # 2026-07-13: 终点二维码确认后由控制器调用 PX4 AUTO.LAND 服务。
   mavros_msgs
-  # 2026-07-28: 后机跟随器读取LDOT结构化动态框与预测轨迹进行摆球让行。
-  ldot_detector
 )
+
+# 这里只消费LDOP生成的ROS消息，不链接要求C++20的ldop_core；否则会把
+# UFOMap的编译标准传递给本包内仍使用C++11的旧飞控节点。
+find_package(ldop REQUIRED)
 
 ###################################
 ## catkin specific configuration ##
 ###################################
 catkin_package(
   # 2026-07-14: 导出后机跟随器新增的里程计、点云和可视化依赖。
-  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs quadrotor_msgs tf mavros_msgs ldot_detector
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs quadrotor_msgs tf mavros_msgs ldop
 )
 
 ###########
@@ -35,6 +37,7 @@ catkin_package(
 ###########
 include_directories(
   ${catkin_INCLUDE_DIRS}
+  ${ldop_INCLUDE_DIRS}
 )
 
 ## Executable node
@@ -42,7 +45,7 @@ add_executable(cxr_egoctrl_v1 src/cxr_egoctrl_v1.cpp)
 
 # 2026-07-14: 独立后机管理器只跟随前机已经飞过的安全历史，不复制第二套 FUEL。
 add_executable(leader_safe_path_follower src/leader_safe_path_follower.cpp)
-add_dependencies(leader_safe_path_follower ${catkin_EXPORTED_TARGETS})  # 2026-07-28: 确保LDOT消息先生成再编译跟随器。
+add_dependencies(leader_safe_path_follower ${catkin_EXPORTED_TARGETS} ${ldop_EXPORTED_TARGETS})  # 确保LDOP消息先生成再编译跟随器。
 
 ## Link against catkin libraries (includes tf)
 target_link_libraries(cxr_egoctrl_v1

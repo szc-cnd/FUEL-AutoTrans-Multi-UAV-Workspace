@@ -71,7 +71,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   trigger_sub_ =
       nh.subscribe("/waypoint_generator/waypoints", 1, &FastExplorationFSM::triggerCallback, this);
   odom_sub_ = nh.subscribe("/odom_world", 1, &FastExplorationFSM::odometryCallback, this);
-  // 2026-07-27: 任务状态决定门内/门外，LDOT 不自行解析门平面或目标坐标。
+  // 任务状态决定门内/门外，并对外发布统一的动态检测阶段状态。
   std::string mission_status_topic;
   std::string dynamic_detection_enable_topic;
   nh.param("fsm/mission_status_topic", mission_status_topic,
@@ -92,7 +92,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
       nh.advertise<std_msgs::Bool>(dynamic_detection_enable_topic, 2, true);
   setSafetyHold(false, "initialization");
   setEndpointHold(false, "initialization");
-  // 2026-07-27: 锁存 false，后启动的 LDOT 在首条通道内轨迹前也必须保持冻结。
+  // 锁存初始false，后启动的监控节点也能获得当前阶段。
   setDynamicDetectionEnable(false, "initialization", true);
 }
 
@@ -136,7 +136,7 @@ void FastExplorationFSM::requestActiveTrajectoryBrake(const string& reason) {
             fp_->emergency_brake_horizon_);
 }
 
-// 2026-07-27: 统一发布规划器判定后的门内检测授权，重复状态不打断 LDOT 跟踪会话。
+// 统一发布规划器判定后的门内动态检测阶段，重复状态不重复刷屏。
 void FastExplorationFSM::setDynamicDetectionEnable(bool active, const string& reason,
                                                    bool force) {
   if (!force && dynamic_detection_enabled_ == active) return;

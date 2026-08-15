@@ -2,8 +2,8 @@
   <!-- UAV0 FUEL 规划 + 控制器互斥入口；不在飞行中切换 controller_mode。 -->
   <arg name="controller_mode" default="simple" doc="simple 或 autotrans"/>
   <arg name="enable_rviz" default="true"/>
-  <arg name="enable_ldot_detection" default="false"/>
-  <arg name="enable_follower_ldot_detection" default="false"/>
+  <arg name="enable_ldop_detection" default="false"/>
+  <arg name="enable_follower_ldop_detection" default="false"/>
   <arg name="enable_logger" default="true"/>
 
   <!-- FUEL、雷达和 FAST-LIO 使用 UAV0 雷达世界系，不做坐标旋转或平移。 -->
@@ -14,8 +14,8 @@
     <arg name="cloud_topic" value="/UAV0/fast_lio/cloud_registered"/>
     <arg name="rviz_goal_topic" value="/UAV0/move_base_simple/goal"/>
     <arg name="enable_rviz" value="$(arg enable_rviz)"/>
-    <arg name="enable_ldot_detection" value="$(arg enable_ldot_detection)"/>
-    <arg name="enable_follower_ldot_detection" value="$(arg enable_follower_ldot_detection)"/>
+    <arg name="enable_ldop_detection" value="$(arg enable_ldop_detection)"/>
+    <arg name="enable_follower_ldop_detection" value="$(arg enable_follower_ldop_detection)"/>
   </include>
 
   <!-- simple：原有位置/速度控制器，只消费 FUEL traj_server 的 PositionCommand。 -->

@@ -1,8 +1,8 @@
 <launch>
   <!-- 只启动 UAV0 的 FUEL 规划器；桥接节点和控制器在另一个终端启动。 -->
   <arg name="enable_rviz" default="true"/>
-  <arg name="enable_ldot_detection" default="false"/>
-  <arg name="enable_follower_ldot_detection" default="false"/>
+  <arg name="enable_ldop_detection" default="false"/>
+  <arg name="enable_follower_ldop_detection" default="false"/>
 
   <!-- 规划器使用 UAV0 FAST-LIO 的雷达世界系位置和注册点云。 -->
   <include file="$(find diff_planner)/launch/exp/run_swarm_indoor1_fuel_exploration.launch">
@@ -13,8 +13,8 @@
     <arg name="cloud_topic" value="/UAV0/fast_lio/cloud_registered"/>
     <arg name="rviz_goal_topic" value="/UAV0/move_base_simple/goal"/>
     <arg name="enable_rviz" value="$(arg enable_rviz)"/>
-    <arg name="enable_ldot_detection" value="$(arg enable_ldot_detection)"/>
-    <arg name="enable_follower_ldot_detection"
-          value="$(arg enable_follower_ldot_detection)"/>
+    <arg name="enable_ldop_detection" value="$(arg enable_ldop_detection)"/>
+    <arg name="enable_follower_ldop_detection"
+          value="$(arg enable_follower_ldop_detection)"/>
   </include>
 </launch>

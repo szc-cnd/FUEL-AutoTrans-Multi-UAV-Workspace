@@ -52,7 +52,7 @@
         <param name="continuous_follow_speed" value="0.50"/>
         <!-- 2026-07-27: FUEL 已将任务状态隔离到前机 UAV0，跟随器同步订阅该前缀。 -->
         <param name="leader_task_status_topic" value="/UAV0/mission/task_status"/>
-        <!-- 2026-07-27: 后机在入门目标释放后独立开启LDOT，不随已先行出门的前机提前关闭。 -->
+        <!-- 后机在入门目标释放后独立开启LDOP。 -->
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
         <param name="follow_distance" value="0.70"/>
         <param name="release_path_length" value="0.70"/>
@@ -119,8 +119,8 @@
         <param name="obstacle_radius" value="0.28"/>
         <param name="obstacle_z_margin" value="0.25"/>
         <param name="obstacle_min_points" value="3"/>
-        <!-- 2026-07-28: 后机订阅LDOT结构化预测；合格摆球跨端点保留1.5s，预测相交时等待而不是随机横移。 -->
-        <param name="dynamic_obstacle_topic" value="/UAV1/ldot_detector/dynamic_obstacles"/>
+        <!-- 后机订阅LDOP结构化状态并自行做1秒匀速预测。 -->
+        <param name="dynamic_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
         <param name="dynamic_obstacle_retention" value="1.50"/>
         <param name="dynamic_obstacle_safety_radius" value="0.35"/>
         <param name="dynamic_obstacle_z_margin" value="0.18"/>

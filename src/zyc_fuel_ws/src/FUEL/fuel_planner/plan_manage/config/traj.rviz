@@ -230,14 +230,14 @@ Visualization Manager:
           Size (Pixels): 5
           Size (m): 0.05999999865889549
           Style: Flat Squares
-          Topic: /UAV0/ldot_detector/dynamic_point_cloud
+          Topic: /UAV0/ldop/dynamic_cloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: false
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /UAV0/ldot_detector/dynamic_bboxes
+          Marker Topic: /UAV0/ldop/dynamic_object_markers
           Name: dynamic_bboxes
           Namespaces:
             {}
@@ -245,14 +245,14 @@ Visualization Manager:
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /UAV0/ldot_detector/dynamic_trajectories
+          Marker Topic: /UAV0/ldop/dynamic_prediction_markers
           Name: dynamic_predictions
           Namespaces:
             {}
           Queue Size: 20
           Value: true
       Enabled: true
-      Name: LDOT_Dynamic
+      Name: LDOP_Dynamic
     - Class: rviz/Group
       Displays:
         - Alpha: 1
@@ -278,14 +278,14 @@ Visualization Manager:
           Size (Pixels): 5
           Size (m): 0.05999999865889549
           Style: Flat Squares
-          Topic: /UAV1/UAV0/ldot_detector/dynamic_point_cloud
+          Topic: /UAV1/ldop/dynamic_cloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: false
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /UAV1/UAV0/ldot_detector/dynamic_bboxes
+          Marker Topic: /UAV1/ldop/dynamic_object_markers
           Name: UAV1_dynamic_bboxes
           Namespaces:
             {}
@@ -293,14 +293,14 @@ Visualization Manager:
           Value: true
         - Class: rviz/MarkerArray
           Enabled: true
-          Marker Topic: /UAV1/UAV0/ldot_detector/dynamic_trajectories
+          Marker Topic: /UAV1/ldop/dynamic_prediction_markers
           Name: UAV1_dynamic_predictions
           Namespaces:
             {}
           Queue Size: 20
           Value: true
       Enabled: true
-      Name: UAV1_LDOT_Dynamic
+      Name: UAV1_LDOP_Dynamic
     - Class: rviz/Group
       Displays:
         - Class: rviz/Marker

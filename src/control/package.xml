@@ -22,8 +22,8 @@
   <build_depend>tf</build_depend>
   <!-- 2026-07-13: 安全悬停后支持通过 MAVROS SetMode 执行终点自动降落。 -->
   <build_depend>mavros_msgs</build_depend>
-  <!-- 2026-07-28: 后机消费LDOT动态障碍物数组和短期预测。 -->
-  <build_depend>ldot_detector</build_depend>
+  <!-- 后机消费LDOP动态目标状态并在控制侧进行短期预测。 -->
+  <build_depend>ldop</build_depend>
 
   <build_export_depend>geometry_msgs</build_export_depend>
   <!-- 2026-07-14: 向依赖本包的节点导出后机安全跟随消息依赖。 -->
@@ -36,7 +36,7 @@
   <build_export_depend>quadrotor_msgs</build_export_depend>
   <build_export_depend>tf</build_export_depend>
   <build_export_depend>mavros_msgs</build_export_depend>
-  <build_export_depend>ldot_detector</build_export_depend><!-- 2026-07-28: 导出LDOT消息依赖。 -->
+  <build_export_depend>ldop</build_export_depend>
 
   <exec_depend>geometry_msgs</exec_depend>
   <!-- 2026-07-14: 运行后机安全跟随节点所需消息包。 -->
@@ -49,7 +49,7 @@
   <exec_depend>quadrotor_msgs</exec_depend>
   <exec_depend>tf</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
-  <exec_depend>ldot_detector</exec_depend><!-- 2026-07-28: 运行后机动态预测让行所需。 -->
+  <exec_depend>ldop</exec_depend>
 
   <export>
   </export>

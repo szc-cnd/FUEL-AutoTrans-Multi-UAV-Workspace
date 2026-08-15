@@ -8,7 +8,7 @@
 #include <std_msgs/Empty.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/Bool.h>
-#include <std_msgs/String.h>  // 2026-07-27: 将任务门内/门外阶段转换为 LDOT 明确使能。
+#include <std_msgs/String.h>  // 将任务门内/门外阶段转换为动态检测状态。
 #include <nav_msgs/Odometry.h>
 #include <visualization_msgs/Marker.h>
 #include <plan_manage/plan_container.hpp>
@@ -77,7 +77,7 @@ private:
   bool active_traj_braked_{false};
   bool pending_turn_in_place_{false};
   bool active_turn_in_place_{false};
-  // 2026-07-27: 必须先发布首条通道内轨迹，且任务仍在门内/穿出口阶段，才允许 LDOT 工作。
+  // 首条通道内轨迹发布后记录动态检测阶段；LDOP当前持续运行，该状态供监控保留。
   bool first_corridor_traj_published_{false};
   bool mission_allows_dynamic_detection_{false};
   bool narrow_corridor_stage_{false};
