@@ -69,7 +69,9 @@ namespace diff_planner
 
       local_traj.drone_id = -1;
       local_traj.duration = 0.0;
-      local_traj.traj_id = 0;
+      // traj_id identifies every local trajectory published during this node's
+      // lifetime.  A new global/waypoint trajectory must not start a new ID
+      // epoch, otherwise downstream controllers can mistake it for stale data.
     }
 
     void setLocalTraj(const poly_traj::Trajectory &trajectory, const PtsChk_t &pts_to_chk, const double &world_time, const int drone_id = -1)

@@ -99,7 +99,7 @@ namespace diff_planner
     double wei_sqrvar_;                                           // squared variance weight
     double wei_time_;                                             // time weight
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_; // safe distance
-    double max_vel_, max_acc_, max_jer_, vel_tolerance_, acc_tolerance_;                          // dynamic limits
+    double max_vel_, max_acc_, max_jer_, vel_tolerance_, acc_tolerance_; // dynamic limits
 
     double t_now_;
 

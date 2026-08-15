@@ -1,5 +1,7 @@
 
 #include <plan_manage/diff_replan_fsm.h>
+#include <cmath>
+#include <limits>
 
 namespace diff_planner
 {
@@ -12,14 +14,50 @@ namespace diff_planner
     have_recv_pre_agent_ = false;
     flag_escape_emergency_ = true;
     mandatory_stop_ = false;
+    controller_restart_pending_ = false;
 
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
+    nh.param("fsm/max_tracking_error", max_tracking_error_, 0.30);
+    if (!std::isfinite(max_tracking_error_) || max_tracking_error_ <= 0.0)
+    {
+      ROS_WARN("fsm/max_tracking_error must be a positive finite value; using 0.30 m.");
+      max_tracking_error_ = 0.30;
+    }
     // 2026-07-07: 允许按场景单独指定 waypoint 切换距离，避免沿默认经验值在窄通道里提前切段。
     nh.param("fsm/waypoint_switch_dist", no_replan_thresh_, -1.0);
     nh.param("fsm/emergency_time", emergency_time_, 1.0);
+    nh.param("fsm/enable_occupied_recovery", enable_occupied_recovery_, false);
+    nh.param("fsm/escape_max_distance", escape_max_distance_, 0.40);
+    nh.param("fsm/escape_history_time", escape_history_time_, 1.50);
+    nh.param("fsm/escape_speed", escape_speed_, 0.10);
+    nh.param("fsm/escape_reach_tolerance", escape_reach_tolerance_, 0.06);
+    nh.param("fsm/escape_stop_speed", escape_stop_speed_, 0.08);
+    nh.param("fsm/escape_min_clearance", escape_min_clearance_, 0.20);
+    nh.param("fsm/escape_clearance_search_radius", escape_clearance_search_radius_, 0.60);
+    nh.param("fsm/escape_max_occupied_prefix", escape_max_occupied_prefix_, 0.20);
+    nh.param("fsm/escape_free_cycles", escape_free_cycles_, 5);
+    nh.param("fsm/escape_max_attempts", escape_max_attempts_, 2);
+    if (!std::isfinite(escape_max_distance_) || escape_max_distance_ <= 0.0)
+      escape_max_distance_ = 0.40;
+    if (!std::isfinite(escape_history_time_) || escape_history_time_ <= 0.0)
+      escape_history_time_ = 1.50;
+    if (!std::isfinite(escape_speed_) || escape_speed_ <= 0.0)
+      escape_speed_ = 0.10;
+    if (!std::isfinite(escape_reach_tolerance_) || escape_reach_tolerance_ <= 0.0)
+      escape_reach_tolerance_ = 0.06;
+    if (!std::isfinite(escape_stop_speed_) || escape_stop_speed_ <= 0.0)
+      escape_stop_speed_ = 0.08;
+    if (!std::isfinite(escape_min_clearance_) || escape_min_clearance_ < 0.0)
+      escape_min_clearance_ = 0.20;
+    if (!std::isfinite(escape_clearance_search_radius_) || escape_clearance_search_radius_ <= 0.0)
+      escape_clearance_search_radius_ = 0.60;
+    if (!std::isfinite(escape_max_occupied_prefix_) || escape_max_occupied_prefix_ <= 0.0)
+      escape_max_occupied_prefix_ = 0.20;
+    escape_free_cycles_ = std::max(1, escape_free_cycles_);
+    escape_max_attempts_ = std::max(1, escape_max_attempts_);
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
@@ -63,6 +101,17 @@ namespace diff_planner
     replan_fail_count_ = 0;
     TARGET_STUCK_TIME = 1.5 * planning_horizen_ / planner_manager_->pp_.max_vel_;
     need_hover_stop_ = false;
+    occupied_recovery_target_.setZero();
+    occupied_recovery_deadline_ = 0.0;
+    last_free_history_record_time_ = 0.0;
+    last_escape_path_check_time_ = 0.0;
+    last_escape_target_search_time_ = 0.0;
+    occupied_recovery_free_count_ = 0;
+    occupied_recovery_attempt_count_ = 0;
+    occupied_recovery_active_ = false;
+    occupied_recovery_episode_ = false;
+    occupied_recovery_from_history_ = false;
+    occupied_recovery_failure_reported_ = false;
 
     /* callback */
     exec_timer_ = nh.createTimer(ros::Duration(0.01), &DiffReplanFSM::execFSMCallback, this);
@@ -70,6 +119,8 @@ namespace diff_planner
 
     odom_sub_ = nh.subscribe("odom_world", 1, &DiffReplanFSM::odometryCallback, this);
     mandatory_stop_sub_ = nh.subscribe("mandatory_stop", 1, &DiffReplanFSM::mandatoryStopCallback, this);
+    planning_restart_sub_ = nh.subscribe("/planning_restart_trigger", 1,
+                                         &DiffReplanFSM::planningRestartCallback, this);
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */
     broadcast_ploytraj_pub_ = nh.advertise<traj_utils::MINCOTraj>("planning/broadcast_traj_send", 10);
@@ -123,6 +174,10 @@ namespace diff_planner
     exec_timer_.stop(); // To avoid blockage
     std_msgs::Empty heartbeat_msg;
     heartbeat_pub_.publish(heartbeat_msg);
+
+    const double now_sec = ros::Time::now().toSec();
+    if (have_odom_)
+      updateFreeOdomHistory(now_sec);
 
     static int fsm_num = 0;
     fsm_num++;
@@ -207,6 +262,7 @@ namespace diff_planner
         bool success = planFromGlobalTraj(1);
         if (success)
         {
+          controller_restart_pending_ = false;
           replan_fail_count_ = 0;
           publishPlanningStatus("TRAJECTORY_PUBLISHED");  // 2026-07-28: 全局重规划成功反馈。
           changeFSMExecState(EXEC_TRAJ, "FSM");
@@ -256,7 +312,20 @@ namespace diff_planner
       const PtsChk_t *chk_ptr = &planner_manager_->traj_.local_traj.pts_chk;
       bool close_to_current_traj_end = (chk_ptr->size() >= 1 && chk_ptr->back().size() >= 1) ? chk_ptr->back().back().first - t_cur < emergency_time_ : 0; // In case of empty vector
 
-      if (planner_manager_->grid_map_->getInflateOccupancy(final_goal_))
+      const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
+      if (enable_occupied_recovery_ && current_occ != 0)
+      {
+        ROS_ERROR("[局部脱障] 实际里程计位置进入膨胀占据区：occ=%d, pos=(%.3f, %.3f, %.3f)。先急停再脱障。",
+                  current_occ, odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
+        need_hover_stop_ = true;
+        flag_escape_emergency_ = true;
+        occupied_recovery_active_ = false;
+        occupied_recovery_episode_ = true;
+        occupied_recovery_free_count_ = 0;
+        changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_START");
+        break;
+      }
+      else if (planner_manager_->grid_map_->getInflateOccupancy(final_goal_))
       {
         if (!mondify_final_goal_)
         {
@@ -302,7 +371,6 @@ namespace diff_planner
       }
       // ROS_ERROR("AAAA");
       // 2026-07-07: 首飞阶段和 RViz 2D 触发后的豁免窗口内不做 stuck detect，避免首段轨迹刚启动就进入 EMERGENCY_STOP。
-      const double now_sec = ros::Time::now().toSec();
       if (enable_stuck_detect_ && now_sec >= stuck_detect_ignore_until_)
       {
         /* Avoid getting stuck wandering around large obstacles */
@@ -374,16 +442,60 @@ namespace diff_planner
     {
       if (flag_escape_emergency_) // Avoiding repeated calls
       {
+        occupied_recovery_active_ = false;
+        occupied_recovery_free_count_ = 0;
         callEmergencyStop(odom_pos_);
       }
-      else
+      else if (enable_fail_safe_ && odom_vel_.norm() < escape_stop_speed_)
       {
-        if (enable_fail_safe_ && !need_hover_stop_ && odom_vel_.norm() < 0.1)
+        const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
+        if (enable_occupied_recovery_ && current_occ != 0)
         {
-          last_target_change_time_ = ros::Time::now().toSec();
+          occupied_recovery_episode_ = true;
+          occupied_recovery_free_count_ = 0;
+        }
+        else if (enable_occupied_recovery_ && occupied_recovery_episode_)
+        {
+          ++occupied_recovery_free_count_;
+          if (occupied_recovery_free_count_ < escape_free_cycles_)
+            break;
+
+          ROS_INFO("[局部脱障] 急停位置已连续 %d 次确认自由，允许恢复正常规划。",
+                   occupied_recovery_free_count_);
+          occupied_recovery_episode_ = false;
+          occupied_recovery_attempt_count_ = 0;
+          occupied_recovery_failure_reported_ = false;
+          occupied_recovery_free_count_ = 0;
+        }
+
+        if (enable_occupied_recovery_ && current_occ != 0 &&
+            have_target_ && have_trigger_ && !mandatory_stop_)
+        {
+          if (occupied_recovery_attempt_count_ >= escape_max_attempts_)
+          {
+            if (!occupied_recovery_failure_reported_)
+            {
+              ROS_ERROR("[局部脱障] 已达到最大尝试次数 %d，保持固定急停点，禁止盲目继续移动。",
+                        escape_max_attempts_);
+              publishPlanningStatus("OCCUPIED_RECOVERY_FAILED");
+              occupied_recovery_failure_reported_ = true;
+            }
+          }
+          else if (now_sec - last_escape_target_search_time_ >= 0.20)
+          {
+            last_escape_target_search_time_ = now_sec;
+            if (startOccupiedRecovery(now_sec))
+              changeFSMExecState(OCCUPIED_RECOVERY, "OCCUPIED_RECOVERY_START");
+            else
+              ROS_ERROR_THROTTLE(1.0, "[局部脱障] 当前地图中没有满足约束的安全点，继续保持固定悬停并等待地图更新。");
+          }
+        }
+        else if (!need_hover_stop_)
+        {
+          last_target_change_time_ = now_sec;
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
         }
-        else if (enable_fail_safe_ && need_hover_stop_ && odom_vel_.norm() < 0.1)
+        else if (need_hover_stop_)
         {
           // 2026-07-07: 对非 mandatory stop 的中途急停优先尝试自动恢复规划，避免录像里那种停住后直接丢失当前任务。
           if (have_target_ && have_trigger_ && !mandatory_stop_)
@@ -406,6 +518,60 @@ namespace diff_planner
       }
 
       flag_escape_emergency_ = false;
+      break;
+    }
+
+    case OCCUPIED_RECOVERY:
+    {
+      if (!enable_occupied_recovery_ || mandatory_stop_ || !occupied_recovery_active_)
+      {
+        abortOccupiedRecovery("脱障被禁用、收到强制停止，或脱障状态无效");
+        break;
+      }
+
+      if (now_sec >= occupied_recovery_deadline_)
+      {
+        abortOccupiedRecovery("低速脱障轨迹执行超时");
+        break;
+      }
+
+      if (now_sec - last_escape_path_check_time_ >= 0.10)
+      {
+        last_escape_path_check_time_ = now_sec;
+        const bool allow_initial_occupied =
+            planner_manager_->grid_map_->getInflateOccupancy(odom_pos_) != 0;
+        if (!validateRecoverySegment(odom_pos_, occupied_recovery_target_,
+                                     allow_initial_occupied, nullptr))
+        {
+          abortOccupiedRecovery("实时地图更新后剩余脱障路径不再安全");
+          break;
+        }
+      }
+
+      const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
+      const bool reached = (odom_pos_ - occupied_recovery_target_).norm() <=
+                           escape_reach_tolerance_;
+      if (current_occ == 0 && reached && odom_vel_.norm() < escape_stop_speed_)
+        ++occupied_recovery_free_count_;
+      else
+        occupied_recovery_free_count_ = 0;
+
+      if (occupied_recovery_free_count_ >= escape_free_cycles_)
+      {
+        ROS_INFO("[局部脱障] 已到达自由区域：target=(%.3f, %.3f, %.3f)，连续确认 %d 次，恢复正常规划。",
+                 occupied_recovery_target_.x(), occupied_recovery_target_.y(),
+                 occupied_recovery_target_.z(), occupied_recovery_free_count_);
+        publishPlanningStatus("OCCUPIED_RECOVERY_SUCCEEDED");
+        occupied_recovery_active_ = false;
+        occupied_recovery_episode_ = false;
+        occupied_recovery_attempt_count_ = 0;
+        occupied_recovery_failure_reported_ = false;
+        need_hover_stop_ = false;
+        replan_fail_count_ = 0;
+        last_target_change_time_ = now_sec;
+        stuck_detect_ignore_until_ = now_sec + stuck_detect_grace_time_;
+        changeFSMExecState(GEN_NEW_TRAJ, "OCCUPIED_RECOVERY_DONE");
+      }
       break;
     }
     }
@@ -436,7 +602,7 @@ namespace diff_planner
     else
       continously_called_times_ = 1;
 
-    static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
+    static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START", "OCCUPIED_RECOVERY"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
     cout << "[" + pos_call + "]"
@@ -445,7 +611,7 @@ namespace diff_planner
 
   void DiffReplanFSM::printFSMExecState()
   {
-    static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
+    static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START", "OCCUPIED_RECOVERY"};
 
     cout << "\r[FSM]: state: " + state_str[int(exec_state_)] << ", Drone:" << planner_manager_->pp_.drone_id;
 
@@ -497,7 +663,8 @@ namespace diff_planner
     const double t_cur = ros::Time::now().toSec() - info->start_time;
     PtsChk_t pts_chk = info->pts_chk;
 
-    if (exec_state_ == WAIT_TARGET || exec_state_ ==  EMERGENCY_STOP || info->traj_id <= 0)
+    if (exec_state_ == WAIT_TARGET || exec_state_ == EMERGENCY_STOP ||
+        exec_state_ == OCCUPIED_RECOVERY || info->traj_id <= 0)
       return;
 
     /* ---------- check lost of depth ---------- */
@@ -609,6 +776,309 @@ namespace diff_planner
     return true;
   }
 
+  void DiffReplanFSM::updateFreeOdomHistory(double now)
+  {
+    if (!enable_occupied_recovery_)
+      return;
+
+    // Freeze the pre-fault safe trail while braking/recovering. Otherwise a
+    // slow emergency stop can age every useful sample out of the history.
+    if (occupied_recovery_episode_ || exec_state_ == OCCUPIED_RECOVERY ||
+        exec_state_ == EMERGENCY_STOP)
+      return;
+
+    while (!free_odom_history_.empty() &&
+           now - free_odom_history_.front().stamp > escape_history_time_)
+      free_odom_history_.pop_front();
+
+    if (!odom_pos_.allFinite() ||
+        planner_manager_->grid_map_->getInflateOccupancy(odom_pos_) != 0)
+      return;
+
+    const double resolution = planner_manager_->grid_map_->getResolution();
+    if (!free_odom_history_.empty())
+    {
+      const FreeOdomSample &last = free_odom_history_.back();
+      const Eigen::Vector3d last_pos(last.x, last.y, last.z);
+      if (now - last_free_history_record_time_ < 0.05 &&
+          (odom_pos_ - last_pos).norm() < 0.5 * resolution)
+        return;
+    }
+
+    free_odom_history_.push_back(
+        FreeOdomSample{now, odom_pos_.x(), odom_pos_.y(), odom_pos_.z()});
+    last_free_history_record_time_ = now;
+    occupied_recovery_episode_ = false;
+    occupied_recovery_attempt_count_ = 0;
+    occupied_recovery_failure_reported_ = false;
+  }
+
+  double DiffReplanFSM::estimateInflatedClearance(const Eigen::Vector3d &pos)
+  {
+    auto map = planner_manager_->grid_map_;
+    if (!pos.allFinite() || map->getInflateOccupancy(pos) != 0)
+      return 0.0;
+
+    const double resolution = map->getResolution();
+    const double max_radius = std::max(resolution, escape_clearance_search_radius_);
+    for (double radius = resolution; radius <= max_radius + 1.0e-6;
+         radius += resolution)
+    {
+      const int sample_count = std::max(
+          12, static_cast<int>(std::ceil(2.0 * M_PI * radius / resolution)));
+      for (int i = 0; i < sample_count; ++i)
+      {
+        const double angle = 2.0 * M_PI * static_cast<double>(i) /
+                             static_cast<double>(sample_count);
+        Eigen::Vector3d probe = pos;
+        probe.x() += radius * std::cos(angle);
+        probe.y() += radius * std::sin(angle);
+        if (map->getInflateOccupancy(probe) != 0)
+          return radius;
+      }
+
+      Eigen::Vector3d probe_up = pos;
+      Eigen::Vector3d probe_down = pos;
+      probe_up.z() += radius;
+      probe_down.z() -= radius;
+      if (map->getInflateOccupancy(probe_up) != 0 ||
+          map->getInflateOccupancy(probe_down) != 0)
+        return radius;
+    }
+
+    return max_radius;
+  }
+
+  bool DiffReplanFSM::validateRecoverySegment(const Eigen::Vector3d &start,
+                                              const Eigen::Vector3d &end,
+                                              bool allow_initial_occupied,
+                                              double *occupied_prefix)
+  {
+    if (occupied_prefix != nullptr)
+      *occupied_prefix = 0.0;
+    if (!start.allFinite() || !end.allFinite())
+      return false;
+
+    auto map = planner_manager_->grid_map_;
+    const double distance = (end - start).norm();
+    if (map->getInflateOccupancy(end) != 0)
+      return false;
+    if (distance < 1.0e-3)
+      return true;
+
+    const double step = std::max(0.5 * map->getResolution(), 0.02);
+    const int sample_count = std::max(1, static_cast<int>(std::ceil(distance / step)));
+    bool reached_free_space = false;
+    double prefix = 0.0;
+    for (int i = 0; i <= sample_count; ++i)
+    {
+      const double ratio = static_cast<double>(i) / static_cast<double>(sample_count);
+      const Eigen::Vector3d sample = start + ratio * (end - start);
+      const bool occupied = map->getInflateOccupancy(sample) != 0;
+      if (!occupied)
+      {
+        reached_free_space = true;
+        continue;
+      }
+
+      if (!allow_initial_occupied || reached_free_space)
+        return false;
+      prefix = ratio * distance;
+      if (prefix > escape_max_occupied_prefix_ + 1.0e-6)
+        return false;
+    }
+
+    if (occupied_prefix != nullptr)
+      *occupied_prefix = prefix;
+    return reached_free_space;
+  }
+
+  bool DiffReplanFSM::selectHistoryRecoveryTarget(Eigen::Vector3d &target,
+                                                  double &clearance)
+  {
+    if (occupied_recovery_attempt_count_ > 0)
+      return false;
+
+    const double resolution = planner_manager_->grid_map_->getResolution();
+    const double min_distance = std::max(resolution, 2.0 * escape_reach_tolerance_);
+    for (auto it = free_odom_history_.rbegin(); it != free_odom_history_.rend(); ++it)
+    {
+      const Eigen::Vector3d candidate(it->x, it->y, it->z);
+      const double distance = (candidate - odom_pos_).norm();
+      if (distance < min_distance || distance > escape_max_distance_)
+        continue;
+
+      const double candidate_clearance = estimateInflatedClearance(candidate);
+      if (candidate_clearance + 1.0e-6 < escape_min_clearance_)
+        continue;
+
+      double occupied_prefix = 0.0;
+      if (!validateRecoverySegment(odom_pos_, candidate, true, &occupied_prefix))
+        continue;
+
+      target = candidate;
+      clearance = candidate_clearance;
+      ROS_INFO("[局部脱障] 采用最近历史自由点，距离 %.3f m，占据前缀 %.3f m，净空 %.3f m。",
+               distance, occupied_prefix, clearance);
+      return true;
+    }
+    return false;
+  }
+
+  bool DiffReplanFSM::selectLateralRecoveryTarget(Eigen::Vector3d &target,
+                                                  double &clearance)
+  {
+    Eigen::Vector3d forward = final_goal_ - odom_pos_;
+    forward.z() = 0.0;
+    if (!forward.allFinite() || forward.head<2>().norm() < 0.05)
+    {
+      forward = odom_vel_;
+      forward.z() = 0.0;
+    }
+    if (!forward.allFinite() || forward.head<2>().norm() < 0.05)
+      forward = Eigen::Vector3d::UnitX();
+    else
+      forward.normalize();
+    const Eigen::Vector3d lateral(-forward.y(), forward.x(), 0.0);
+
+    // Search only side/forward-side sectors. No candidate with negative mission
+    // progress is allowed in this fallback, so it cannot choose another retreat.
+    const double angles_deg[] = {90.0, -90.0, 75.0, -75.0,
+                                 60.0, -60.0, 45.0, -45.0};
+    const double resolution = planner_manager_->grid_map_->getResolution();
+    const double min_radius = std::max(2.0 * resolution, 0.15);
+    double best_score = -std::numeric_limits<double>::infinity();
+    bool found = false;
+
+    for (double radius = min_radius; radius <= escape_max_distance_ + 1.0e-6;
+         radius += resolution)
+    {
+      for (double angle_deg : angles_deg)
+      {
+        const double angle = angle_deg * M_PI / 180.0;
+        const Eigen::Vector3d direction =
+            std::cos(angle) * forward + std::sin(angle) * lateral;
+        const double forward_progress = direction.dot(forward);
+        if (forward_progress < -1.0e-6)
+          continue;
+
+        Eigen::Vector3d candidate = odom_pos_ + radius * direction;
+        candidate.z() = odom_pos_.z();
+        if (planner_manager_->grid_map_->getInflateOccupancy(candidate) != 0)
+          continue;
+
+        double occupied_prefix = 0.0;
+        if (!validateRecoverySegment(odom_pos_, candidate, true, &occupied_prefix))
+          continue;
+
+        const double candidate_clearance = estimateInflatedClearance(candidate);
+        if (candidate_clearance + 1.0e-6 < escape_min_clearance_)
+          continue;
+
+        const double lateral_preference = std::abs(direction.dot(lateral));
+        const double score = 10.0 * candidate_clearance +
+                             0.50 * lateral_preference +
+                             0.10 * forward_progress - 0.20 * radius;
+        if (score > best_score)
+        {
+          best_score = score;
+          target = candidate;
+          clearance = candidate_clearance;
+          found = true;
+        }
+      }
+    }
+
+    if (found)
+    {
+      const Eigen::Vector3d displacement = target - odom_pos_;
+      ROS_WARN("[局部脱障] 历史点不可用，选择实时地图侧向安全点：位移=(%.3f, %.3f, %.3f) m，"
+               "前向分量=%.3f m，净空=%.3f m。",
+               displacement.x(), displacement.y(), displacement.z(),
+               displacement.dot(forward), clearance);
+    }
+    return found;
+  }
+
+  bool DiffReplanFSM::selectOccupiedRecoveryTarget(Eigen::Vector3d &target,
+                                                   bool &from_history,
+                                                   double &clearance)
+  {
+    if (selectHistoryRecoveryTarget(target, clearance))
+    {
+      from_history = true;
+      return true;
+    }
+    if (selectLateralRecoveryTarget(target, clearance))
+    {
+      from_history = false;
+      return true;
+    }
+    return false;
+  }
+
+  bool DiffReplanFSM::callOccupiedRecovery(const Eigen::Vector3d &target)
+  {
+    if (!planner_manager_->OccupiedStartRecovery(odom_pos_, target, escape_speed_))
+      return false;
+
+    traj_utils::PolyTraj poly_msg;
+    traj_utils::MINCOTraj minco_msg;
+    polyTraj2ROSMsg(poly_msg, minco_msg);
+    poly_traj_pub_.publish(poly_msg);
+    broadcast_ploytraj_pub_.publish(minco_msg);
+    return true;
+  }
+
+  bool DiffReplanFSM::startOccupiedRecovery(double now)
+  {
+    Eigen::Vector3d target;
+    double clearance = 0.0;
+    bool from_history = false;
+    if (!selectOccupiedRecoveryTarget(target, from_history, clearance))
+      return false;
+    if (!callOccupiedRecovery(target))
+      return false;
+
+    occupied_recovery_target_ = target;
+    occupied_recovery_from_history_ = from_history;
+    occupied_recovery_active_ = true;
+    occupied_recovery_episode_ = true;
+    occupied_recovery_free_count_ = 0;
+    ++occupied_recovery_attempt_count_;
+    replan_fail_count_ = 0;
+    last_escape_path_check_time_ = now;
+    occupied_recovery_deadline_ = planner_manager_->traj_.local_traj.start_time +
+                                  planner_manager_->traj_.local_traj.duration + 1.0;
+
+    visualization_->displayGoalPoint(
+        target,
+        from_history ? Eigen::Vector4d(0.0, 1.0, 0.2, 1.0)
+                     : Eigen::Vector4d(0.1, 0.8, 1.0, 1.0),
+        0.18, 1000 + planner_manager_->pp_.drone_id);
+    publishPlanningStatus(from_history ? "OCCUPIED_RECOVERY_HISTORY"
+                                       : "OCCUPIED_RECOVERY_LATERAL");
+    ROS_WARN("[局部脱障] 开始第 %d/%d 次低速脱障，target=(%.3f, %.3f, %.3f)，"
+             "来源=%s，净空=%.3f m，截止时间=%.3f。",
+             occupied_recovery_attempt_count_, escape_max_attempts_, target.x(),
+             target.y(), target.z(), from_history ? "历史自由轨迹" : "实时侧向搜索",
+             clearance, occupied_recovery_deadline_);
+    return true;
+  }
+
+  void DiffReplanFSM::abortOccupiedRecovery(const char *reason)
+  {
+    ROS_ERROR("[局部脱障] %s；在当前位置重新急停。", reason);
+    publishPlanningStatus("OCCUPIED_RECOVERY_ABORTED");
+    occupied_recovery_active_ = false;
+    occupied_recovery_free_count_ = 0;
+    need_hover_stop_ = true;
+    callEmergencyStop(odom_pos_);
+    flag_escape_emergency_ = false;
+    last_escape_target_search_time_ = ros::Time::now().toSec();
+    changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_RECOVERY_ABORT");
+  }
+
   bool DiffReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
     if (mondify_final_goal_ && mondifyInCollisionFinalGoal()) 
@@ -665,17 +1135,70 @@ namespace diff_planner
   {
 
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
-    double t_cur = ros::Time::now().toSec() - info->start_time;
+    const double t_cur_raw = ros::Time::now().toSec() - info->start_time;
+    const double duration = info->traj.getTotalDuration();
+    const bool trajectory_time_valid = std::isfinite(t_cur_raw) &&
+                                       std::isfinite(duration) && duration > 0.0 &&
+                                       t_cur_raw >= 0.0 && t_cur_raw <= duration;
+    const double t_cur = std::isfinite(t_cur_raw) && std::isfinite(duration) && duration > 0.0
+                             ? std::max(0.0, std::min(t_cur_raw, duration))
+                             : 0.0;
 
-    start_pt_ = info->traj.getPos(t_cur);
-    start_vel_ = info->traj.getVel(t_cur);
-    start_acc_ = info->traj.getAcc(t_cur);
+    Eigen::Vector3d predicted_pos = Eigen::Vector3d::Constant(
+        std::numeric_limits<double>::quiet_NaN());
+    Eigen::Vector3d predicted_vel = predicted_pos;
+    Eigen::Vector3d predicted_acc = predicted_pos;
+    if (info->traj.getPieceNum() > 0 && std::isfinite(duration) && duration > 0.0)
+    {
+      predicted_pos = info->traj.getPos(t_cur);
+      predicted_vel = info->traj.getVel(t_cur);
+      predicted_acc = info->traj.getAcc(t_cur);
+    }
 
-    bool success = callReboundReplan(false, false);
+    const bool prediction_finite = predicted_pos.allFinite() &&
+                                   predicted_vel.allFinite() && predicted_acc.allFinite();
+    const bool odom_finite = odom_pos_.allFinite() && odom_vel_.allFinite();
+    if (!odom_finite)
+    {
+      ROS_ERROR_THROTTLE(1.0, "Cannot replan: odometry position or velocity is non-finite.");
+      return false;
+    }
+
+    const double tracking_error = prediction_finite
+                                      ? (predicted_pos - odom_pos_).norm()
+                                      : std::numeric_limits<double>::infinity();
+    const bool replan_from_odom = !trajectory_time_valid || !prediction_finite ||
+                                  !std::isfinite(tracking_error) ||
+                                  tracking_error > max_tracking_error_;
+
+    if (replan_from_odom)
+    {
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
+      ROS_WARN("[TRACKING_DEVIATION_REPLAN] error=%.3f m, limit=%.3f m, "
+               "trajectory_time=%.3f/%.3f s, predicted=(%.3f, %.3f, %.3f), "
+               "odom=(%.3f, %.3f, %.3f). Replanning from odometry.",
+               tracking_error, max_tracking_error_, t_cur_raw, duration,
+               predicted_pos.x(), predicted_pos.y(), predicted_pos.z(),
+               odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
+      publishPlanningStatus("TRACKING_DEVIATION_REPLAN");
+    }
+    else
+    {
+      start_pt_ = predicted_pos;
+      start_vel_ = predicted_vel;
+      start_acc_ = predicted_acc;
+    }
+
+    // A tracking deviation must use polynomial initialization from the actual
+    // measured state; never retry the already-detached local prediction first.
+    bool success = callReboundReplan(replan_from_odom, false);
 
     if (!success)
     {
-      success = callReboundReplan(true, false);
+      if (!replan_from_odom)
+        success = callReboundReplan(true, false);
       if (!success)
       {
         for (int i = 0; i < trial_times; i++)
@@ -857,9 +1380,50 @@ namespace diff_planner
   void DiffReplanFSM::mandatoryStopCallback(const std_msgs::Empty &msg)
   {
     mandatory_stop_ = true;
+    controller_restart_pending_ = false;
+    occupied_recovery_active_ = false;
+    flag_escape_emergency_ = true;
     ROS_ERROR("Received a mandatory stop command!");
     changeFSMExecState(EMERGENCY_STOP, "Mandatory Stop");
     enable_fail_safe_ = false;
+  }
+
+  void DiffReplanFSM::planningRestartCallback(const std_msgs::Empty &msg)
+  {
+    (void)msg;
+    if (mandatory_stop_)
+    {
+      ROS_WARN("[控制器恢复] 已收到永久停止信号，忽略重新规划请求。");
+      return;
+    }
+    if (!have_odom_ || !have_target_ || !have_trigger_)
+    {
+      ROS_WARN("[控制器恢复] 暂不能重新规划：odom=%d, target=%d, trigger=%d。",
+               have_odom_, have_target_, have_trigger_);
+      return;
+    }
+
+    controller_restart_pending_ = true;
+    replan_fail_count_ = 0;
+    need_hover_stop_ = false;
+    occupied_recovery_active_ = false;
+    occupied_recovery_free_count_ = 0;
+    const double now = ros::Time::now().toSec();
+    last_target_change_time_ = now;
+    stuck_detect_ignore_until_ = now + stuck_detect_grace_time_;
+
+    if (planner_manager_->grid_map_->getInflateOccupancy(odom_pos_) != 0)
+    {
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      occupied_recovery_episode_ = true;
+      changeFSMExecState(EMERGENCY_STOP, "CONTROLLER_RESTART_OCCUPIED");
+      ROS_WARN("[控制器恢复] 最新里程计仍在膨胀障碍内，先进入现有局部脱障流程。");
+      return;
+    }
+
+    changeFSMExecState(GEN_NEW_TRAJ, "CONTROLLER_RESTART");
+    ROS_WARN("[控制器恢复] 保留当前目标和航点，从最新里程计位置、速度强制生成新轨迹。");
   }
 
   void DiffReplanFSM::odometryCallback(const nav_msgs::OdometryConstPtr &msg)

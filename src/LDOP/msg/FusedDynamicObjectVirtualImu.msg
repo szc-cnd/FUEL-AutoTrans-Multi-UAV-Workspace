@@ -1,0 +1,8 @@
+std_msgs/Header header
+time available_stamp
+uint32 mocap_source_index
+geometry_msgs/Pose fused_pose_at_eval
+geometry_msgs/Vector3 virtual_linear_velocity
+geometry_msgs/Vector3 virtual_angular_velocity
+geometry_msgs/Vector3 virtual_linear_acceleration
+geometry_msgs/Vector3 virtual_specific_force

@@ -97,7 +97,7 @@ namespace PayloadMPC
   {
     if (state_cost_scaling < 0.0 || input_cost_scaling < 0.0)
     {
-      ROS_ERROR("MPC: Cost scaling is wrong, must be non-negative!");
+      ROS_ERROR("[NMPC] 代价缩放参数错误：必须为非负数。");
       return false;
     }
     W_.block(0, 0, kCostSize, kCostSize) = Q;
@@ -129,25 +129,25 @@ namespace PayloadMPC
   {
     if (min_thrust <= 0.0 || min_thrust > max_thrust)
     {
-      ROS_ERROR("MPC: Minimal thrust is not set properly, not changed.");
+      ROS_ERROR("[NMPC] 最小物理总推力设置错误，保持原值；单位 N。");
       return false;
     }
 
     if (max_thrust <= 0.0 || min_thrust > max_thrust)
     {
-      ROS_ERROR("MPC: Maximal thrust is not set properly, not changed.");
+      ROS_ERROR("[NMPC] 最大物理总推力设置错误，保持原值；单位 N。");
       return false;
     }
 
     if (max_rollpitchrate <= 0.0)
     {
-      ROS_ERROR("MPC: Maximal xy-rate is not set properly, not changed.");
+      ROS_ERROR("[NMPC] 最大横滚/俯仰机体系角速度设置错误，保持原值；单位 rad/s。");
       return false;
     }
 
     if (max_yawrate <= 0.0)
     {
-      ROS_ERROR("MPC: Maximal yaw-rate is not set properly, not changed.");
+      ROS_ERROR("[NMPC] 最大偏航机体系角速度设置错误，保持原值；单位 rad/s。");
       return false;
     }
 
@@ -250,7 +250,7 @@ namespace PayloadMPC
   {
     if (!acado_is_prepared_)
     {
-      ROS_WARN("MPC: Solver was triggered without preparation, abort!");
+      ROS_WARN("[NMPC] 求解器尚未完成准备，已中止本次求解。");
       return false;
     }
 
@@ -273,8 +273,8 @@ namespace PayloadMPC
     }
     if (ret != 0)
     {
-      ROS_ERROR("MPC: Feedback step failed,  %d", ret);
-      ROS_ERROR("MPC ERROR: %s", acado_getErrorString(ret));
+      ROS_ERROR("[NMPC] 反馈求解失败，错误码=%d。", ret);
+      ROS_ERROR("[NMPC] 求解器错误：%s。", acado_getErrorString(ret));
       return false;
     }
 
@@ -290,8 +290,8 @@ namespace PayloadMPC
     int ret = acado_preparationStep();
     if (ret != 0)
     {
-      ROS_ERROR("MPC: Preparation step failed,  %d", ret);
-      ROS_ERROR("MPC ERROR: %s", acado_getErrorString(ret));
+      ROS_ERROR("[NMPC] 求解准备失败，错误码=%d。", ret);
+      ROS_ERROR("[NMPC] 求解器错误：%s。", acado_getErrorString(ret));
       return false;
     }
     acado_is_prepared_ = true;

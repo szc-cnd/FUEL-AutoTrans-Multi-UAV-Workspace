@@ -48,6 +48,9 @@ namespace diff_planner
         Eigen::Vector3d &local_target_pos, Eigen::Vector3d &local_target_vel,
         bool &touch_goal);
     bool EmergencyStop(Eigen::Vector3d stop_pos);
+    bool OccupiedStartRecovery(const Eigen::Vector3d &start_pos,
+                               const Eigen::Vector3d &target_pos,
+                               double max_speed);
     bool checkCollision(int drone_id);
     bool setLocalTrajFromOpt(const poly_traj::MinJerkOpt &opt, const bool touch_goal);
     inline double getSwarmClearance(void) { return ploy_traj_opt_->get_swarm_clearance_(); }

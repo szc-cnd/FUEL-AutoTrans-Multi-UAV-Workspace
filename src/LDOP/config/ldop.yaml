@@ -1,0 +1,178 @@
+# 雷达点云和里程计必须在同一世界坐标系
+input_cloud_topic: /UAV1/fast_lio/cloud_registered
+odom_topic: /UAV1/fast_lio/Odom_high_freq
+static_cloud_topic: /UAV1/ldop/static_cloud  # 当前帧静态点云输出
+dynamic_cloud_topic: /UAV1/ldop/dynamic_cloud  # 当前帧动态点云输出
+dynamic_objects_topic: /UAV1/ldop/dynamic_objects
+dynamic_object_markers_topic: /UAV1/ldop/dynamic_object_markers  # 当前帧动态目标包围盒 MarkerArray 输出
+dynamic_track_markers_topic: /UAV1/ldop/dynamic_track_markers  # 跨帧动态目标轨迹 MarkerArray 输出
+dynamic_predictions_topic: /UAV1/ldop/dynamic_object_predictions  # 动态目标轨迹预测输出
+dynamic_prediction_markers_topic: /UAV1/ldop/dynamic_prediction_markers  # 动态目标轨迹预测 MarkerArray 输出
+static_map_markers_topic: /UAV1/ldop/static_map_markers  # 当前帧静态体素可视化 MarkerArray 输出
+static_map_visualization_max_z: 3.0  # 仅限制静态体素地图RViz可视化高度，不改变UFOMap地图内容
+verbose: false  
+
+ufomap_resolution: 0.2  # 叶子体素尺寸
+ufomap_depth_levels: 16  # 八叉树层级规模
+ufomap_inflate_unknown: 2  # 按邻域膨胀d_p未知区域以容忍定位误差，单位为一个体素 
+ufomap_inflate_hits_dist: 0.4  # 沿射线扩展d_s命中区域以容忍测距噪声， 天花板/墙顶这种大平面在仿真雷达里容易被斜向射线、体素离散、测距噪声打出“边缘擦过”的情况。
+ufomap_inflate_unknown_compensation: true  # 是否补偿未知区域膨胀
+ufomap_ray_passthrough_hits: false  # 射线是否穿过命中点
+ufomap_down_sampling_method: center  # 积分前降采样策略，可选 none、center、centroid、uniform
+ufomap_min_range: 0.3  # 近点过滤 / 最小积分距离
+ufomap_max_range: -1  # 最大积分距离，还影响当前帧分类输出半径；-1 表示不限制，其他非负值需大于 ufomap_min_range
+ufomap_input_max_z: 2.5  # 仅保留输入点云中全局Z坐标小于2.5米的点；-1表示关闭
+ufomap_ground_filter_enabled: true  # 启用倾斜地面平面内点滤波
+ufomap_ground_estimation_frames: 30  # 启动阶段用于锁定地面平面的有效帧数
+ufomap_ground_estimation_radius: 4.0  # 地面平面估计使用的传感器周围半径，单位m
+ufomap_ground_estimation_bin_size: 0.02  # 地面候选高度直方图分辨率，单位m
+ufomap_ground_estimation_min_points: 100  # 地面候选峰值至少需要的点数
+ufomap_ground_estimation_candidate_band: 0.25  # 围绕高度峰值收集平面拟合候选点的半带宽，单位m
+ufomap_ground_estimation_inlier_threshold: 0.04  # 平面拟合内点残差阈值，单位m
+ufomap_ground_estimation_max_slope: 0.35  # 地面平面最大允许坡度，约19度
+ufomap_warmup_frames: 30  # 预热帧数；预热期间不向跟踪器输出动态目标
+ufomap_temporal_motion_enabled: true  # 启用上一帧与当前帧的局部运动候选检测
+ufomap_temporal_match_distance: 0.05  # 认为同一点的最大跨帧距离，单位m；更容易捕获缓慢摆动目标
+ufomap_temporal_search_radius: 0.35  # 运动候选搜索上一帧点的最大半径，单位m
+ufomap_temporal_cluster_radius: 0.35  # 跨帧运动候选需要相互支持的空间半径，单位m
+ufomap_temporal_min_cluster_points: 4  # 跨帧运动候选在支持半径内至少需要的点数
+ufomap_insert_only_valid: false  # 仅对有效射线区段执行插入，即ufomap_max_range范围内点的射线段
+ufomap_insert_hit_depth: 0  # 命中点更新深度，0 表示沿用 UFOMap 默认值
+ufomap_insert_miss_depth: 0  # free / miss （失配）更新深度
+ufomap_ray_casting_depth: 0  # 射线投射深度
+ufomap_simple_ray_casting: false  # 简化射线投射开关，false 使用 UFOMap proper ray casting
+ufomap_simple_ray_casting_factor: 1.0  # 简化射线步长系数 
+ufomap_sliding_window_size: 0  # 最近N帧hits/misses窗口，>1时用于合并多帧观测生成seenFree，0表示关闭
+ufomap_parallel: true  # 是否使用 UFOMap 并行积分
+ufomap_num_threads: 8  # 并行积分的线程数，0 表示沿用 UFOMap 默认值
+ufomap_propagate: true  # 是否在每帧插入后立即传播修改（更新整个树的结构、节点状态等）
+
+# 当前帧动态点聚类参数
+dynamic_cluster_min_points: 8   #cluster 中原始动态点数量小于该值时丢弃
+dynamic_cluster_max_extent: 3.0  #cluster 原始点 AABB 对角线长度大于该值时丢弃，用于过滤大片误分割或粘连结果。
+dynamic_cluster_connectivity: 26  #cluster 连通性，6 18 26
+dynamic_cluster_vertical_merge_max_z_gap: 0.6  # 当前帧上下碎片合并允许的最大竖向空隙，单位 m；用于修复远处目标被竖向切成多个 cluster。
+dynamic_cluster_vertical_merge_min_xy_overlap_ratio: 0.5  # 水平投影有面积重叠时，交叠面积至少占较小投影面积的比例；避免仅擦边就合并。
+
+# 动态目标跟踪参数
+tracking_history_size: 100  # 每条轨迹保留的历史样本数上限（位置、速度、公共状态协方差和匹配状态）
+tracking_max_missed_frames: 15  # 连续漏检超过该帧数后删除内部轨迹
+tracking_max_publish_missed_frames: 8  # 对外最多保留预测目标8帧，给球被短时遮挡后的原ID更多重关联时间
+tracking_min_hits_to_publish: 3  # 轨迹至少命中3次后才对外发布，抑制固定杆短暂误检
+tracking_motion_min_displacement: 0.04  # 连续匹配中心位移达到该值才计入真实运动证据，单位m
+tracking_motion_min_evidence_frames: 2  # 对外发布前至少需要的真实运动证据帧数
+tracking_motion_confirmation_speed: 0.12  # 滤波速度达到该值后锁定为动态轨迹，单位m/s
+tracking_association_gate_confidence: 0.7  # 马氏距离卡方门限置信度（3 自由度）
+tracking_coasting_gate_relax_factor: 1.5  # 漏检轨迹重关联时的门限放宽倍数
+tracking_box_size_smoothing_alpha: 0.5  # 目标尺寸指数平滑系数
+tracking_spawn_suppression_distance: 1.0  # 成熟轨迹承接小球点簇中心抖动或短断帧的回退关联距离；0 表示关闭
+tracking_spawn_suppression_iou_threshold: 0.2  # 回退关联的较宽松水平重叠阈值，适应小球点簇尺寸抖动；0 表示只使用距离
+tracking_duplicate_merge_distance: 0.75  # 同一目标碎片轨迹的三维中心合并距离；<=0 关闭
+tracking_default_dt: 0.1  # 时间戳异常时回退使用的预测时间步长（秒）
+tracking_max_dt: 0.5  # 预测时间步长上限（秒），防止大间隔导致发散
+tracking_classification_enabled: false  # 当前只检测动态障碍物，不启用类别分类；目标保持 Unknown/CV3D
+
+prediction_horizon: 1.0  # 预测未来时长，采样间隔复用 tracking_default_dt
+prediction_max_branches: 3  # 每个目标最多保留的 GMM 分支数量，分支内只有一条中心状态轨迹
+prediction_min_branch_probability: 0.05  # 低于该概率的 GMM 分支过滤后重新归一化
+prediction_history_window: 20  # 航向和速度趋势估计使用的最近历史样本数
+prediction_heading_stable_angle: 0.35  # 航向稳定阈值，单位 rad
+prediction_stop_speed: 0.2  # 停止意图趋近的速度尺度
+prediction_turn_yaw_rate: 0.5  # 左右转意图使用的角速度幅值
+prediction_lateral_speed: 0.4  # 横向避让意图使用的法向速度幅值
+prediction_vertical_speed: 0.3  # UAV 垂向意图使用的 z 速度幅值
+prediction_history_quality_noise_scale: 1.5  # 短历史/漏检/不稳定轨迹的未来噪声放大上限
+prediction_hypothesis_noise_scale: 1.3  # 假设性分支相对 keep 分支的未来噪声尺度
+
+prediction_enable_feedback: false  # 启用P4闭环反馈：用上一轮预测残差/NIS调整同一目标的下一帧分支概率和未来Q尺度
+prediction_feedback_max_age: 1.5  # 超过该时间差的预测缓存不再用于反馈，单位s
+prediction_feedback_probability_gain: 1.0  # likelihood bias对下一轮mode score的影响强度
+prediction_feedback_noise_gain: 0.25  # NIS偏离期望值时未来过程噪声尺度的调整速度
+prediction_feedback_max_noise_scale: 3.0  # predictor未来Q的最大闭环放大尺度；下界固定为0.3不暴露为参数
+prediction_feedback_smoothing_alpha: 0.35  # NIS和likelihood反馈的指数平滑权重
+prediction_feedback_behavior_value_bucket: 0.25  # 行为强度近似匹配粒度，用于跨帧匹配同语义分支
+prediction_feedback_max_sample_time_error: 0.15  # 预测采样点与当前dt的最大允许时间偏差，单位s
+
+prediction_enable_interaction_context: true  # 启用P3交互感知预测：目标间交互、静态地图约束和free corridor方向先验
+prediction_pair_interaction_weight: 1.0  # 目标间距离/TTC/交叉冲突代价权重
+prediction_map_interaction_weight: 1.0  # 静态occupied/near obstacle代价权重
+prediction_corridor_interaction_weight: 0.4  # free corridor方向先验权重
+prediction_interaction_safe_distance: 0.4  # 目标尺寸膨胀后的额外安全距离，单位m
+prediction_near_obstacle_distance: 0.6  # 静态障碍近邻软惩罚半径，单位m
+prediction_map_query_depth: 0  # 静态地图交互查询深度，0为叶子；调大可用更粗体素降低局部查询成本
+prediction_ttc_safe_time: 1.5  # TTC低于该值时提高迎面/交叉冲突惩罚，单位s
+prediction_free_corridor_query_radius: 1.2  # 局部free corridor方向估计采样半径，单位m
+prediction_max_correction_distance: 0.2  # 单个预测点均值位置最大修正距离，单位m
+prediction_max_deceleration_ratio: 0.35  # 单个预测点速度最大衰减比例
+prediction_interaction_energy_tau: 1.0  # 交互能量转概率缩放的温度参数
+
+# 动态目标类别分类参数（分类开关关闭时保留兼容，不参与运行）
+classification_start_frame: 10  # 轨迹累计命中到该帧数后才开始给类别证据积分
+classification_score_decay: 0.85  # 可靠匹配帧更新类别证据前，对已有分数做 EMA 衰减
+classification_score_increment: 1.0  # 当前帧 bbox 分类命中某类别时增加的证据分
+classification_confirm_score: 3.0  # 最高类别分数达到该值后才允许确认类别
+classification_switch_margin: 1.5  # 最高分至少领先第二名这么多才允许确认/切换类别
+classification_size_change_ratio: 0.5  # bbox 尺寸突增/突减超过该比例时先视为临时合并/分离
+classification_point_count_change_ratio: 0.5  # 点数突增/突减超过该比例时先视为临时合并/分离
+classification_size_change_confirm_frames: 5  # 尺寸/点数变化持续超过该帧数后才接受为真实变化
+classify_human_threshold: [1.1, 0.8]  # [高度相对水平尺寸比例, 质心高度相对目标高度比例]
+classify_vehicle_threshold: [1.5, 0.7]  # [水平尺寸相对高度比例, 质心高度相对目标高度比例]
+classify_uav_threshold: [0.6, 1.5]  # [最大尺寸阈值, 质心高度相对目标高度比例]
+
+# mocap 辅助动态目标融合参数
+# 仿真时由 ground_truth_bridge 节点提供，真机时替换为实际动捕话题
+fusion_mocap_topics:
+  - /mocap/person1/pose
+  - /mocap/person2/pose
+  - /mocap/person3/pose
+  - /mocap/person4/pose
+  - /mocap/person5/pose
+  - /mocap/person6/pose
+  - /mocap/person7/pose
+  - /mocap/person8/pose
+fusion_mocap_to_ldop_translation: [0.0, 0.0, 0.0]
+fusion_mocap_sync_tolerance: 0.03
+fusion_association_max_distance: 1.0
+fusion_offset_alpha: 0.2
+fusion_offset_observation_max_norm: 2.0
+fusion_offset_update_max_delta: 0.3
+fusion_lidar_anchor_timeout: 0.5
+fusion_bspline_min_samples: 8
+fusion_bspline_future_samples: 2
+fusion_bspline_reset_translation_delta: 0.2
+fusion_mocap_nominal_rate: 50.0
+fusion_virtual_imu_rate_hz: 200.0
+fusion_mocap_dt_jitter_tolerance: 0.005
+fusion_gravity_z: -9.80665
+fusion_objects_topic: /UAV1/ldop/fused_dynamic_objects
+fusion_virtual_imu_topic: /UAV1/ldop/fused_dynamic_object_virtual_imu
+fusion_marker_topic: /UAV1/ldop/fused_dynamic_object_markers
+
+# 多运动模型 Kalman 参数；按 LDOT 的类别/模型分组，tracker 根据类别选择 CA2D/CTRA/CA3D/CV3D。
+kalman_filter:
+  adaptive_window_size: 10
+  adaptive_alpha: 0.7
+  adaptive_r_alpha: 0.7
+  adaptive_min_noise_ratio: 0.2
+  enable_cov_limit: true
+  max_pos_cov: 1.5
+  max_vel_cov: 9.0
+  max_acc_cov: 25.0
+  ca_model:
+    human:
+      jerk_sigma: 1.0
+      init_cov: [0.1, 0.1, 0.01, 1.0, 1.0, 10.0, 10.0]
+      meas_noise: [0.1, 0.1, 0.1]
+      z_process_noise: 0.001
+    uav:
+      jerk_sigma: 1.0
+      init_cov: [0.1, 0.1, 0.1, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0]
+      meas_noise: [0.1, 0.1, 0.1]
+  cv_model:
+    acc_sigma: 3.0
+    init_cov: [0.5, 0.5, 0.5, 2.0, 2.0, 2.0]
+    meas_noise: [0.3, 0.3, 0.3]
+  ctra_model:
+    init_cov: [0.1, 0.1, 0.1, 1.0, 10.0, 0.5, 1.0]
+    process_noise: [0.1, 0.1, 0.01, 1.0, 10.0, 0.1, 1.0]
+    meas_noise: [0.1, 0.1, 0.1]

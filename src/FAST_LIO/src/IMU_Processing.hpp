@@ -49,6 +49,9 @@ class ImuProcess
   void set_acc_cov(const V3D &scaler);
   void set_gyr_bias_cov(const V3D &b_g);
   void set_acc_bias_cov(const V3D &b_a);
+  // 返回 FAST-LIO 初始化得到的静止加速度模长，原始单位为 g；
+  // 高频预测使用该尺度复用普通 IMU 传播中的加速度归一化。
+  double GetMeanAccNorm() const { return mean_acc.norm(); }
   Eigen::Matrix<double, 12, 12> Q;
   void Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI::Ptr pcl_un_);
 

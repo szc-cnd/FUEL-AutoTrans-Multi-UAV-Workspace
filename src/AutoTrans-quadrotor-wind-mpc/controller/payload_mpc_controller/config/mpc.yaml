@@ -4,12 +4,12 @@ use_simulation: false
 use_fix_yaw: false   # using fix yaw.
 
 # Cost on states
-# 当前先保留源码权重；首次室内悬停若响应过激，后续优先降低 Q_pos/Q_attitude 或增大 R。
-Q_pos_xy:   250.0    # Cost for horizontal positon error //default: 200     0.5
+# 室内低速首轮保守权重：降低位置/速度追赶强度，提高横滚俯仰动作代价。
+Q_pos_xy:   250.0    # 增强水平位置跟踪，同时仍低于原 250 的激进配置。
 Q_pos_z:  250.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
-Q_velocity:  25.0   # Cost for velocity error           //default: 10    0.05
+Q_velocity:  15.0   # 降低速度参考变化引起的姿态冲击。
 
 # 以下 payload/cable 权重仅为兼容旧参数读取保留；普通四旋翼 NMPC 的 10 维状态不使用这些项。
 Q_payload_xy:  20.0
@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # Cost on Inputs
 R_thrust:    0.75  # Cost on thrust input            //default: 1
-R_pitchroll:  2     # Cost on pitch and roll rate
+R_pitchroll:  2.0   # 提高横滚/俯仰角速度动作代价。
 R_yaw:        0.75      # Cost on yaw ratte
 
 # Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
@@ -29,17 +29,17 @@ state_cost_exponential: 0.5     # Scaling for state costs
 input_cost_exponential: 0.5     # scaling for input costs
 
 # Limits for inputs
-# body_rate.x/y 是发给 MAVROS/PX4 的机体系角速度命令，单位 rad/s；源码值先保留，首飞前建议按内环能力复查。
-max_bodyrate_xy:    3.0       # ~ pi [rad/s]
+# body_rate.x/y 是发给 MAVROS/PX4 的机体系角速度命令，单位 rad/s。
+max_bodyrate_xy:    1.5       # 室内低速飞行限制横滚/俯仰角速度冲击 [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
-max_bodyrate_z:     1.2         # ~ pi*2/3 [rad/s]
+max_bodyrate_z:     0.5         # 连续轨迹偏航的最大角速度 [rad/s]
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
 # 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
 min_thrust:         1.0
 max_thrust:         29.5
 # NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
-max_velocity_xy: 0.3
-max_velocity_z: 0.3
+max_velocity_xy: 0.4
+max_velocity_z: 0.5
 
 # use ending pos for better ending tracking performance)
 use_trajectory_ending_pos: true
@@ -61,10 +61,10 @@ enable_rc_hover_adjust: false
 # x/y/z 是 /mavros/local_position/odom 对应的 ENU 世界坐标，单位 m；yaw 仍取切入时当前航向。
 # 关闭后恢复为“切换瞬间当前位置悬停”。固定模式下会忽略 enable_rc_hover_adjust。
 fixed_hover:
-    enabled: true
+    enabled: false
     x: 0.0
     y: 0.0
-    z: 1.0
+    z: 0.5
 
 max_angle: 30  # Attitude angle limit in degree. A negative value means no limit.
 # 源码值 -0.1 等价于基本关闭低电压保护；实飞前应按你的电池节数和最低安全电压设置。
@@ -93,19 +93,24 @@ filter:
     cutoff_freq_dcable: 20.0
 
 force_estimator: # *
-    # kf 将 UAV2 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.768 kg 实机稳定悬停日志标定。
-    kf: 1.98e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    # kf 将 CAV1 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；
+    # 由 1.817 kg 实机稳定悬停日志反算，用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    kf: 1.84e-8
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
     sample_freq_fl: 400.0
     # 当前保留源码 0.0；若 f_Q 抖动，后续建议改为 5~10 Hz 低通。
-    cutoff_freq_fq: 5.0  # 世界系外力估计 f_Q 的低通截止频率，单位 Hz；降低 IMU/RPM 噪声，但会增加估计延迟
+    cutoff_freq_fq: 3.0  # 世界系外力估计 f_Q 的低通截止频率，单位 Hz；降低 IMU/RPM 噪声，但会增加估计延迟
     cutoff_freq_fl: 0.0
     imu_body_length: 0.66844507
-    # 只估计模式：计算并记录世界系外力 f_Q（单位 N），但不把它传入 NMPC。
+    # 运行并记录世界系三轴外力估计 f_Q；是否写入 NMPC 由补偿总开关和三轴增益共同决定。
     enable_force_estimation: true
     enable_disturbance_compensation: true
+    # 实际写入 NMPC 的世界系三轴补偿增益；当前只启用 Z 轴补偿。
+    force_axis_gain_x: 0.0
+    force_axis_gain_y: 0.0
+    force_axis_gain_z: 1.0
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
@@ -143,19 +148,11 @@ rc_mode:
 takeoff:
     # AUTO_TAKEOFF 不自动解锁，也不调用 /mavros/set_mode；仅等待 PX4 已进入 OFFBOARD。
     enabled: true
-    # ENU 世界系目标高度，单位 m；起飞过程中保持起始 x/y。
-    target_z: 1.0
-    # z 参考上升速度上限，单位 m/s。
-    climb_rate: 0.25
-    # 到达目标高度的允许误差，单位 m。
-    position_tolerance: 0.10
-    # 稳定判定允许的世界系垂直速度，单位 m/s。
-    velocity_tolerance: 0.15
-    # 高度和速度同时满足后需持续的时间，单位 s。
-    settle_time: 0.8
-    # 起飞状态最长持续时间，单位 s；超时回到 MANUAL_CTRL。
-    timeout: 8.0
-    # fixed_hover 启用时，起飞点到固定悬停点的水平距离上限，单位 m。
+    # 唯一 ENU 世界系起飞/悬停目标点的高度，单位 m；参考值按 climb_rate 平滑上升。
+    target_z: 0.55
+    # z 参考值上升速度，单位 m/s；达到 target_z 后保持目标点。
+    climb_rate: 0.15
+    # fixed_hover 启用时，起飞前到唯一目标点的水平距离上限，单位 m。
     max_initial_xy_error: 0.5
 
 land:
@@ -168,6 +165,14 @@ land:
     # AUTO_LAND 持续超过该时间后也会请求 PX4 AUTO.LAND，单位 s；小于等于 0 表示不启用超时。
     timeout: 8.0
 
+safety:
+    # NMPC 首次失败后，在锁存位置尝试恢复求解的最长时间，单位 s。
+    mpc_recovery_timeout: 0.5
+    # 一次完整成功且输出有限的求解后，请求 Diff 从最新里程计重新规划。
+    mpc_recovery_success_cycles: 1
+    # 恢复超时后请求 PX4 AUTO.LAND 的重试周期，单位 s。
+    auto_land_retry_period: 1.0
+
 thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 thrust。
     # 初次模式 1 实机验证时以 1 Hz 打印在线 thrustscale、悬停比例和 RPM 推力。
     print_value: true
@@ -176,8 +181,9 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     # 1 means use the scale factor to map thrust to commmand with online calibration(use the rotor speed to calibrate the scale factor)
     # 原工程模式 2 依赖负载/电缆动力学；普通四旋翼版本已禁止该模式，配置为 2 时节点拒绝启动。
     # approximate thrust mapping parameters
-    # UAV2 实测归一化悬停推力；模式 0 固定使用该映射，模式 1 将其作为在线学习初值。
-    hover_percentage: 0.48
+    # CAV1 1.817 kg 实机稳定悬停归一化推力；这是 MAVROS/PX4 thrust 比例，不是牛顿力。
+    # 模式 0 固定使用该映射，模式 1 将其作为在线学习初值。
+    hover_percentage: 0.54
     # RLS 新估计对 thrustscale 的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
     filter_factor: 0.2
     # 模式 1 学习门限，单位 rpm；只影响在线推力映射，不改变外力估计器的 1000 rpm 门限。

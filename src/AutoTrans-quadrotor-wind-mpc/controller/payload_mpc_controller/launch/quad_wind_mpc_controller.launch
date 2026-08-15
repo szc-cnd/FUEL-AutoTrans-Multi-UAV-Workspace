@@ -19,9 +19,18 @@
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <!-- Diff-Planner 原始轨迹；logger 单独记录，不直接送入 MPC。 -->
   <arg name="raw_trajectory_topic" default="/drone_1_planning/trajectory"/>
+  <!-- NMPC 恢复超时后通知规划器永久停止；具体实例可映射到自身 mandatory_stop。 -->
+  <arg name="planning_stop_topic" default="/planning_stop_trigger"/>
+  <arg name="planning_restart_topic" default="/planning_restart_trigger"/>
+  <arg name="planner_odom_topic" default="$(arg odom_topic)"/>
+  <arg name="planning_data_topic" default="/drone_1_planning/data_display"/>
+  <arg name="planning_status_topic" default="/drone_1_planning/status"/>
+  <arg name="des_yaw_topic" default="/des_yaw_pub"/>
 
   <!-- Logger only records data; it does not arm, switch OFFBOARD, or change setpoints. -->
   <arg name="enable_logger" default="true"/>
+  <!-- rosbag 由 logger 管理，因此与 CSV/文本日志共用同一个运行目录。 -->
+  <arg name="enable_rosbag" default="true"/>
   <arg name="log_dir" default="$(env HOME)/.ros/autotrans_mpc_logs"/>
   <!-- 实验标签只描述风向、控制模式等条件；补偿开关状态由 logger 自动追加。 -->
   <arg name="experiment_tag" default="unlabeled"/>
@@ -43,7 +52,7 @@
 
     <!-- World-frame position, velocity, and attitude estimate from PX4 EKF. -->
     <remap from="~odom" to="$(arg odom_topic)"/>
-    <!-- Only the force estimator consumes this MAVROS fused attitude. -->
+    <!-- Only the force estimator consumes this attitude source. -->
     <remap from="~force_attitude_odom" to="$(arg force_attitude_odom_topic)"/>
     <!-- Body-frame acceleration and angular velocity from MAVROS IMU. -->
     <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
@@ -57,6 +66,7 @@
     <remap from="/mavros/setpoint_raw/attitude" to="$(arg setpoint_topic)"/>
     <remap from="/mavros/set_mode" to="$(arg set_mode_service)"/>
     <remap from="/mavros/cmd/command" to="$(arg reboot_service)"/>
+    <remap from="/planning_stop_trigger" to="$(arg planning_stop_topic)"/>
 
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
@@ -76,6 +86,7 @@
     <param name="log_rate" value="$(arg log_rate)"/>
     <param name="setpoint_timeout" value="$(arg setpoint_timeout)"/>
     <param name="log_all_rosout" value="$(arg log_all_rosout)"/>
+    <param name="enable_rosbag" value="$(arg enable_rosbag)"/>
     <param name="setpoint_topic" value="$(arg setpoint_topic)"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
     <param name="goal_topic" value="$(arg goal_topic)"/>
@@ -89,11 +100,13 @@
     <param name="battery_topic" value="$(arg battery_topic)"/>
     <param name="trajectory_topic" value="$(arg trajectory_topic)"/>
     <param name="raw_trajectory_topic" value="$(arg raw_trajectory_topic)"/>
+    <!-- 控制器调参与规划恢复诊断所需话题；默认不录原始点云。 -->
     <rosparam param="rosbag_topics" subst_value="true">
       - "$(arg odom_topic)"
+      - "$(arg planner_odom_topic)"
       - "$(arg force_attitude_odom_topic)"
-      - "$(arg imu_topic)"
       - "/UAV1/mavros/local_position/odom"
+      - "$(arg imu_topic)"
       - "/UAV1/livox/imu"
       - "/UAV1/livox/imu_body"
       - "/UAV1/livox/imu_mps2"
@@ -105,6 +118,19 @@
       - "$(arg setpoint_topic)"
       - "$(arg trajectory_topic)"
       - "$(arg raw_trajectory_topic)"
+      - "$(arg goal_topic)"
+      - "$(arg reference_topic)"
+      - "$(arg force_topic)"
+      - "$(arg applied_force_topic)"
+      - "$(arg planning_data_topic)"
+      - "$(arg planning_status_topic)"
+      - "$(arg planning_restart_topic)"
+      - "$(arg planning_stop_topic)"
+      - "$(arg des_yaw_topic)"
+      - "/tf"
+      - "/tf_static"
+      - "/rosout"
+      - "/rosout_agg"
     </rosparam>
   </node>
 </launch>

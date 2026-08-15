@@ -1,0 +1,6 @@
+CompileFlags:
+  CompilationDatabase: /home/st/ldop_ws/build/ldop
+  Remove:
+    # 真实构建仍由 GCC11 使用 OpenMP；clangd 诊断路径移除该标志，避免 Eigen 尝试包含 clangd 环境缺失的 omp.h。
+    - -fopenmp
+    - -DUFO_PARALLEL=1

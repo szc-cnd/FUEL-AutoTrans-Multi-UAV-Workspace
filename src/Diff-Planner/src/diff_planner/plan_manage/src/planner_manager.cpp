@@ -1,5 +1,6 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <cmath>
 #include <thread>
 #include "visualization_msgs/Marker.h" // zx-todo
 
@@ -401,6 +402,44 @@ namespace diff_planner
 
     setLocalTrajFromOpt(stopMJO, false);
 
+    return true;
+  }
+
+  bool DiffPlannerManager::OccupiedStartRecovery(const Eigen::Vector3d &start_pos,
+                                                 const Eigen::Vector3d &target_pos,
+                                                 double max_speed)
+  {
+    const double distance = (target_pos - start_pos).norm();
+    if (!start_pos.allFinite() || !target_pos.allFinite() ||
+        !std::isfinite(max_speed) || max_speed <= 0.0 || distance < 1.0e-3)
+    {
+      ROS_ERROR("Cannot generate occupied-start recovery trajectory: invalid start, target, or speed.");
+      return false;
+    }
+
+    // A zero-endpoint-velocity quintic has a peak speed of 1.875 * distance / duration.
+    // Size the duration from that analytical bound so recovery remains deliberately slow.
+    const double duration = std::max(1.0, 1.875 * distance / max_speed);
+    const Eigen::Vector3d zero = Eigen::Vector3d::Zero();
+    Eigen::Matrix<double, 3, 3> head_state, tail_state;
+    head_state << start_pos, zero, zero;
+    tail_state << target_pos, zero, zero;
+
+    poly_traj::MinJerkOpt recovery_mjo;
+    recovery_mjo.reset(head_state, tail_state, 1);
+    Eigen::MatrixXd inner_points(3, 0);
+    Eigen::VectorXd durations(1);
+    durations(0) = duration;
+    recovery_mjo.generate(inner_points, durations);
+
+    if (!setLocalTrajFromOpt(recovery_mjo, false))
+    {
+      ROS_ERROR("Failed to store occupied-start recovery trajectory.");
+      return false;
+    }
+
+    ROS_WARN("Generated occupied-start recovery trajectory: distance=%.3f m, duration=%.3f s, peak_speed<=%.3f m/s.",
+             distance, duration, max_speed);
     return true;
   }
 

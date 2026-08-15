@@ -173,6 +173,8 @@ public:
   std::uint32_t last_trajectory_id{0};
   ros::Time last_trajectory_stamp{0};
   bool have_last_trajectory_id{false};
+  bool trajectory_acceptance_enabled{true};
+  ros::Time accept_trajectory_after{0};
 
   Trajectory_Data_t();
   void adjust_end_time()
@@ -186,6 +188,8 @@ public:
       it->traj_end_time = (it + 1)->traj_start_time;
     }
   }
+  void blockTrajectoryAcceptance();
+  void allowTrajectoryAcceptanceAfter(const ros::Time &stamp);
   void feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg);
 };
 

@@ -140,28 +140,34 @@ namespace diff_planner
   {
     poly_traj::Trajectory traj = pt_data.getTraj();
     Eigen::VectorXd durations = traj.getDurations();
-    const double RES = grid_map_->getResolution(), RES_2 = RES / 2;
+    const double RES = grid_map_->getResolution();
     double t_step = min(RES / max_vel_, durations.minCoeff() / max(cps_num_prePiece_, 1) / 1.5);
     double traj_duration = traj.getTotalDuration();
 
     // Iterate through the trajectory duration with the specified time step
     for (double t = 0.0; t < traj_duration; t += t_step)
     {
-      // Check velocity constraint
+      // Check the original Diff three-axis resultant velocity constraint.
       Eigen::Vector3d vel = traj.getVel(t);
-      if (vel.norm() > max_vel_+ vel_tolerance_)
+      const double vel_limit = max_vel_ + vel_tolerance_;
+      if (vel.norm() > vel_limit)
       {
         ROS_WARN_STREAM("Dynamic feasibility check failed: velocity limit exceeded at t="
-                        << t << ", |v|=" << vel.norm() << " > " << max_vel_ + 1.0);
+                        << t << ", |v|=" << vel.norm() << " > " << vel_limit
+                        << " (max_vel=" << max_vel_
+                        << ", tolerance=" << vel_tolerance_ << ")");
         return false; // Violation found
       }
 
       // Check acceleration constraint
       Eigen::Vector3d acc = traj.getAcc(t);
-      if (acc.norm() > max_acc_ + acc_tolerance_)
+      const double acc_limit = max_acc_ + acc_tolerance_;
+      if (acc.norm() > acc_limit)
       {
         ROS_WARN_STREAM("Dynamic feasibility check failed: acceleration limit exceeded at t="
-                        << t << ", |a|=" << acc.norm() << " > " << max_acc_ + 1.0);
+                        << t << ", |a|=" << acc.norm() << " > " << acc_limit
+                        << " (max_acc=" << max_acc_
+                        << ", tolerance=" << acc_tolerance_ << ")");
         return false; // Violation found
       }
     }
@@ -170,13 +176,19 @@ namespace diff_planner
     Eigen::Vector3d vel_end = traj.getVel(traj_duration);
     if (vel_end.norm() > max_vel_ + vel_tolerance_)
     {
-      ROS_WARN_STREAM("Dynamic feasibility check failed: velocity limit exceeded at the end of trajectory.");
+      ROS_WARN_STREAM("Dynamic feasibility check failed: velocity limit exceeded at the end of trajectory, |v|="
+                      << vel_end.norm() << " > " << max_vel_ + vel_tolerance_
+                      << " (max_vel=" << max_vel_
+                      << ", tolerance=" << vel_tolerance_ << ")");
       return false;
     }
     Eigen::Vector3d acc_end = traj.getAcc(traj_duration);
     if (acc_end.norm() > max_acc_ + acc_tolerance_)
     {
-      ROS_WARN_STREAM("Dynamic feasibility check failed: acceleration limit exceeded at the end of trajectory.");
+      ROS_WARN_STREAM("Dynamic feasibility check failed: acceleration limit exceeded at the end of trajectory, |a|="
+                      << acc_end.norm() << " > " << max_acc_ + acc_tolerance_
+                      << " (max_acc=" << max_acc_
+                      << ", tolerance=" << acc_tolerance_ << ")");
       return false;
     }
 

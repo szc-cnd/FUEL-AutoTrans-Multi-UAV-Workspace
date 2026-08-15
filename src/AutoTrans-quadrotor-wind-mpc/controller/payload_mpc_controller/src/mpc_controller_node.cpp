@@ -119,13 +119,13 @@ int main(int argc, char **argv)
     ros::Duration(0.5).sleep();
     if (!param.use_simulation_)
     {
-        ROS_INFO("[MPCCTRL] Waiting for RC");
+        ROS_INFO("[启动] 等待遥控器数据。");
         while (ros::ok())
         {
             ros::spinOnce();
             if (fsm.rc_is_received(ros::Time::now()))
             {
-                ROS_INFO("[MPCCTRL] RC received.");
+                ROS_INFO("[启动] 已收到遥控器数据。");
                 break;
             }
             ros::Duration(0.1).sleep();
@@ -136,12 +136,12 @@ int main(int argc, char **argv)
             ros::spinOnce();
             ros::Duration(1.0).sleep();
             if (trials++ > 5)
-                ROS_ERROR("Unable to connnect to PX4!!!");
+                ROS_ERROR_THROTTLE(5.0, "[启动] 无法连接 PX4，请检查 MAVROS 链路。");
         }
     }
     else
     {
-        ROS_WARN("[MPCCTRL] Remote controller disabled, be careful!");
+        ROS_WARN("[启动] 仿真模式未使用遥控器，请确认当前不是实机运行。");
     }
 
     // Create a ROS timer for force observer

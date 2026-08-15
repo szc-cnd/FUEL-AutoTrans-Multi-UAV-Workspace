@@ -12,7 +12,7 @@ gravity: 9.795
 step_N: 20
 step_T: 0.041
 # NMPC 世界系速度硬约束，单位 m/s；修改后必须重新生成 ACADO solver。
-max_velocity_xy: 0.3
+max_velocity_xy: 0.5
 max_velocity_z: 0.3
 force_estimator: # *
     # 普通四旋翼版本当前不使用原吊挂外力矩模型；保留该项仅为兼容旧参数读取。

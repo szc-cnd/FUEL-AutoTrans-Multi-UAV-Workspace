@@ -1,0 +1,17 @@
+<launch>
+  <arg name="config_file" default="$(find ldop)/config/ldop.yaml" />
+  <arg name="vehicle_ns" default="UAV1" />
+  <arg name="rviz" default="true" />
+  
+  <group ns="$(arg vehicle_ns)">
+    <node pkg="ldop" type="ldop_node" name="ldop_node" output="screen">
+      <!-- 去掉 rosconsole 日志前缀中的时间戳，只保留级别、节点名${node}和消息正文。 -->
+      <env name="ROSCONSOLE_FORMAT" value="[${severity}] [LDOP]: ${message}" />
+      <rosparam command="load" file="$(arg config_file)" />
+    </node>
+
+    <group if="$(arg rviz)">
+      <node type="rviz" name="ldop_rviz" pkg="rviz" args="-d $(find ldop)/launch/rviz/ldop_rviz.rviz"/>
+    </group>
+  </group>
+</launch>

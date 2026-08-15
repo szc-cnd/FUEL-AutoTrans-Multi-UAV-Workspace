@@ -5,13 +5,14 @@ project(cxr_ego_ctrl)
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   mavros_msgs
+  nav_msgs
   rospy
   std_msgs
 )
 
 ## Declare catkin package
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs mavros_msgs rospy std_msgs
+  CATKIN_DEPENDS geometry_msgs mavros_msgs nav_msgs rospy std_msgs
 )
 
 ## Install Python scripts
@@ -20,6 +21,8 @@ catkin_install_python(PROGRAMS
   dual_ego_start.py
   ego_start.py
   laser_mid360.py
+  # 高频 FAST-LIO 位姿直接转发到 MAVROS 外部视觉接口；原 laser_mid360.py 保留。
+  laser_mid360_high_freq.py
   # 2026-07-22: 去掉错误转义，使 catkin 展开真实包目录并生成可用的 rosrun 包装器。
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

@@ -44,6 +44,7 @@
 #include <so3_math.h>
 #include <ros/ros.h>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 #include "IMU_Processing.hpp"
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
@@ -86,7 +87,7 @@ string root_dir = ROOT_DIR;
 string map_file_path, lid_topic, imu_topic;
 // 2026-07-13: 将 FAST-LIO 输出话题和 TF 帧参数化，为 iris_0 显式命名空间及后续 iris_1 并行实例隔离全局资源。
 string cloud_registered_topic, cloud_registered_body_topic, cloud_effected_topic, laser_map_topic;
-string odometry_topic, path_topic, world_frame, body_frame;
+string odometry_topic, path_topic, high_freq_odom_topic, imu_mps2_topic, world_frame, body_frame;
 
 double res_mean_last = 0.05, total_residual = 0.0;
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
@@ -143,6 +144,67 @@ geometry_msgs::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
+
+// 高频里程计预测状态：以上一次点云校正状态为初值，使用 IMU 在两帧点云之间前向积分。
+// 位置和速度在 world_frame 中，姿态为机体系到 world_frame 的旋转；不改变原始 FAST-LIO 校正链路。
+ros::Publisher odomHigh_speed, imu_mps2_pub;
+double latest_time;
+V3D latest_P, latest_V, latest_Ba, latest_Bg, latest_acc_0, latest_gyr_0, acc_0, gyr_0;
+M3D latest_Q;
+bool init = false;
+
+void updateLatestStates()
+{
+    latest_time = lidar_end_time;
+    latest_P = state_point.pos;
+    latest_Q = state_point.rot;
+    latest_V = state_point.vel;
+    latest_Ba = state_point.ba;
+    latest_Bg = state_point.bg;
+    // 保持东北大学 REAL_DRONE_400 高频预测实现的初始化顺序和状态定义。
+}
+
+void fastPredictIMU(double t, V3D acc, V3D gyr)
+{
+    // MID360 驱动发布的线加速度单位为 g。使用 FAST-LIO 初始化得到的静止模长，
+    // 与普通 IMU 传播保持相同归一化，将其转换为 m/s^2 后再扣除零偏并积分。
+    acc = acc * G_m_s2 / p_imu->GetMeanAccNorm();
+    double dt = t - latest_time;
+    latest_time = t;
+    V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) +
+                   V3D(state_point.grav[0], state_point.grav[1], state_point.grav[2]);
+    V3D un_gyr = 0.5 * (latest_gyr_0 + gyr) - latest_Bg;
+    latest_Q = latest_Q * Exp(un_gyr, dt);
+    V3D un_acc_1 = latest_Q * (acc - latest_Ba) +
+                   V3D(state_point.grav[0], state_point.grav[1], state_point.grav[2]);
+    V3D un_acc = 0.5 * (un_acc_0 + un_acc_1);
+    latest_P = latest_P + dt * latest_V + 0.5 * dt * dt * un_acc;
+    latest_V = latest_V + dt * un_acc;
+    latest_acc_0 = acc;
+    latest_gyr_0 = gyr;
+
+    nav_msgs::Odometry odomHigh;
+    Eigen::Quaterniond quadrotor_Q = Eigen::Quaterniond(latest_Q);
+    odomHigh.header.stamp = ros::Time().fromSec(t);
+    odomHigh.header.frame_id = world_frame;
+    odomHigh.child_frame_id = body_frame;
+    odomHigh.pose.pose.position.x = latest_P.x();
+    odomHigh.pose.pose.position.y = latest_P.y();
+    odomHigh.pose.pose.position.z = latest_P.z();
+    odomHigh.pose.pose.orientation.x = quadrotor_Q.x();
+    odomHigh.pose.pose.orientation.y = quadrotor_Q.y();
+    odomHigh.pose.pose.orientation.z = quadrotor_Q.z();
+    odomHigh.pose.pose.orientation.w = quadrotor_Q.w();
+    odomHigh.twist.twist.linear.x = latest_V.x();
+    odomHigh.twist.twist.linear.y = latest_V.y();
+    odomHigh.twist.twist.linear.z = latest_V.z();
+    // angular 为机体系角速度，单位 rad/s；来源为当前 IMU 角速度减去 FAST-LIO 估计的陀螺零偏。
+    odomHigh.twist.twist.angular.x = gyr.x() - state_point.bg.x();
+    odomHigh.twist.twist.angular.y = gyr.y() - state_point.bg.y();
+    odomHigh.twist.twist.angular.z = gyr.z() - state_point.bg.z();
+
+    odomHigh_speed.publish(odomHigh);
+}
 
 void SigHandle(int sig)
 {
@@ -343,11 +405,35 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
     sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
+    // 高频预测使用与当前 FAST-LIO 缓冲一致的校正后时间戳；MID360 原始加速度单位为 g，
+    // 在 fastPredictIMU() 内转换为 m/s^2；角速度单位为 rad/s。
     msg->header.stamp = ros::Time().fromSec(msg_in->header.stamp.toSec() - time_diff_lidar_to_imu);
     if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en)
     {
-        msg->header.stamp = \
-        ros::Time().fromSec(timediff_lidar_wrt_imu + msg_in->header.stamp.toSec());
+        msg->header.stamp =
+            ros::Time().fromSec(timediff_lidar_wrt_imu + msg_in->header.stamp.toSec());
+    }
+
+    if (init)
+    {
+        // 保留 /livox/imu 的原始 g 单位供 FAST-LIO 使用，并并行发布符合 ROS 语义的 m/s^2 数据。
+        // 角速度仍为 MID360 IMU 机体系数据，单位 rad/s；orientation 仍保持驱动给出的无效值。
+        const double acceleration_scale = G_m_s2 / p_imu->GetMeanAccNorm();
+        sensor_msgs::Imu imu_mps2(*msg);
+        imu_mps2.linear_acceleration.x *= acceleration_scale;
+        imu_mps2.linear_acceleration.y *= acceleration_scale;
+        imu_mps2.linear_acceleration.z *= acceleration_scale;
+        imu_mps2.angular_velocity = msg->angular_velocity;
+        for (double &covariance : imu_mps2.linear_acceleration_covariance)
+        {
+            covariance *= acceleration_scale * acceleration_scale;
+        }
+        imu_mps2_pub.publish(imu_mps2);
+
+        fastPredictIMU(
+            msg->header.stamp.toSec(),
+            V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z),
+            V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z));
     }
 
     double timestamp = msg->header.stamp.toSec();
@@ -847,6 +933,8 @@ int main(int argc, char** argv)
     nh.param<string>("publish/laser_map_topic", laser_map_topic, "/Laser_map");
     nh.param<string>("publish/odometry_topic", odometry_topic, "/Odometry");
     nh.param<string>("publish/path_topic", path_topic, "/path");
+    nh.param<string>("publish/high_freq_odom_topic", high_freq_odom_topic, "/Odom_high_freq");
+    nh.param<string>("publish/imu_mps2_topic", imu_mps2_topic, "/livox/imu_mps2");
     nh.param<string>("publish/world_frame", world_frame, "camera_init");
     nh.param<string>("publish/body_frame", body_frame, "body");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
@@ -941,6 +1029,11 @@ int main(int argc, char** argv)
             (odometry_topic, 100000);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             (path_topic, 100000);
+    // 高频预测里程计：仅供独立验证，频率由输入 IMU 回调决定，不替换普通点云校正里程计。
+    odomHigh_speed = nh.advertise<nav_msgs::Odometry>
+            (high_freq_odom_topic, 10000);
+    // 单位转换后的 MID360 IMU，仅供需要 m/s^2 的下游节点使用；不替换 FAST-LIO 原始 IMU 输入。
+    imu_mps2_pub = nh.advertise<sensor_msgs::Imu>(imu_mps2_topic, 10000);
 //------------------------------------------------------------------------------------------------------
     signal(SIGINT, SigHandle);
     ros::Rate rate(5000);
@@ -1050,6 +1143,10 @@ int main(int argc, char** argv)
             geoQuat.w = state_point.rot.coeffs()[3];
 
             double t_update_end = omp_get_wtime();
+
+            // 每次点云 EKF 校正完成后刷新 IMU 前向预测初值；普通校正里程计仍按原逻辑发布。
+            init = true;
+            updateLatestStates();
 
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped);

@@ -77,6 +77,13 @@ namespace PayloadMPC
     void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
       {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
     bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
+    // Join the asynchronous preparation step and rebuild the complete ACADO
+    // workspace around the measured state and a fixed hover reference.
+    bool resetForHover(
+      const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
+      const Eigen::Ref<const Eigen::Vector3d> hover_position,
+      double hover_yaw);
+    void waitForPreparation();
     // Thrust to control
     std::queue<std::pair<ros::Time, double>> timed_thrust;
     double thr_scale_compensate;
@@ -101,12 +108,14 @@ namespace PayloadMPC
     const MpcParams &param) const;
 
   private:
-    double last_yaw_;
-    double last_yaw_dot_;
+    double last_yaw_{0.0};
+    double last_yaw_dot_{0.0};
+    bool yaw_reference_initialized_{false};
     // Internal helper functions.
 
     // void offCallback(const std_msgs::Empty::ConstPtr& msg);
-    void calculate_yaw(Eigen::Vector3d &vel, const double dt, double &yaw, double &yawdot);
+    void calculate_yaw(const Eigen::Vector3d &vel, const double dt,
+                       double &yaw_state, double &yawdot_state);
     double inline rotor2thrust(const double& sqrt_kf, const Eigen::Vector4d& rpm);
     double inline acc2thrust(const double& Ml, const double& Mq,const double& l_length, const double& g, const double& acc_z,
                               const Eigen::Quaterniond& quad, const Eigen::Vector3d& cable, const Eigen::Vector3d& dcable);
@@ -136,6 +145,8 @@ namespace PayloadMPC
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
+    // 仅用于记录一次“求解失败 -> 有效输出恢复”的诊断边沿，不参与 NMPC 控制计算。
+    bool mpc_failure_active_{false};
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;

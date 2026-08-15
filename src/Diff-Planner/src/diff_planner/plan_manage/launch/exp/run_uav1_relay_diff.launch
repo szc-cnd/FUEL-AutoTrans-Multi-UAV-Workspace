@@ -7,6 +7,7 @@
     <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
     <arg name="max_vel" default="0.50"/>
     <arg name="max_acc" default="1.00"/>
+    <arg name="enable_rviz" default="true"/>
 
     <!-- 2026-07-28: flight_type=1启用运行时外部目标；占位航点不会在该模式执行。 -->
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
@@ -74,5 +75,41 @@
         <param name="traj_server/time_forward" value="0.35" type="double"/>
         <param name="traj_server/yaw_dot_max" value="1.57" type="double"/>
         <param name="traj_server/yaw_dot_dot_max" value="6.28" type="double"/>
+    </node>
+
+    <!-- Diff 自带 exp.rviz 使用 world；UAV1 FAST-LIO 使用 UAV1/camera_init。 -->
+    <node pkg="tf2_ros" type="static_transform_publisher"
+          name="relay_diff_world_to_uav1_camera_init"
+          args="0 0 0 0 0 0 world UAV1/camera_init"/>
+
+    <!-- 为 exp.rviz 提供 drone_1 的机体和里程计轨迹。 -->
+    <node pkg="odom_visualization" name="drone_1_odom_visualization"
+          type="odom_visualization" output="screen">
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="~cmd" to="$(arg position_cmd_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.35"/>
+        <param name="color/b" value="1.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="frame_id" value="UAV1/camera_init"/>
+        <param name="use_cmd_yaw_for_mesh" value="true"/>
+        <param name="cmd_yaw_timeout" value="0.8"/>
+        <param name="rotate_yaw_deg" value="90.0"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="1"/>
+    </node>
+
+    <!-- 默认打开 Diff-Planner 自带 RViz；修正配置中 drone_1 的旧话题。 -->
+    <node if="$(arg enable_rviz)" name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find diff_planner)/launch/include/exp.rviz" output="screen">
+        <remap from="/move_base_simple/goal" to="$(arg goal_topic)"/>
+        <remap from="/drone__diff_planner_node/goal_point"
+               to="/drone_1_diff_planner_node/goal_point"/>
+        <remap from="/diff_planner_node/global_list"
+               to="/drone_1_diff_planner_node/global_list"/>
+        <remap from="/diff_planner_node/a_star_list"
+               to="/drone_1_diff_planner_node/a_star_list"/>
     </node>
 </launch>

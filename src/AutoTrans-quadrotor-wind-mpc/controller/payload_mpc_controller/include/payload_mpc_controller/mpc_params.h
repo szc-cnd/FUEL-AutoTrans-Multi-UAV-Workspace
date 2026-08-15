@@ -50,6 +50,10 @@ namespace PayloadMPC
 			bool enable_force_estimation;
 			// 是否把有效的 f_Q 写入 NMPC OnlineData；关闭时 NMPC 始终接收零外力。
 			bool enable_disturbance_compensation;
+			// 写入 NMPC 前的世界系三轴补偿增益，范围 [0, 1]。
+			double force_axis_gain_x{1.0};
+			double force_axis_gain_y{1.0};
+			double force_axis_gain_z{1.0};
 			// PX4 确认无人机已在空中后，允许外力进入 NMPC 前的等待时间，单位 s。
 			double compensation_airborne_delay;
 			// 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
@@ -145,22 +149,24 @@ namespace PayloadMPC
 			double timeout{8.0};
 		};
 
+		struct Safety
+		{
+			// NMPC 首次失败后允许固定点恢复求解的最长时间，单位 s。
+			double mpc_recovery_timeout{0.5};
+			// 获得该次数的完整成功求解后，才请求规划器从里程计重新规划。
+			int mpc_recovery_success_cycles{1};
+			// PX4 拒绝或未确认 AUTO.LAND 时的服务重试周期，单位 s。
+			double auto_land_retry_period{1.0};
+		};
+
 		struct Takeoff
 		{
 			// AUTO_TAKEOFF 只在 PX4 已经进入 OFFBOARD 后执行，不自动解锁或切换 OFFBOARD。
 			bool enabled{true};
-			// ENU 世界系目标高度，单位 m；起飞期间 x/y 保持起飞开始位置。
-			double target_z{1.0};
-			// z 参考值的最大上升速度，单位 m/s。
-			double climb_rate{0.25};
-			// 判定实际高度到达目标的允许误差，单位 m。
-			double position_tolerance{0.10};
-			// 判定起飞稳定的最大世界系垂直速度，单位 m/s。
-			double velocity_tolerance{0.15};
-			// 高度和速度满足条件后需持续的稳定时间，单位 s。
-			double settle_time{0.8};
-			// 起飞过程最大持续时间，单位 s。
-			double timeout{8.0};
+			// 唯一 ENU 世界系起飞/悬停目标点的高度，单位 m。
+			double target_z{0.5};
+			// z 参考值上升速度，单位 m/s；达到 target_z 后保持目标点。
+			double climb_rate{0.15};
 			// 固定悬停点启用时，起飞前允许的水平距离，单位 m。
 			double max_initial_xy_error{0.5};
 		};
@@ -182,6 +188,7 @@ namespace PayloadMPC
 		RCReverse rc_reverse_;
 		RCMode rc_mode_;
 		Land land_;
+		Safety safety_;
 		Takeoff takeoff_;
 		FixedHover fixed_hover_;
 
@@ -299,23 +306,28 @@ namespace PayloadMPC
 			read_essential_param(nh, "land/switch_odom_z", land_.switch_odom_z);
 			read_essential_param(nh, "land/timeout", land_.timeout);
 
+			read_essential_param(nh, "safety/mpc_recovery_timeout", safety_.mpc_recovery_timeout);
+			read_essential_param(nh, "safety/mpc_recovery_success_cycles", safety_.mpc_recovery_success_cycles);
+			read_essential_param(nh, "safety/auto_land_retry_period", safety_.auto_land_retry_period);
+			if (!std::isfinite(safety_.mpc_recovery_timeout) ||
+				safety_.mpc_recovery_timeout <= 0.0 ||
+				safety_.mpc_recovery_success_cycles <= 0 ||
+				!std::isfinite(safety_.auto_land_retry_period) ||
+				safety_.auto_land_retry_period <= 0.0)
+			{
+				ROS_ERROR("[参数] safety 恢复超时、连续成功次数和 AUTO.LAND 重试周期必须为正值。");
+				ROS_BREAK();
+			}
+
 			read_essential_param(nh, "takeoff/enabled", takeoff_.enabled);
 			read_essential_param(nh, "takeoff/target_z", takeoff_.target_z);
 			read_essential_param(nh, "takeoff/climb_rate", takeoff_.climb_rate);
-			read_essential_param(nh, "takeoff/position_tolerance", takeoff_.position_tolerance);
-			read_essential_param(nh, "takeoff/velocity_tolerance", takeoff_.velocity_tolerance);
-			read_essential_param(nh, "takeoff/settle_time", takeoff_.settle_time);
-			read_essential_param(nh, "takeoff/timeout", takeoff_.timeout);
 			read_essential_param(nh, "takeoff/max_initial_xy_error", takeoff_.max_initial_xy_error);
 			if (!std::isfinite(takeoff_.target_z) || takeoff_.target_z < 0.0 ||
 				!std::isfinite(takeoff_.climb_rate) || takeoff_.climb_rate <= 0.0 ||
-				!std::isfinite(takeoff_.position_tolerance) || takeoff_.position_tolerance <= 0.0 ||
-				!std::isfinite(takeoff_.velocity_tolerance) || takeoff_.velocity_tolerance <= 0.0 ||
-				!std::isfinite(takeoff_.settle_time) || takeoff_.settle_time < 0.0 ||
-				!std::isfinite(takeoff_.timeout) || takeoff_.timeout <= 0.0 ||
 				!std::isfinite(takeoff_.max_initial_xy_error) || takeoff_.max_initial_xy_error < 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] takeoff parameters are invalid.");
+				ROS_ERROR("[参数] takeoff 参数无效，请检查目标高度、爬升速度和初始水平距离限制。");
 				ROS_BREAK();
 			}
 
@@ -326,7 +338,7 @@ namespace PayloadMPC
 			if (!std::isfinite(fixed_hover_.x) || !std::isfinite(fixed_hover_.y) ||
 				!std::isfinite(fixed_hover_.z) || fixed_hover_.z < 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] fixed_hover position must be finite and z must be non-negative.");
+				ROS_ERROR("[参数] fixed_hover 位置必须为有限值，且 z 不能为负数。");
 				ROS_BREAK();
 			}
 
@@ -339,37 +351,37 @@ namespace PayloadMPC
 			read_essential_param(nh, "thrust_model/max_hover_percentage_step", thr_map_.max_hover_percentage_step);
 			if (thr_map_.accurate_thrust_model < 0 || thr_map_.accurate_thrust_model > 1)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/accurate_thrust_model must be 0 or 1; mode 2 is disabled for the ordinary quadrotor.");
+				ROS_ERROR("[参数] thrust_model/accurate_thrust_model 只能为 0 或 1；普通四旋翼禁止模式 2。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(thr_map_.hover_percentage) ||
 				thr_map_.hover_percentage < 0.1 || thr_map_.hover_percentage > 0.8)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/hover_percentage must be finite and within [0.1, 0.8].");
+				ROS_ERROR("[参数] thrust_model/hover_percentage 必须为 [0.1, 0.8] 内的有限归一化推力。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(thr_map_.filter_factor) ||
 				thr_map_.filter_factor <= 0.0 || thr_map_.filter_factor > 1.0)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/filter_factor must be finite and within (0, 1].");
+				ROS_ERROR("[参数] thrust_model/filter_factor 必须为 (0, 1] 内的有限值。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(thr_map_.min_learning_rpm) || thr_map_.min_learning_rpm <= 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/min_learning_rpm must be finite and positive.");
+				ROS_ERROR("[参数] thrust_model/min_learning_rpm 必须为有限正数，单位 rpm。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(thr_map_.max_normalized_thrust) ||
 				thr_map_.max_normalized_thrust <= 0.0 || thr_map_.max_normalized_thrust > 1.0)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/max_normalized_thrust must be finite and within (0, 1].");
+				ROS_ERROR("[参数] thrust_model/max_normalized_thrust 必须为 (0, 1] 内的有限归一化推力。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(thr_map_.max_hover_percentage_step) ||
 				thr_map_.max_hover_percentage_step <= 0.0 ||
 				thr_map_.max_hover_percentage_step >= 0.1)
 			{
-				ROS_ERROR("[MPCCTRL] thrust_model/max_hover_percentage_step must be finite and within (0, 0.1).");
+				ROS_ERROR("[参数] thrust_model/max_hover_percentage_step 必须为 (0, 0.1) 内的有限值。");
 				ROS_BREAK();
 			}
 
@@ -391,7 +403,7 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/kf", force_estimator_param_.kf);
 			if (!std::isfinite(force_estimator_param_.kf) || force_estimator_param_.kf <= 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] force_estimator/kf must be finite and positive.");
+				ROS_ERROR("[参数] force_estimator/kf 必须为有限正数，单位 N/rpm^2。");
 				ROS_BREAK();
 			}
 			force_estimator_param_.sqrt_kf = sqrt(force_estimator_param_.kf);
@@ -402,12 +414,25 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/imu_body_length", force_estimator_param_.imu_body_length);
 			read_essential_param(nh, "force_estimator/enable_force_estimation", force_estimator_param_.enable_force_estimation);
 			read_essential_param(nh, "force_estimator/enable_disturbance_compensation", force_estimator_param_.enable_disturbance_compensation);
+			read_essential_param(nh, "force_estimator/force_axis_gain_x", force_estimator_param_.force_axis_gain_x);
+			read_essential_param(nh, "force_estimator/force_axis_gain_y", force_estimator_param_.force_axis_gain_y);
+			read_essential_param(nh, "force_estimator/force_axis_gain_z", force_estimator_param_.force_axis_gain_z);
+			if (!std::isfinite(force_estimator_param_.force_axis_gain_x) ||
+				!std::isfinite(force_estimator_param_.force_axis_gain_y) ||
+				!std::isfinite(force_estimator_param_.force_axis_gain_z) ||
+				force_estimator_param_.force_axis_gain_x < 0.0 || force_estimator_param_.force_axis_gain_x > 1.0 ||
+				force_estimator_param_.force_axis_gain_y < 0.0 || force_estimator_param_.force_axis_gain_y > 1.0 ||
+				force_estimator_param_.force_axis_gain_z < 0.0 || force_estimator_param_.force_axis_gain_z > 1.0)
+			{
+				ROS_ERROR("[参数] force_axis_gain_x/y/z 必须为 [0, 1] 范围内的有限数值。");
+				ROS_BREAK();
+			}
 			read_essential_param(nh, "force_estimator/compensation_airborne_delay", force_estimator_param_.compensation_airborne_delay);
 			read_essential_param(nh, "force_estimator/min_valid_rpm", force_estimator_param_.min_valid_rpm);
 			if (force_estimator_param_.enable_disturbance_compensation &&
 				!force_estimator_param_.enable_force_estimation)
 			{
-				ROS_ERROR("[MPCCTRL] Disturbance compensation requires force estimation; compensation disabled.");
+				ROS_ERROR("[参数] 外力补偿依赖外力估计，已自动关闭补偿。");
 				force_estimator_param_.enable_disturbance_compensation = false;
 			}
 			read_essential_param(nh, "force_estimator/USE_CONSTANT_MOMENT", force_estimator_param_.USE_CONSTANT_MOMENT);
@@ -419,7 +444,7 @@ namespace PayloadMPC
 				force_estimator_param_.max_applied_force <= 0.0 ||
 				force_estimator_param_.max_applied_force > force_estimator_param_.max_force)
 			{
-				ROS_ERROR("[MPCCTRL] force_estimator limits must satisfy 0 < max_applied_force <= max_force.");
+				ROS_ERROR("[参数] 外力限制必须满足 0 < max_applied_force <= max_force，单位 N。");
 				ROS_BREAK();
 			}
 			read_essential_param(nh, "force_estimator/max_queue", force_estimator_param_.max_queue);
@@ -435,7 +460,7 @@ namespace PayloadMPC
 			read_essential_param(nh, "enable_rc_hover_adjust", enable_rc_hover_adjust_);
 			if (fixed_hover_.enabled && enable_rc_hover_adjust_)
 			{
-				ROS_WARN("[MPCCTRL] fixed_hover is enabled; RC hover-reference adjustment will be ignored.");
+				ROS_WARN("[参数] fixed_hover 已启用，遥控器悬停参考调整将被忽略。");
 			}
 			read_essential_param(nh, "max_angle", max_angle_);
 			read_essential_param(nh, "low_voltage", low_voltage_);
@@ -460,7 +485,7 @@ namespace PayloadMPC
 				msg_timeout_.bat <= 0.0 || msg_timeout_.rpm <= 0.0 ||
 				msg_timeout_.state <= 0.0 || msg_timeout_.extended_state <= 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] all msg_timeout values must be finite and positive.");
+				ROS_ERROR("[参数] 所有 msg_timeout 必须为有限正数，单位 s。");
 				ROS_BREAK();
 			}
 
@@ -468,15 +493,15 @@ namespace PayloadMPC
 
 			if (thr_map_.print_val)
 			{
-				ROS_WARN("You should disable \"print_value\" if you are in regular usage.");
+				ROS_WARN("[参数] 常规使用建议关闭 print_value，避免高频诊断日志。");
 			}
 			if (rc_reverse_.roll || rc_reverse_.pitch || rc_reverse_.yaw || rc_reverse_.throttle)
 			{
-				ROS_WARN("RC reverse is enabled. Becareful when you use it.");
+				ROS_WARN("[参数] 已启用 RC reverse，请确认遥控器方向。");
 			}
 			if (use_simulation_)
 			{
-				ROS_WARN("You are using simulation. DON'T set this in the real drone.");
+				ROS_WARN("[参数] 当前启用了仿真模式，实机运行时必须关闭。");
 			}
 
 			std::cout << "param ended!" << std::endl;

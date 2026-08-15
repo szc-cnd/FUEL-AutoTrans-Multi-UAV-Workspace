@@ -47,7 +47,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (msg.channels.size() < 4)
     {
-        ROS_WARN_THROTTLE(1.0, "[MPCCtrl] /mavros/rc/in has less than 4 channels.");
+        ROS_WARN_THROTTLE(5.0, "[RC] 遥控器数据无效：通道数少于 4。");
         is_manual_mode = true;
         is_command_mode = false;
         is_hover_mode = false;
@@ -69,7 +69,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
 
     if (mode_channel < 0 || msg.channels.size() <= static_cast<size_t>(mode_channel))
     {
-        ROS_WARN_THROTTLE(1.0, "[MPCCtrl] /mavros/rc/in has no CH%d for mode selection.", mode_channel + 1);
+        ROS_WARN_THROTTLE(5.0, "[RC] 遥控器数据中缺少模式通道 CH%d。", mode_channel + 1);
         // 模式通道缺失时按手动请求处理，避免通道异常时沿用上一帧 AUTO_HOVER/CMD_CTRL 状态。
         is_manual_mode = true;
         mode_valid = false;
@@ -132,7 +132,7 @@ void RC_Data_t::feed(mavros_msgs::RCInConstPtr pMsg)
     }
     else
     {
-        ROS_WARN_THROTTLE(1.0, "[MPCCtrl] /mavros/rc/in has no CH%d for landing trigger.", land_channel + 1);
+        ROS_WARN_THROTTLE(5.0, "[RC] 遥控器数据中缺少降落触发通道 CH%d。", land_channel + 1);
     }
 
     // CH8 已改为主模式通道，不再兼任飞控重启触发，避免模式切换和重启命令冲突。
@@ -150,7 +150,7 @@ void RC_Data_t::check_validity()
     }
     else
     {
-        ROS_ERROR("RC data validity check fail. mode PWM=%f", mode);
+        ROS_WARN_THROTTLE(5.0, "[RC] CH8 信号无效：PWM=%.1f us；保持当前安全状态。", mode);
     }
 }
 
@@ -183,7 +183,7 @@ void Odom_Data_t::feed(nav_msgs::OdometryConstPtr pMsg)
 
     static int count = 0;
     if (count++ % 500 == 0)
-        ROS_WARN("VEL_IN_BODY!!!");
+        ROS_WARN_ONCE("[ODOM] 速度字段使用机体系语义，请确认上游坐标系约定。");
 #endif
 }
 
@@ -262,6 +262,27 @@ Trajectory_Data_t::Trajectory_Data_t()
     exec_traj = 0;
 }
 
+void Trajectory_Data_t::blockTrajectoryAcceptance()
+{
+    trajectory_acceptance_enabled = false;
+    total_traj_start_time = ros::Time(0);
+    total_traj_end_time = ros::Time(0);
+    traj_queue.clear();
+    exec_traj = 0;
+    last_end_position_valid = false;
+}
+
+void Trajectory_Data_t::allowTrajectoryAcceptanceAfter(const ros::Time &stamp)
+{
+    total_traj_start_time = ros::Time(0);
+    total_traj_end_time = ros::Time(0);
+    traj_queue.clear();
+    exec_traj = 0;
+    last_end_position_valid = false;
+    accept_trajectory_after = stamp;
+    trajectory_acceptance_enabled = true;
+}
+
 void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
 {
 
@@ -270,14 +291,22 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
     if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
     {
         const ros::Time now = ros::Time::now();
-        if ((int)traj.trajectory_id < 1)
+        if (!trajectory_acceptance_enabled)
         {
-            ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：trajectory_id 无效。");
+            ROS_WARN_THROTTLE(1.0, "[轨迹] NMPC 正在安全恢复或降落，丢弃新轨迹 id=%u。",
+                              traj.trajectory_id);
             return;
         }
         if (pMsg->header.stamp.isZero())
         {
             ROS_ERROR_THROTTLE(1.0, "[轨迹] 拒绝轨迹：header.stamp 为空。");
+            return;
+        }
+        if (!accept_trajectory_after.isZero() && pMsg->header.stamp <= accept_trajectory_after)
+        {
+            ROS_WARN_THROTTLE(1.0,
+                              "[轨迹] 丢弃安全恢复完成前生成的轨迹：id=%u。",
+                              traj.trajectory_id);
             return;
         }
         const double age = (now - pMsg->header.stamp).toSec();
@@ -287,12 +316,19 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
                               traj.trajectory_id, age);
             return;
         }
-        if (have_last_trajectory_id &&
-            (traj.trajectory_id <= last_trajectory_id ||
-             pMsg->header.stamp <= last_trajectory_stamp))
+        if (have_last_trajectory_id && pMsg->header.stamp <= last_trajectory_stamp)
         {
-            ROS_WARN_THROTTLE(1.0, "[轨迹] 拒绝重复或倒退轨迹：id=%u。", traj.trajectory_id);
+            ROS_WARN_THROTTLE(1.0,
+                              "[轨迹] 拒绝时间戳重复或倒退的轨迹：id=%u。",
+                              traj.trajectory_id);
             return;
+        }
+        if (have_last_trajectory_id && traj.trajectory_id <= last_trajectory_id)
+        {
+            ROS_WARN_THROTTLE(1.0,
+                              "[轨迹] 检测到 trajectory_id 重新计数：last=%u, new=%u；"
+                              "header.stamp 更新，允许执行。",
+                              last_trajectory_id, traj.trajectory_id);
         }
         if (traj.trajectory.empty())
         {
@@ -369,7 +405,7 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
     }
     else if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ABORT)
     {
-        ROS_WARN("[MPCCtrl] Aborting the trajectory.");
+        ROS_WARN("[轨迹] 收到中止指令，清空当前轨迹并保持悬停。");
         total_traj_start_time = ros::Time(0);
         total_traj_end_time = ros::Time(0);
         traj_queue.clear();
@@ -433,7 +469,14 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         vlotage += pMsg->cell_voltage[i];
     }
-    volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
+    // 首个有效样本直接初始化，避免从 0 V 低通收敛产生伪启动电压；后续再按 0.8/0.2 平滑。
+    if (std::isfinite(vlotage) && vlotage > 0.0)
+    {
+        if (!std::isfinite(volt) || volt <= 0.0)
+            volt = vlotage;
+        else
+            volt = 0.8 * volt + 0.2 * vlotage;
+    }
 
     // volt = 0.8 * volt + 0.2 * pMsg->voltage; // Naive LPF
     percentage = pMsg->percentage;
@@ -443,7 +486,7 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         if ((rcv_stamp - last_print_t).toSec() > 10)
         {
-            ROS_INFO("[MPCCtrl] Voltage=%.3f, percentage=%.3f", volt, percentage);
+            ROS_INFO("[电池] 总电压=%.3f V，剩余电量=%.1f%%。", volt, percentage * 100.0);
             last_print_t = rcv_stamp;
         }
     }
@@ -455,7 +498,8 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         if ((rcv_stamp - last_print_t).toSec() > 1)
         {
-            ROS_ERROR("[MPCCtrl] Dangerous! voltage=%.3f, percentage=%.3f", volt, percentage);
+            ROS_ERROR("[电池] 剩余电量过低：总电压=%.3f V，剩余电量=%.1f%%。",
+                      volt, percentage * 100.0);
             last_print_t = rcv_stamp;
         }
     }
@@ -470,7 +514,7 @@ void Rpm_Data_t::feed(mavros_msgs::ESCStatusConstPtr pMsg)
 {
     if (pMsg->esc_status.size() < 4)
     {
-        ROS_WARN_THROTTLE(1.0, "[MPCCtrl] /mavros/esc_status has less than 4 ESC rpm values.");
+        ROS_WARN_THROTTLE(5.0, "[RPM] ESC 数据无效：收到的电机转速少于 4 路。");
         return;
     }
 

@@ -1,0 +1,8 @@
+std_msgs/Header header
+uint32 mocap_source_index
+geometry_msgs/Pose fused_pose
+geometry_msgs/Vector3 bbox_size
+uint32 point_count
+geometry_msgs/Vector3 offset_body
+float64 lidar_anchor_age
+bool lidar_updated_in_current_frame

@@ -6,6 +6,8 @@ import json
 import math
 import os
 import re
+import signal
+import subprocess
 import threading
 import time
 
@@ -77,6 +79,22 @@ def validate_explicit_run_name(run_name):
             "run_name must not contain '/', '\\', ':', or '..': %s" % run_name)
 
 
+def normalize_rosbag_topics(topics):
+    """清理并去重 rosbag 话题，同时保持 launch 中配置的顺序。"""
+    if not isinstance(topics, (list, tuple)):
+        return []
+
+    normalized = []
+    seen = set()
+    for topic in topics:
+        topic = str(topic).strip()
+        if not topic or topic in seen:
+            continue
+        normalized.append(topic)
+        seen.add(topic)
+    return normalized
+
+
 class AutoTransMpcLogger:
     def __init__(self):
         default_root = os.path.expanduser("~/.ros/autotrans_mpc_logs")
@@ -142,6 +160,11 @@ class AutoTransMpcLogger:
         self.trajectory_subscriber = None
         self.raw_trajectory_subscriber = None
         self.raw_trajectory_retry_timer = None
+        self.rosbag_process = None
+        self.rosbag_console_file = None
+        self.enable_rosbag = bool(rospy.get_param("~enable_rosbag", True))
+        self.rosbag_topics = normalize_rosbag_topics(
+            rospy.get_param("~rosbag_topics", []))
 
         if not os.path.exists(self.run_dir):
             os.makedirs(self.run_dir)
@@ -247,8 +270,78 @@ class AutoTransMpcLogger:
         rospy.Subscriber("/rosout", Log, self.rosout_cb, queue_size=200)
         self.log_timer = rospy.Timer(rospy.Duration(1.0 / self.log_rate), self.log_timer_cb)
 
+        self.start_rosbag_recording()
+
         rospy.loginfo("[autotrans_mpc_logger] CSV: %s", self.csv_path)
         rospy.loginfo("[autotrans_mpc_logger] LOG: %s", self.text_log_path)
+
+    def start_rosbag_recording(self):
+        """在本次 CSV 日志目录中启动一个同名 rosbag。"""
+        if not self.enable_rosbag:
+            self.write_text("rosbag_enabled: false")
+            rospy.loginfo("[autotrans_mpc_logger] Automatic rosbag recording disabled")
+            return
+        if not self.rosbag_topics:
+            self.write_text("rosbag_enabled: true")
+            self.write_text("rosbag_status: not_started_no_topics")
+            rospy.logwarn("[autotrans_mpc_logger] rosbag enabled but topic list is empty")
+            return
+
+        bag_path = os.path.join(self.run_dir, "%s.bag" % self.run_name)
+        console_path = os.path.join(
+            self.run_dir, "%s_rosbag.log" % self.run_name)
+        command = ["rosbag", "record", "--lz4", "-O", bag_path]
+        command.extend(self.rosbag_topics)
+
+        try:
+            self.rosbag_console_file = open(console_path, "a")
+            self.rosbag_process = subprocess.Popen(
+                command,
+                stdout=self.rosbag_console_file,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid,
+            )
+        except (OSError, ValueError) as exc:
+            if self.rosbag_console_file is not None:
+                self.rosbag_console_file.close()
+                self.rosbag_console_file = None
+            self.rosbag_process = None
+            self.write_text("rosbag_enabled: true")
+            self.write_text("rosbag_status: start_failed: %s" % exc)
+            rospy.logerr("[autotrans_mpc_logger] Failed to start rosbag: %s", exc)
+            return
+
+        self.write_text("rosbag_enabled: true")
+        self.write_text("rosbag_file: %s" % bag_path)
+        self.write_text("rosbag_console_file: %s" % console_path)
+        self.write_text("rosbag_topics: %s" % ", ".join(self.rosbag_topics))
+        rospy.loginfo("[autotrans_mpc_logger] BAG: %s", bag_path)
+
+    def stop_rosbag_recording(self):
+        """让 rosbag 正常写索引并退出，尽量不留下 .bag.active。"""
+        process = self.rosbag_process
+        self.rosbag_process = None
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                rospy.logwarn("[autotrans_mpc_logger] rosbag did not stop; sending SIGTERM")
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    process.wait(timeout=2.0)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except OSError:
+                        pass
+            except OSError as exc:
+                rospy.logwarn("[autotrans_mpc_logger] Cannot stop rosbag cleanly: %s", exc)
+
+        if self.rosbag_console_file is not None:
+            self.rosbag_console_file.flush()
+            self.rosbag_console_file.close()
+            self.rosbag_console_file = None
 
     def odom_cb(self, msg):
         self.latest_odom = msg
@@ -588,6 +681,8 @@ class AutoTransMpcLogger:
     def close(self):
         if self.closed:
             return
+        # rosbag 必须在 logger 退出前收到 SIGINT，以便完成索引并移除 .active 后缀。
+        self.stop_rosbag_recording()
         if self.raw_trajectory_retry_timer is not None:
             self.raw_trajectory_retry_timer.shutdown()
             self.raw_trajectory_retry_timer = None

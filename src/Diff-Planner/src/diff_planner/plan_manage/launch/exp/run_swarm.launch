@@ -1,9 +1,32 @@
 <launch>
+    <!-- 与 run_uav1_relay_diff.launch 对齐：使用 UAV1 的 FAST-LIO 输入和规划输出话题。 -->
     <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
-    <arg name="drone_id"  value="$(env DRONE_ID)"/>
+    <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
+    <arg name="goal_topic" default="/UAV1/planning/goal"/>
+    <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
+    <arg name="drone_id" default="1"/>
+    <arg name="enable_rviz" default="true"/>
+    <arg name="enable_ldop" default="true"/>
+    <arg name="flight_type" default="2"/>
+    <arg name="point_num" default="4"/>
+    <arg name="max_tracking_error" default="0.20"/>
+    <arg name="enable_occupied_recovery" default="true"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
+        <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
+        <!-- UAV1窄通道实飞：占据起点先尝试历史自由点，否则低速侧移到实时地图中的宽阔区域。 -->
+        <arg name="enable_occupied_recovery" value="$(arg enable_occupied_recovery)"/>
+        <arg name="escape_max_distance" value="0.40"/>
+        <arg name="escape_history_time" value="1.50"/>
+        <arg name="escape_speed" value="0.10"/>
+        <arg name="escape_reach_tolerance" value="0.06"/>
+        <arg name="escape_stop_speed" value="0.08"/>
+        <arg name="escape_min_clearance" value="0.20"/>
+        <arg name="escape_clearance_search_radius" value="0.60"/>
+        <arg name="escape_max_occupied_prefix" value="0.20"/>
+        <arg name="escape_free_cycles" value="5"/>
+        <arg name="escape_max_attempts" value="2"/>
         <!-- camera pose: transform of camera frame in the world frame -->
         <!-- depth topic: depth image, 640x480 by default -->
         <!-- don't set cloud_topic if you already set these ones! -->
@@ -11,64 +34,116 @@
         <arg name="depth_topic" value="no_use1"/>
         <!-- topic of point cloud measurement, such as from LIDAR  -->
         <!-- don't set camera pose and depth, if you already set this one! -->
-        <arg name="cloud_topic" value="/cloud_registered"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
         <!-- intrinsic params of the depth camera -->
         <arg name="cx" value="319.31427001953125"/>
         <arg name="cy" value="239.09725952148438"/>
         <arg name="fx" value="386.2706298828125"/>
         <arg name="fy" value="386.2706298828125"/>
-        <!-- maximum velocity, acceleration and jerk the drone will reach -->
-        <arg name="max_vel" value="0.5" />
-        <arg name="max_acc" value="3.0" />
+        <!-- 窄通道实飞采用保守的速度/加速度上限，降低冲门和急停时的跟踪误差。 -->
+        <arg name="max_vel" value="0.20" />
+        <arg name="max_acc" value="1.0" />
         <arg name="max_jer" value="20.0"/>
+        <!-- 恢复 Diff 原始三轴合速度检查容差。 -->
+        <arg name="vel_tolerance" value="1.0"/>
         <!--always set to 1.5 times grater than sensing horizen-->
         <arg name="planning_horizon" value="7.5" />
         <!-- map parameters  -->
-        <arg name="local_map_size_x" value="5.5"/>
-        <arg name="local_map_size_y" value="5.5"/>
-        <arg name="local_map_size_z" value="2.0"/>
+        <!-- GridMap 中 local_update_range 是半尺寸：以下对应总窗口 15m × 9m × 2m。 -->
+        <arg name="local_map_size_x" value="7.5"/>
+        <arg name="local_map_size_y" value="4.5"/>
+        <arg name="local_map_size_z" value="1.0"/>
         <arg name="enable_virtual_wall" value="true"/>
-        <arg name="virtual_ceil" value="2.0"/>
-        <arg name="virtual_ground" value="0.1"/>
-        <arg name="map_resolution" value="0.15"/>
-        <arg name="inflation_size" value="0.3"/>
+        <arg name="virtual_ceil" value="1.5"/>
+        <arg name="virtual_ground" value="-0.2"/>
+        <!-- 1.5m窄通道使用10cm体素；障碍膨胀两格，给机体和停车漂移留出余量。 -->
+        <arg name="map_resolution" value="0.10"/>
+        <arg name="inflation_size" value="0.099"/>
 
-        <arg name="init_x"     value="$(env INIT_X)"/>
-		<arg name="init_y"     value="$(env INIT_Y)"/>
-		<arg name="init_z"     value="$(env INIT_Z)"/>
+        <!-- UAV1 FAST-LIO 的里程计和点云共用局部坐标系，不能重复叠加出生点偏移。 -->
+        <arg name="init_x" value="0.0"/>
+		<arg name="init_y" value="0.0"/>
+		<arg name="init_z" value="0.0"/>
+        <arg name="cloud_use_init_offset" value="false"/>
         
         <!-- 1: use 2D Nav Goal to select goal  -->
         <!-- 2: use global waypoints below  -->
-        <arg name="flight_type" value="$(env FLIGHT_TYPE)" />
+        <arg name="flight_type" value="$(arg flight_type)" />
+        <arg name="manual_goal_topic" value="$(arg goal_topic)"/>
+        <!-- 本启动文件中的 UAV1 独立执行预设航点，不等待 UAV0 的 Diff 轨迹。 -->
+        <arg name="require_pre_agent_trajectory" value="false"/>
         <!-- global waypoints -->
         <!-- It generates a piecewise min-snap traj passing all waypoints -->
-        <arg name="point_num" value="$(env POINT_NUM)" />
-        <arg name="point0_x" value="$(env POINT0_X)" />
-        <arg name="point0_y" value="$(env POINT0_Y)" />
-        <arg name="point0_z" value="$(env POINT0_Z)" />
-        <arg name="point1_x" value="$(env POINT1_X)" />
-        <arg name="point1_y" value="$(env POINT1_Y)" />
-        <arg name="point1_z" value="$(env POINT1_Z)" />
-        <arg name="point2_x" value="$(env POINT2_X)" />
-        <arg name="point2_y" value="$(env POINT2_Y)" />
-        <arg name="point2_z" value="$(env POINT2_Z)" />
-        <arg name="point3_x" value="$(env POINT3_X)" />
-        <arg name="point3_y" value="$(env POINT3_Y)" />
-        <arg name="point3_z" value="$(env POINT3_Z)" />
-        <arg name="point4_x" value="$(env POINT4_X)" />
-        <arg name="point4_y" value="$(env POINT4_Y)" />
-        <arg name="point4_z" value="$(env POINT4_Z)" />
+        <!-- 本任务使用 point0～point3；不再受 run_swarm.sh 中旧的 POINT_NUM=1 影响。 -->
+        <arg name="point_num" value="$(arg point_num)" />
+        <arg name="point0_x" value="3.1" />
+        <arg name="point0_y" value="0.0" />
+        <arg name="point0_z" value="0.6" />
+        <arg name="point1_x" value="5.15" />
+        <arg name="point1_y" value="0" />
+        <arg name="point1_z" value="0.6" />
+        <arg name="point2_x" value="5.1" />
+        <arg name="point2_y" value="3.05" />
+        <arg name="point2_z" value="0.6" />
+        <arg name="point3_x" value="5.1" />
+        <arg name="point3_y" value="5.3" />
+        <arg name="point3_z" value="0.6" />
+        <!-- advanced_param_exp.xml 固定声明到 point4；point_num=4 时该占位点不会执行。 -->
+        <arg name="point4_x" value="5.0" />
+        <arg name="point4_y" value="4.5" />
+        <arg name="point4_z" value="0.7" />
+    </include>
+
+    <!-- LDOP 与 Diff-Planner 共用 UAV1 FAST-LIO 输入；这里只启动检测节点，不启动 LDOP 自带 RViz。 -->
+    <include if="$(arg enable_ldop)" file="$(find ldop)/launch/run_ldop.launch">
+        <arg name="vehicle_ns" value="UAV1"/>
+        <arg name="rviz" value="false"/>
     </include>
 
     <node pkg="diff_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
-        <remap from="position_cmd" to="/setpoints_cmd"/>
+        <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
         <remap from="~planning/trajectory" to="/drone_$(arg drone_id)_planning/trajectory"/>
-        <remap from="~planning/yaw" to="/drone_$(arg drone_id)_planning/yaw"/>
+        <remap from="/planning/yaw" to="/UAV1/planning/yaw"/>
         <remap from="~heartbeat" to="/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <remap from="/planning/traj_started" to="/UAV1/planning/traj_started"/>
         <param name="traj_server/time_forward" value="1.0" type="double"/>
+        <param name="traj_server/heartbeat_timeout" value="2.0" type="double"/>
         <param name="traj_server/yaw_dot_max" value="3.14" type="double"/>
         <param name="traj_server/yaw_dot_dot_max" value="15.71" type="double"/>
     </node>
 
-</launch>
+    <!-- Diff 自带 exp.rviz 固定坐标系为 world；UAV1 FAST-LIO 输出位于 UAV1/camera_init。 -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="run_swarm_world_to_uav1_camera_init"
+          args="0 0 0 0 0 0 world UAV1/camera_init"/>
 
+    <!-- 为 exp.rviz 提供 drone_1 的机体和里程计轨迹。 -->
+    <node pkg="odom_visualization" name="drone_1_odom_visualization" type="odom_visualization" output="screen">
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <remap from="~cmd" to="$(arg position_cmd_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.35"/>
+        <param name="color/b" value="1.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="frame_id" value="UAV1/camera_init"/>
+        <param name="use_cmd_yaw_for_mesh" value="true"/>
+        <param name="cmd_yaw_timeout" value="0.8"/>
+        <param name="rotate_yaw_deg" value="90.0"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="1"/>
+    </node>
+
+    <!-- 默认打开 Diff-Planner 自带 RViz，并修正配置中 drone_1 的旧话题。 -->
+    <node if="$(arg enable_rviz)" name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find diff_planner)/launch/include/exp.rviz" output="screen">
+        <remap from="/move_base_simple/goal" to="/goal"/>
+        <remap from="/drone__diff_planner_node/goal_point"
+               to="/drone_$(arg drone_id)_diff_planner_node/goal_point"/>
+        <remap from="/diff_planner_node/global_list"
+               to="/drone_$(arg drone_id)_diff_planner_node/global_list"/>
+        <remap from="/diff_planner_node/a_star_list"
+               to="/drone_$(arg drone_id)_diff_planner_node/a_star_list"/>
+    </node>
+
+</launch>

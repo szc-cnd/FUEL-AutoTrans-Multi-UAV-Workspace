@@ -13,7 +13,23 @@
     <arg name="max_vel"/>
     <arg name="max_acc"/>
     <arg name="max_jer"/>
+    <!-- 轨迹发布前动态可行性检查允许超过 max_vel 的余量。 -->
+    <arg name="vel_tolerance" default="1.0"/>
     <arg name="planning_horizon"/>
+    <!-- 旧局部轨迹预测与实际里程计的三维偏差超过该值时，从里程计强制重规划。 -->
+    <arg name="max_tracking_error" default="0.30"/>
+    <!-- 起点进入膨胀障碍时，先退回近期自由位置；不可用时在实时地图中搜索宽阔的侧向安全点。 -->
+    <arg name="enable_occupied_recovery" default="false"/>
+    <arg name="escape_max_distance" default="0.40"/>
+    <arg name="escape_history_time" default="1.50"/>
+    <arg name="escape_speed" default="0.10"/>
+    <arg name="escape_reach_tolerance" default="0.06"/>
+    <arg name="escape_stop_speed" default="0.08"/>
+    <arg name="escape_min_clearance" default="0.20"/>
+    <arg name="escape_clearance_search_radius" default="0.60"/>
+    <arg name="escape_max_occupied_prefix" default="0.20"/>
+    <arg name="escape_free_cycles" default="5"/>
+    <arg name="escape_max_attempts" default="2"/>
     <!-- 2026-07-07: 暴露预设航点切换距离阈值，便于窄门洞场景避免还没穿过去就切下一个 waypoint。 -->
     <arg name="waypoint_switch_dist" default="-1.0"/>
     <arg name="enable_virtual_wall"/>
@@ -26,7 +42,7 @@
     <!-- 2026-07-28: 暴露占据衰减时间；默认保持原Diff激光地图不衰减，动态场景可按实例启用。 -->
     <arg name="fading_time" default="-1.0"/>
     <!-- 2026-07-07: 暴露轨迹优化的硬障碍间隙，便于按场景提升贴墙余量。 -->
-    <arg name="obstacle_clearance" default="0.1"/>
+    <arg name="obstacle_clearance" default="0.2"/>
     <arg name="point_num"/>
     <arg name="point0_x"/>
     <arg name="point0_y"/>
@@ -87,6 +103,18 @@
         <param name="fsm/enable_random_global_init" value="$(arg enable_random_global_init)" type="bool"/>
         <param name="fsm/thresh_replan_time" value="1.0" type="double"/>
         <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
+        <param name="fsm/max_tracking_error" value="$(arg max_tracking_error)" type="double"/>
+        <param name="fsm/enable_occupied_recovery" value="$(arg enable_occupied_recovery)" type="bool"/>
+        <param name="fsm/escape_max_distance" value="$(arg escape_max_distance)" type="double"/>
+        <param name="fsm/escape_history_time" value="$(arg escape_history_time)" type="double"/>
+        <param name="fsm/escape_speed" value="$(arg escape_speed)" type="double"/>
+        <param name="fsm/escape_reach_tolerance" value="$(arg escape_reach_tolerance)" type="double"/>
+        <param name="fsm/escape_stop_speed" value="$(arg escape_stop_speed)" type="double"/>
+        <param name="fsm/escape_min_clearance" value="$(arg escape_min_clearance)" type="double"/>
+        <param name="fsm/escape_clearance_search_radius" value="$(arg escape_clearance_search_radius)" type="double"/>
+        <param name="fsm/escape_max_occupied_prefix" value="$(arg escape_max_occupied_prefix)" type="double"/>
+        <param name="fsm/escape_free_cycles" value="$(arg escape_free_cycles)" type="int"/>
+        <param name="fsm/escape_max_attempts" value="$(arg escape_max_attempts)" type="int"/>
         <!-- 2026-07-07: 允许实验 launch 单独收紧 waypoint 切换距离，避免在 doorway 内提早拐向下一段。 -->
         <param name="fsm/waypoint_switch_dist" value="$(arg waypoint_switch_dist)" type="double"/>
         <!--always set to 1.5 times grater than sensing horizen-->
@@ -177,19 +205,19 @@
         <param name="manager/use_multitopology_trajs" value="false" type="bool"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
         <!-- trajectory optimization -->
-        <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
+        <param name="optimization/constraint_points_perPiece" value="8" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>
-        <param name="optimization/weight_obstacle_soft" value="5000.0" type="double"/>
+        <param name="optimization/weight_obstacle_soft" value="10000.0" type="double"/>
         <param name="optimization/weight_swarm" value="10000.0" type="double"/>
         <param name="optimization/weight_feasibility" value="10000.0" type="double"/>
         <param name="optimization/weight_sqrvariance" value="10000.0" type="double"/>
         <param name="optimization/weight_time" value="10.0" type="double"/>
         <!-- 2026-07-07: 允许实验 launch 覆盖优化器的障碍硬约束间隙，避免窄通道里按过小安全距离贴墙飞。 -->
         <param name="optimization/obstacle_clearance" value="$(arg obstacle_clearance)" type="double"/>
-        <param name="optimization/obstacle_clearance_soft" value="0.5" type="double"/>
+        <param name="optimization/obstacle_clearance_soft" value="0.46" type="double"/>
         <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->
         <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
-        <param name="optimization/vel_tolerance" value="1.0" type="double"/>
+        <param name="optimization/vel_tolerance" value="$(arg vel_tolerance)" type="double"/>
         <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>
         <param name="optimization/acc_tolerance" value="1.0" type="double"/>
         <param name="optimization/max_jer" value="$(arg max_jer)" type="double"/>

@@ -29,6 +29,7 @@ Eigen::Vector3d last_pos_;
 // yaw control
 double last_yaw_, last_yawdot_, slowly_flip_yaw_target_, slowly_turn_to_center_target_;
 double time_forward_;
+double heartbeat_timeout_ = 2.0;
 double yaw_custom_;
 double YAW_DOT_MAX_PER_SEC = 2 * M_PI;
 double YAW_DOT_DOT_MAX_PER_SEC = 5 * M_PI;
@@ -208,9 +209,10 @@ void cmdCallback(const ros::TimerEvent &e)
 
   ros::Time time_now = ros::Time::now();
 
-  if ((time_now - heartbeat_time_).toSec() > 0.5)
+  if ((time_now - heartbeat_time_).toSec() > heartbeat_timeout_)
   {
-    ROS_ERROR("[traj_server] Lost heartbeat from the planner, is it dead?");
+    ROS_ERROR("[traj_server] Lost heartbeat from the planner for %.3f s, is it dead?",
+              (time_now - heartbeat_time_).toSec());
 
     receive_traj_ = false;
     publish_cmd(last_pos_, Vector3d::Zero(), Vector3d::Zero(), Vector3d::Zero(), last_yaw_, 0);
@@ -359,6 +361,7 @@ int main(int argc, char **argv)
   ros::Timer cmd_timer = nh.createTimer(ros::Duration(0.01), cmdCallback);
 
   nh.param("traj_server/time_forward", time_forward_, -1.0);
+  nh.param("traj_server/heartbeat_timeout", heartbeat_timeout_, 2.0);
   nh.param("traj_server/yaw_dot_max", YAW_DOT_MAX_PER_SEC, YAW_DOT_MAX_PER_SEC);
   nh.param("traj_server/yaw_dot_dot_max", YAW_DOT_DOT_MAX_PER_SEC, YAW_DOT_DOT_MAX_PER_SEC);
   last_yaw_ = 0.0;

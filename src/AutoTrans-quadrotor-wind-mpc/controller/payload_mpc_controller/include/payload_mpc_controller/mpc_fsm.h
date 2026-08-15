@@ -72,6 +72,7 @@ namespace PayloadMPC
 			HOVER = 10,		// 轨迹子状态：没有有效轨迹时保持悬停参考。
 			POLY_TRAJ = 11, // 轨迹子状态：执行 PolynomialTraj 多项式轨迹。
 			POINTS = 12,	// 轨迹子状态：预留点序列轨迹；当前流程遇到后回到 HOVER。
+			MPC_RECOVERY_HOVER = 13, // NMPC 故障期间锁存固定位置，禁止执行规划轨迹。
 		};
 
 		MPCFSM(const ros::NodeHandle &nh, MpcParams &params, MpcController &controller);
@@ -105,11 +106,11 @@ namespace PayloadMPC
 		bool takeoff_requested_{false};
 		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
+		std::string last_takeoff_precondition_reason_;
 		Eigen::Vector3d takeoff_start_pose_{Eigen::Vector3d::Zero()};
 		double takeoff_target_z_{0.0};
 		double takeoff_start_yaw_{0.0};
 		ros::Time takeoff_start_time_{0};
-		ros::Time takeoff_settle_start_{0};
 		// 里程计失效后的 OFFBOARD 失联保护：最多继续发 0.3 s 的最后安全 setpoint。
 		bool odom_failsafe_active_{false};
 		ros::Time odom_failsafe_deadline_{0};
@@ -120,6 +121,11 @@ namespace PayloadMPC
 		double last_safe_normalized_thrust_{0.0};
 		bool last_safe_setpoint_valid_{false};
 		bool manual_setpoint_published_{false};
+		bool mpc_recovery_active_{false};
+		bool direct_auto_land_active_{false};
+		bool planning_stop_sent_{false};
+		ros::Time mpc_recovery_start_time_{0};
+		int mpc_recovery_success_count_{0};
 
 		long int rmse_cnt_ = 0;
 		double rmse_sum_ = 0;
@@ -193,6 +199,10 @@ namespace PayloadMPC
 		void enter_odom_failsafe(const char *reason);
 		void clear_autonomous_inputs();
 		bool odom_state_valid() const;
+		void beginMpcRecovery(const ros::Time &now);
+		void processMpcRecovery(const ros::Time &now);
+		void beginDirectAutoLand(const ros::Time &now, const char *reason);
+		void processDirectAutoLand(const ros::Time &now);
 
 		// ---- tools ----
 		void printandresetRMSE();
@@ -201,10 +211,7 @@ namespace PayloadMPC
 		void update_mode_hover_pose();
 		void update_hover_with_rc();
 		bool takeoffPreconditions(const ros::Time &now, const char *&reason) const;
-		bool takeoffRunningSafe(const ros::Time &now, const char *&reason) const;
 		void startAutoTakeoff(const ros::Time &now);
-		void abortAutoTakeoff(const char *reason);
-		void completeAutoTakeoff();
 		void publish_trigger(const nav_msgs::Odometry &odom_msg);
 		bool request_px4_auto_land();
 		void reboot_FCU();
