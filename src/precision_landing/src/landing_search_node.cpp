@@ -301,7 +301,7 @@ private:
     }
 
     if (!stageAllowsDetection()) {
-      annotateAndPublish(image->image, "等待穿出通道");
+      annotateAndPublish(image->image, "WAITING FOR CHANNEL EXIT");
       return;
     }
 
@@ -311,7 +311,7 @@ private:
     publishLockedId();
     if (!observation.valid || tracker_.lockedId() < 0) {
       target_filter_.reset();
-      annotateAndPublish(tracker_.debugImage(), "搜索 ArUco 降落平台");
+      annotateAndPublish(tracker_.debugImage(), "SEARCHING FOR LANDING ARUCO");
       return;
     }
 
@@ -323,7 +323,7 @@ private:
       ROS_WARN_THROTTLE(1.0,
                         "landing_search: image/odometry unsynchronized (%.3fs)",
                         odom_delta_sec);
-      annotateAndPublish(tracker_.debugImage(), "等待同步 FAST-LIO 位姿");
+      annotateAndPublish(tracker_.debugImage(), "WAITING FOR SYNCED FAST-LIO ODOM");
       return;
     }
 
@@ -340,7 +340,8 @@ private:
     if (!target_filter_.add(observation.id, point_world,
                             message->header.stamp.toSec())) {
       std::ostringstream state;
-      state << "世界系位置稳定中 spread=" << std::fixed << std::setprecision(3)
+      state << "STABILIZING WORLD TARGET spread=" << std::fixed
+            << std::setprecision(3)
             << target_filter_.spread() << "m";
       annotateAndPublish(tracker_.debugImage(), state.str());
       return;
@@ -365,7 +366,11 @@ private:
           << std::setprecision(2) << filtered.x() << ", " << filtered.y()
           << ", " << filtered.z() << ")";
     publishStatus(state.str());
-    annotateAndPublish(tracker_.debugImage(), state.str());
+    std::ostringstream image_state;
+    image_state << "TARGET ID=" << observation.id << " world=(" << std::fixed
+                << std::setprecision(2) << filtered.x() << ", " << filtered.y()
+                << ", " << filtered.z() << ")";
+    annotateAndPublish(tracker_.debugImage(), image_state.str());
   }
 
   void requestTimerCallback(const ros::TimerEvent &) {

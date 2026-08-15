@@ -279,21 +279,21 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
   observation.position_camera = selected_position;
   observation.reprojection_error_px = selected.reprojection_error_px;
 
-  const cv::Point text_origin =
-      corners[selected.detection_index].empty()
-          ? cv::Point(10, 45)
-          : cv::Point(
-                static_cast<int>(corners[selected.detection_index][0].x),
-                std::max(45, static_cast<int>(
-                                 corners[selected.detection_index][0].y) - 8));
+  // 位姿文字固定在左上角，不能跟随码角点；否则码靠近画面右侧时文字会被裁掉。
   const std::string pose_text =
       "ID " + std::to_string(selected.id) +
-      " XYZ " + fixedValue(selected_position.x()) + " " +
+      "  XYZ[m] " + fixedValue(selected_position.x()) + " " +
       fixedValue(selected_position.y()) + " " +
-      fixedValue(selected_position.z()) +
-      " reproj " + fixedValue(selected.reprojection_error_px) + "px";
-  cv::putText(debug_image_, pose_text, text_origin, cv::FONT_HERSHEY_SIMPLEX,
-              0.45, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+      fixedValue(selected_position.z());
+  const std::string quality_text =
+      "Reprojection error: " + fixedValue(selected.reprojection_error_px) +
+      " px";
+  cv::putText(debug_image_, pose_text, cv::Point(10, 45),
+              cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 255), 1,
+              cv::LINE_AA);
+  cv::putText(debug_image_, quality_text, cv::Point(10, 65),
+              cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 255, 255), 1,
+              cv::LINE_AA);
   drawLockState();
   return observation;
 }
