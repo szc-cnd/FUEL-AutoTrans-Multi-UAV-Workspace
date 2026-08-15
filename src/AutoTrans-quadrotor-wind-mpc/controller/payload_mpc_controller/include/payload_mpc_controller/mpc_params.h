@@ -83,7 +83,7 @@ namespace PayloadMPC
 		struct MsgTimeout
 		{
 			double odom;
-			// /mavros/local_position/odom 姿态消息超时阈值，单位 s；超时后外力估计清零。
+			// 外力估计姿态消息超时阈值，单位 s；超时后外力估计清零。
 			double force_attitude_odom;
 			double rc;
 			double cmd;

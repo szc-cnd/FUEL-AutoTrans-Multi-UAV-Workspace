@@ -772,8 +772,8 @@ namespace PayloadMPC
 			clearForceObserverState();
 			return;
 		}
-		// 加速度来自 MAVROS IMU 机体系；姿态来自 MAVROS 融合里程计；
-		// NMPC 的位置、速度和控制姿态仍来自 FAST-LIO /Odometry。
+		// 加速度来自 MAVROS IMU 机体系；姿态默认与 NMPC 共用 FAST-LIO 高频里程计。
+		// 两个传感器的机体系安装偏差必须在标定中消除，否则会形成虚假外力分量。
 		force_estimator_.setSystemState(
 			imu_data.filtered_a, force_attitude_odom_data.q, rpm_data.filtered_rpm);
 		force_observer_input_valid_ = true;
