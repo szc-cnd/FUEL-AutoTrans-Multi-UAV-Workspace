@@ -20,6 +20,7 @@ def test_search_config_uses_calibrated_down_camera_extrinsic():
     assert math.isclose(sum(value * value for value in quaternion), 1.0, abs_tol=1e-9)
     assert config["mission"]["require_stage_gate"] is True
     assert config["topics"]["landing_trigger"] == "/UAV0/need_to_land"
+    assert config["handoff"]["approach_height_m"] == 2.0
 
 
 def test_search_launch_wires_mission_request_to_precision_landing_trigger():

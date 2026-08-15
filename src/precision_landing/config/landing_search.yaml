@@ -44,7 +44,8 @@ mission:
 
 handoff:
   max_xy_error_m: 0.35
-  approach_height_m: 0.65
+  # 相对于平台标记的机体/FAST-LIO里程计原点高度；门外先在此高度完成交接。
+  approach_height_m: 2.00
   max_height_error_m: 0.25
 
 # 2026-08-15 Park 手眼标定结果：UAV0/body -> UAV0/down_camera_optical_frame。
