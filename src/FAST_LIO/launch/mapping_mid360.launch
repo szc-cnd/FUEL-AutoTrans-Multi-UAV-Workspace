@@ -16,7 +16,10 @@
   <!-- 传感器输入、FAST-LIO 输出和坐标系均由 vehicle_ns 自动生成。 -->
   <!-- 这些参数仍可由双机仿真等上层 launch 显式覆盖。 -->
   <arg name="lidar_topic" default="/$(arg vehicle_ns)/livox/lidar" />
-  <arg name="imu_topic" default="/$(arg vehicle_ns)/livox/imu" />
+  <!-- 驱动已按安装角旋转点云；先用同一 +15° 绕 Y 轴旋转 Livox IMU，再送入 FAST-LIO。 -->
+  <arg name="raw_imu_topic" default="/$(arg vehicle_ns)/livox/imu" />
+  <arg name="imu_topic" default="/$(arg vehicle_ns)/livox/imu_body" />
+  <arg name="imu_install_pitch_deg" default="15.0" />
   <arg name="odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odometry" />
   <arg name="cloud_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered" />
   <arg name="cloud_body_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered_body" />
@@ -25,6 +28,14 @@
   <arg name="path_topic" default="/$(arg vehicle_ns)/fast_lio/path" />
   <arg name="world_frame" default="$(arg vehicle_ns)/camera_init" />
   <arg name="body_frame" default="$(arg vehicle_ns)/body" />
+
+  <node pkg="fast_lio" type="livox_imu_to_body.py" name="livox_imu_to_body"
+        output="screen" required="true">
+    <param name="input_topic" value="$(arg raw_imu_topic)" />
+    <param name="output_topic" value="$(arg imu_topic)" />
+    <param name="output_frame_id" value="$(arg body_frame)" />
+    <param name="pitch_deg" value="$(arg imu_install_pitch_deg)" />
+  </node>
 
   <!-- ===============================
        加载 MID-360 雷达配置文件

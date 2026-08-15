@@ -84,6 +84,11 @@ catkin_package(
   INCLUDE_DIRS
 )
 
+catkin_install_python(PROGRAMS
+  scripts/livox_imu_to_body.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
 # 确保 FAST-LIO 编译前先生成自身 Pose6D 和 Livox CustomMsg 的 ROS1 消息头文件。
 add_dependencies(fastlio_mapping ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
