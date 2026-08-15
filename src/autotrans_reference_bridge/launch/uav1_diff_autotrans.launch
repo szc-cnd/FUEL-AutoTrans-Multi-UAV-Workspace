@@ -5,8 +5,8 @@
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <arg name="frame_id" default="UAV1/camera_init"/>
   <arg name="imu_topic" default="/UAV1/mavros/imu/data"/>
-  <!-- 外力估计姿态使用 PX4/MAVROS 融合后的本地 ENU 位姿；NMPC 状态仍使用 FAST-LIO 高频里程计。 -->
-  <arg name="force_attitude_odom_topic" default="/UAV1/mavros/local_position/odom"/>
+  <!-- 外力估计姿态与 NMPC 统一使用 FAST-LIO 高频预测里程计。 -->
+  <arg name="force_attitude_odom_topic" default="$(arg odom_topic)"/>
   <arg name="state_topic" default="/UAV1/mavros/state"/>
   <arg name="extended_state_topic" default="/UAV1/mavros/extended_state"/>
   <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
