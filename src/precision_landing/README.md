@@ -11,6 +11,40 @@
 节点重启。可通过 `/UAVx/landing/control_owner` 查看 `CONTROLLER`、
 `LANDING_PENDING` 或 `LANDING`。
 
+## 出通道后的平台搜索与自动交接
+
+`precision_landing.launch` 默认同时启动 `landing_search_node`。完整链路为：
+
+```text
+SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
+-> 稳定 ArUco 世界定位 -> APPROACH_LANDING
+-> 规划到平台上方 -> /UAVx/mission/landing_request
+-> /UAVx/need_to_land -> 精确降落
+```
+
+搜索节点只在 `/UAVx/mission/task_status` 进入门外搜索阶段后接受 ArUco，避免通道内
+误检提前结束任务。它将相机测量通过
+[`config/landing_search.yaml`](config/landing_search.yaml) 中的下视相机手眼外参和同步
+FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界系八帧稳定过滤。稳定结果
+发布到 `/UAVx/mission/detection/final_aruco`，由任务规划器检查平台上方安全柱并生成
+高于平台 `0.65 m` 的接近目标。
+
+规划器到达后，搜索节点仍会复核目标和里程计新鲜度、水平误差以及接近高度；只有全部
+通过才发布 `/UAVx/need_to_land=true`。该触发是锁存的，之后由
+`landing_setpoint_arbiter` 将控制权交给 `precision_landing_node`，不会交给简单控制器。
+关键诊断话题为：
+
+```bash
+rostopic echo /UAV0/landing/search/status
+rostopic echo /UAV0/landing/search/target_world
+rostopic echo /UAV0/mission/task_status
+rostopic echo /UAV0/landing/control_owner
+```
+
+搜索阶段使用的是“下视相机到 FAST-LIO IMU 原点”手眼外参；最终视觉降落仍使用
+`precision_landing.yaml` 中“下视相机到实际降落中心”的平面偏移。两者用途不同，不能
+用同一个平移参数互相覆盖。
+
 This package controls a PX4 vehicle through MAVROS only after a rising
 `/need_to_land` trigger, valid camera calibration, fresh vehicle data, and an
 armed `OFFBOARD` state. Treat it as flight-critical software: begin every

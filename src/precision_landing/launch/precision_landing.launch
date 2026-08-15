@@ -5,6 +5,7 @@
   <arg name="camera_info_topic" default="$(arg topic_prefix)/down_camera/camera_info"/>
   <arg name="local_pose_topic" default="$(arg topic_prefix)/mavros/local_position/pose"/>
   <arg name="mavros_state_topic" default="$(arg topic_prefix)/mavros/state"/>
+  <arg name="odometry_topic" default="$(arg topic_prefix)/fast_lio/Odometry"/>
   <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
@@ -13,6 +14,32 @@
   <arg name="controller_position_input" default="$(arg topic_prefix)/control/position_setpoint"/>
   <arg name="controller_attitude_input" default="$(arg topic_prefix)/control/attitude_setpoint"/>
   <arg name="landing_setpoint_input" default="$(arg topic_prefix)/landing/setpoint_raw/local"/>
+  <arg name="enable_landing_search" default="true"/>
+  <arg name="mission_status_topic" default="$(arg topic_prefix)/mission/task_status"/>
+  <arg name="mission_landing_request_topic" default="$(arg topic_prefix)/mission/landing_request"/>
+  <arg name="landing_marker_world_topic" default="$(arg topic_prefix)/mission/detection/final_aruco"/>
+
+  <!--
+    下视 ArUco 搜索节点只在任务状态进入门外搜索后发布平台世界坐标；
+    规划器到达平台正上方并发布 landing_request 后，它再二次校验并触发精确降落。
+  -->
+  <node if="$(arg enable_landing_search)" pkg="precision_landing"
+        type="landing_search_node" name="landing_search_node"
+        ns="$(arg vehicle_ns)" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find precision_landing)/config/landing_search.yaml"/>
+    <param name="topics/image" value="$(arg image_topic)"/>
+    <param name="topics/camera_info" value="$(arg camera_info_topic)"/>
+    <param name="topics/odometry" value="$(arg odometry_topic)"/>
+    <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
+    <param name="topics/marker_world" value="$(arg landing_marker_world_topic)"/>
+    <param name="topics/landing_request" value="$(arg mission_landing_request_topic)"/>
+    <param name="topics/landing_trigger" value="$(arg trigger_topic)"/>
+    <param name="topics/filtered_target" value="$(arg topic_prefix)/landing/search/target_world"/>
+    <param name="topics/locked_id" value="$(arg topic_prefix)/landing/search/locked_id"/>
+    <param name="topics/status" value="$(arg topic_prefix)/landing/search/status"/>
+    <param name="topics/debug_image" value="$(arg topic_prefix)/landing/search/debug_image"/>
+  </node>
 
   <node if="$(arg enable_setpoint_arbiter)" pkg="precision_landing"
         type="landing_setpoint_arbiter_node" name="landing_setpoint_arbiter"

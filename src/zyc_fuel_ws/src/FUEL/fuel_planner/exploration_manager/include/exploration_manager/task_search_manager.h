@@ -97,7 +97,7 @@ private:
     SEARCH_CORRIDOR = 0,
     EXIT_APPROACH_INSIDE = 1,
     CROSS_EXIT = 2,
-    SEARCH_OUTSIDE_QR = 3,
+    SEARCH_OUTSIDE_LANDING = 3,
     APPROACH_LANDING = 4,
     LANDING = 5
   };
@@ -105,7 +105,7 @@ private:
   void colorDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void qrcodeDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void thermalDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void finalQrcodeDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
+  void finalLandingMarkerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   // 2026-07-23: 用短时机体系 Mid360 点云检测通道双墙共同终止，出口判断不再依赖会随 z 漂移失真的绝对高度切片。
   void bodyCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg);
   void registerDetection(int type, const geometry_msgs::PoseStamped& msg);
@@ -147,6 +147,8 @@ private:
   bool buildPendingExitObservationGoal(const Eigen::Vector3d& cur_pos,
                                        Eigen::Vector3d& goal, double& goal_yaw) const;
   bool mapPointSafe(const Eigen::Vector3d& point) const;
+  bool landingColumnSafe(const Eigen::Vector3d& marker,
+                         const Eigen::Vector3d& approach) const;
   bool mapColumnOccupied(const Eigen::Vector3d& point) const;
   // 2026-07-22: 用累计占据柱沿指定方向的连续支撑判断墙面，避免把孤立箱体/柱子当作通道墙或门框。
   bool mapWallRaySupported(const Eigen::Vector3d& start,
@@ -175,7 +177,7 @@ private:
   ros::Subscriber color_detection_sub_;
   ros::Subscriber qrcode_detection_sub_;
   ros::Subscriber thermal_detection_sub_;
-  ros::Subscriber final_qrcode_detection_sub_;
+  ros::Subscriber final_landing_marker_sub_;
   ros::Subscriber body_cloud_sub_;
   ros::Publisher marker_pub_;
   ros::Publisher status_pub_;
@@ -223,7 +225,7 @@ private:
   // 一次性状态推进；入口穿越一旦锁存，任何局部墙端/拐角都不能把状态重新解释成门外。
   bool corridor_entry_crossed_{false};
   TargetRecord targets_[3];
-  TargetRecord final_qrcode_;
+  TargetRecord final_landing_marker_;
   MissionStage mission_stage_{SEARCH_CORRIDOR};
 
   // 2026-07-13: 出口候选需要跨多次地图更新稳定，不能由单帧噪声直接触发第三阶段。
@@ -253,7 +255,7 @@ private:
   // 2026-07-24: 单帧门证据短暂丢失后仍保持前视一小段时间，避免立刻重启环扫形成1->0循环。
   ros::Time exit_verification_hold_until_;
   double exit_verification_yaw_hold_time_{2.5};
-  int final_qrcode_hits_{0};
+  int final_landing_marker_hits_{0};
   bool landing_requested_{false};
   ros::Time last_exit_inference_;
   ros::Time mission_stage_start_;
@@ -327,7 +329,7 @@ private:
   double recovery_turn_yaw_release_angle_deg_{15.0};
 
 
-  // 2026-07-13: 第三阶段地图拓扑、出口确认、二维码扫描和降落触发参数。
+  // 2026-07-13: 第三阶段地图拓扑、出口确认、平台扫描和降落触发参数。
   // 关闭后不运行地图/雷达出口检测，也不进入出口穿越和降落状态机。
   bool exit_detection_enabled_{true};
   double exit_grid_resolution_{0.20};
@@ -425,16 +427,17 @@ private:
   int exit_footprint_samples_{8};
   double scan_radius_{0.35};
   double scan_dwell_time_{1.2};
-  // 2026-07-16: 终点二维码接口保留；当前比赛联调可关闭并在地图确认最终出口后直接降落。
-  bool require_final_qrcode_{true};
+  bool require_final_landing_marker_{true};
   // 2026-07-20: 最终出口确认后仍允许出口附近绕障微调，远处普通frontier只能有限增加
   // 到出口的距离，防止重新发布整段回头长路径。
   double exit_frontier_local_adjust_radius_{1.20};
   double exit_frontier_max_distance_increase_{0.45};
-  int final_qrcode_confirmation_count_{3};
-  double final_qrcode_consistency_radius_{0.40};
+  int final_landing_marker_confirmation_count_{3};
+  double final_landing_marker_consistency_radius_{0.40};
   double landing_approach_height_{0.70};
   double landing_trigger_distance_{0.35};
+  double landing_column_bottom_clearance_{0.20};
+  double landing_column_step_{0.10};
 };
 
 }  // namespace fast_planner

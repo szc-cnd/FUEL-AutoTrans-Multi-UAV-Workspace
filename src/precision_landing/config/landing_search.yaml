@@ -1,0 +1,54 @@
+topics:
+  image: /UAV0/down_camera/image_raw
+  camera_info: /UAV0/down_camera/camera_info
+  odometry: /UAV0/fast_lio/Odometry
+  mission_status: /UAV0/mission/task_status
+  marker_world: /UAV0/mission/detection/final_aruco
+  landing_request: /UAV0/mission/landing_request
+  landing_trigger: /UAV0/need_to_land
+  filtered_target: /UAV0/landing/search/target_world
+  locked_id: /UAV0/landing/search/locked_id
+  status: /UAV0/landing/search/status
+  debug_image: /UAV0/landing/search/debug_image
+
+frames:
+  # FUEL 的 world 与 FAST-LIO camera_init 在当前比赛入口中数值对齐。
+  world: world
+
+marker:
+  size_m: 0.60
+  requested_id: -1
+  stable_frames: 5
+  max_reprojection_error_px: 4.0
+  min_distance_m: 0.15
+  max_distance_m: 6.0
+  max_position_jump_m: 0.60
+  max_tilt_deg: 60.0
+
+world_filter:
+  stable_samples: 8
+  max_sample_gap_sec: 0.25
+  max_position_jump_m: 0.35
+  max_spread_m: 0.12
+
+safety:
+  max_image_odom_delta_sec: 0.08
+  image_timeout_sec: 0.30
+  odom_timeout_sec: 0.30
+  target_timeout_sec: 0.40
+  max_header_future_sec: 0.05
+
+mission:
+  # 只有确认穿出通道后才允许把 ArUco 当作降落平台。
+  require_stage_gate: true
+
+handoff:
+  max_xy_error_m: 0.35
+  approach_height_m: 0.65
+  max_height_error_m: 0.25
+
+# 2026-08-15 Park 手眼标定结果：UAV0/body -> UAV0/down_camera_optical_frame。
+# 这里直接用于相机点到 FAST-LIO 机体原点的转换，不与 D435 的 camera_link TF 混用。
+camera_to_body:
+  translation_m: [0.07383116536212123, -0.03902001736630811, -0.13346814265233625]
+  quaternion_xyzw: [0.7107958426327318, -0.7033418639826419, 0.00889926708530993, -0.0005436090435832874]

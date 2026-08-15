@@ -130,7 +130,7 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   recovery_turn_confirmation_accumulation_window_ =
       std::max(0.5, recovery_turn_confirmation_accumulation_window_);
 
-  // 2026-07-13: 第三阶段基于累计占据地图的拓扑距离推断出口，二维码未确认时只扫描不降落。
+  // 2026-07-13: 第三阶段基于累计占据地图推断出口，ArUco平台未确认时只搜索不降落。
   nh.param("mission/task_search/exit/enabled", exit_detection_enabled_, true);
   nh.param("mission/task_search/exit/grid_resolution", exit_grid_resolution_, 0.20);
   nh.param("mission/task_search/exit/inference_period", exit_inference_period_, 1.0);
@@ -279,36 +279,40 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/exit/footprint_samples", exit_footprint_samples_, 8);
   nh.param("mission/task_search/exit/scan_radius", scan_radius_, 0.35);
   nh.param("mission/task_search/exit/scan_dwell_time", scan_dwell_time_, 1.2);
-  // 2026-07-16: false为当前比赛直降模式；true时恢复终点二维码确认、扫描和对准流程。
-  nh.param("mission/task_search/exit/require_final_qrcode", require_final_qrcode_, true);
+  nh.param("mission/task_search/exit/require_final_landing_marker",
+           require_final_landing_marker_, true);
   // 2026-07-20: 最终出口确认且路径足够远后，普通frontier不得把机体明显拉离出口；
   // 出口附近保留局部绕障和姿态调整空间。
   nh.param("mission/task_search/exit/frontier_local_adjust_radius",
            exit_frontier_local_adjust_radius_, 1.20);
   nh.param("mission/task_search/exit/frontier_max_distance_increase",
            exit_frontier_max_distance_increase_, 0.45);
-  nh.param("mission/task_search/exit/final_qrcode_confirmation_count",
-           final_qrcode_confirmation_count_, 3);
-  nh.param("mission/task_search/exit/final_qrcode_consistency_radius",
-           final_qrcode_consistency_radius_, 0.40);
+  nh.param("mission/task_search/exit/final_landing_marker_confirmation_count",
+           final_landing_marker_confirmation_count_, 3);
+  nh.param("mission/task_search/exit/final_landing_marker_consistency_radius",
+           final_landing_marker_consistency_radius_, 0.40);
   nh.param("mission/task_search/exit/landing_approach_height", landing_approach_height_, 0.70);
   nh.param("mission/task_search/exit/landing_trigger_distance", landing_trigger_distance_, 0.35);
+  nh.param("mission/task_search/exit/landing_column_bottom_clearance",
+           landing_column_bottom_clearance_, 0.20);
+  nh.param("mission/task_search/exit/landing_column_step", landing_column_step_, 0.10);
 
-  std::string color_topic, qrcode_topic, thermal_topic, final_qrcode_topic;
+  std::string color_topic, qrcode_topic, thermal_topic, final_landing_marker_topic;
   nh.param("mission/task_search/color_topic", color_topic, std::string("/mission/detection/color"));
   nh.param("mission/task_search/qrcode_topic", qrcode_topic,
            std::string("/mission/detection/qrcode"));
   nh.param("mission/task_search/thermal_topic", thermal_topic,
            std::string("/mission/detection/thermal"));
-  nh.param("mission/task_search/final_qrcode_topic", final_qrcode_topic,
-           std::string("/mission/detection/final_qrcode"));
+  nh.param("mission/task_search/final_landing_marker_topic", final_landing_marker_topic,
+           std::string("/mission/detection/final_aruco"));
   color_detection_sub_ = nh.subscribe(color_topic, 5, &TaskSearchManager::colorDetectionCallback, this);
   qrcode_detection_sub_ =
       nh.subscribe(qrcode_topic, 5, &TaskSearchManager::qrcodeDetectionCallback, this);
   thermal_detection_sub_ =
       nh.subscribe(thermal_topic, 5, &TaskSearchManager::thermalDetectionCallback, this);
-  final_qrcode_detection_sub_ = nh.subscribe(
-      final_qrcode_topic, 5, &TaskSearchManager::finalQrcodeDetectionCallback, this);
+  final_landing_marker_sub_ = nh.subscribe(
+      final_landing_marker_topic, 5,
+      &TaskSearchManager::finalLandingMarkerCallback, this);
   // 2026-07-23: 直接订阅FAST-LIO已外参校正的IMU-body点云，避免再经漂移世界z筛选墙体。
   if (radar_exit_detection_enabled_) {
     body_cloud_sub_ = nh.subscribe(radar_exit_body_cloud_topic_, 5,
@@ -331,11 +335,11 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            min_search_height_, max_search_height_, revisit_radius_);
   // 2026-07-22: 启动日志明确输出“终点预测不等于目标”和门后FREE分支门槛，便于现场核对参数生效。
   ROS_WARN("[exit_mission] endpoint-hint-only + corridor-wall-end validation enabled, grid=%.2f "
-           "min_path=%.2f outside_route=%.2f confirm=%d final_qr_required=%d "
+           "min_path=%.2f outside_route=%.2f confirm=%d landing_marker_required=%d "
            "portal_half_width=[%.2f,%.2f] wall_end=%d/%d max_behind=%.2f.",
            exit_grid_resolution_, exit_min_geodesic_distance_,
            exit_endpoint_outside_route_min_length_, exit_confirmation_count_,
-           static_cast<int>(require_final_qrcode_),
+           static_cast<int>(require_final_landing_marker_),
            exit_portal_min_half_width_, exit_portal_max_half_width_,
            exit_wall_end_min_changed_count_, exit_wall_end_probe_count_,
            exit_candidate_max_behind_distance_);
@@ -413,15 +417,20 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
 
   // 2026-07-21: 拓扑远端和门框确认只允许触发穿门状态机；通道内任何位置均不得直接发布降落。
 
-  if (mission_stage_ == APPROACH_LANDING && final_qrcode_.found) {
-    const Eigen::Vector2d qr_xy(final_qrcode_.pose.pose.position.x,
-                                final_qrcode_.pose.pose.position.y);
-    if ((pos.head<2>() - qr_xy).norm() <= landing_trigger_distance_) {
+  if (mission_stage_ == APPROACH_LANDING && final_landing_marker_.found) {
+    const Eigen::Vector3d marker(final_landing_marker_.pose.pose.position.x,
+                                 final_landing_marker_.pose.pose.position.y,
+                                 final_landing_marker_.pose.pose.position.z);
+    const Eigen::Vector3d approach(marker.x(), marker.y(),
+                                   marker.z() + landing_approach_height_);
+    if ((pos.head<2>() - marker.head<2>()).norm() <= landing_trigger_distance_ &&
+        landingColumnSafe(marker, approach)) {
       mission_stage_ = LANDING;
       mission_stage_start_ = ros::Time::now();
+      publishSearchState();
       publishLandingRequest(true);
-      ROS_ERROR("[exit_mission] final QR aligned at %.2f %.2f; landing request published.",
-                qr_xy.x(), qr_xy.y());
+      ROS_ERROR("[exit_mission] landing ArUco aligned at %.2f %.2f; "
+                "landing request published.", marker.x(), marker.y());
     }
   }
   (void)yaw;
@@ -1435,7 +1444,7 @@ bool TaskSearchManager::isMissionBoundaryMotionAllowed(
   // 2026-07-23: 最终出口只允许穿越一次。CROSS_EXIT确认完成后，出口外的所有区域
   // 统一视为通道外；候选若重新落到门内侧就直接拒绝，不再做任何复杂区域分类。
   const bool final_exit_guard_active =
-      mission_stage_ >= SEARCH_OUTSIDE_QR && exit_candidate_confirmed_ &&
+      mission_stage_ >= SEARCH_OUTSIDE_LANDING && exit_candidate_confirmed_ &&
       exit_outward_direction_.norm() > 1e-3;
   double exit_side = 0.0;
   if (final_exit_guard_active) {
@@ -1556,33 +1565,40 @@ void TaskSearchManager::thermalDetectionCallback(const geometry_msgs::PoseStampe
   registerDetection(2, *msg);
 }
 
-void TaskSearchManager::finalQrcodeDetectionCallback(
+void TaskSearchManager::finalLandingMarkerCallback(
     const geometry_msgs::PoseStampedConstPtr& msg) {
-  // 2026-07-21: 通道内的普通二维码或误检不得冒充降落二维码；只有确认穿过出口后才登记最终二维码。
-  if (mission_stage_ != SEARCH_OUTSIDE_QR && mission_stage_ != APPROACH_LANDING) {
-    ROS_WARN_THROTTLE(1.0, "[exit_mission] ignore final QR detection before confirmed exit crossing.");
+  // 通道内看到相似图案也不得触发降落；只有确认穿过出口后才登记平台 ArUco。
+  if (mission_stage_ != SEARCH_OUTSIDE_LANDING &&
+      mission_stage_ != APPROACH_LANDING) {
+    ROS_WARN_THROTTLE(
+        1.0, "[exit_mission] ignore landing ArUco before confirmed exit crossing.");
     return;
   }
   const ros::Time now = ros::Time::now();
   const Eigen::Vector2d point(msg->pose.position.x, msg->pose.position.y);
-  const Eigen::Vector2d previous(final_qrcode_.pose.pose.position.x,
-                                 final_qrcode_.pose.pose.position.y);
-  const bool continuous = final_qrcode_hits_ > 0 &&
-                          (now - final_qrcode_.stamp).toSec() <= 1.5 &&
-                          (point - previous).norm() <= final_qrcode_consistency_radius_;
-  final_qrcode_hits_ = continuous ? final_qrcode_hits_ + 1 : 1;
-  final_qrcode_.pose = *msg;
-  final_qrcode_.stamp = now;
+  const Eigen::Vector2d previous(final_landing_marker_.pose.pose.position.x,
+                                 final_landing_marker_.pose.pose.position.y);
+  const bool continuous = final_landing_marker_hits_ > 0 &&
+                          (now - final_landing_marker_.stamp).toSec() <= 1.5 &&
+                          (point - previous).norm() <=
+                              final_landing_marker_consistency_radius_;
+  final_landing_marker_hits_ = continuous ? final_landing_marker_hits_ + 1 : 1;
+  final_landing_marker_.pose = *msg;
+  final_landing_marker_.stamp = now;
 
-  // 2026-07-13: 终点二维码必须位置一致地连续确认，单帧误检绝不能触发 AUTO.LAND。
-  if (final_qrcode_hits_ >= final_qrcode_confirmation_count_) {
-    final_qrcode_.found = true;
-    ROS_ERROR("[exit_mission] FINAL QR confirmed %d/%d at world=(%.2f, %.2f, %.2f).",
-              final_qrcode_hits_, final_qrcode_confirmation_count_, msg->pose.position.x,
+  if (final_landing_marker_hits_ >=
+      final_landing_marker_confirmation_count_) {
+    final_landing_marker_.found = true;
+    ROS_ERROR("[exit_mission] LANDING ARUCO confirmed %d/%d at "
+              "world=(%.2f, %.2f, %.2f).",
+              final_landing_marker_hits_,
+              final_landing_marker_confirmation_count_, msg->pose.position.x,
               msg->pose.position.y, msg->pose.position.z);
   } else {
-    ROS_WARN("[exit_mission] final QR candidate confirmation %d/%d at (%.2f, %.2f).",
-             final_qrcode_hits_, final_qrcode_confirmation_count_, point.x(), point.y());
+    ROS_WARN("[exit_mission] landing ArUco confirmation %d/%d at "
+             "(%.2f, %.2f).",
+             final_landing_marker_hits_,
+             final_landing_marker_confirmation_count_, point.x(), point.y());
   }
   publishSearchState();
 }
@@ -1628,6 +1644,18 @@ bool TaskSearchManager::mapPointSafe(const Eigen::Vector3d& point) const {
       return false;
   }
   return true;
+}
+
+bool TaskSearchManager::landingColumnSafe(const Eigen::Vector3d& marker,
+                                          const Eigen::Vector3d& approach) const {
+  if (approach.z() <= marker.z()) return false;
+  const double start_z =
+      marker.z() + std::max(0.05, landing_column_bottom_clearance_);
+  const double step = std::max(0.05, landing_column_step_);
+  for (double z = start_z; z <= approach.z() + 1e-6; z += step) {
+    if (!mapPointSafe(Eigen::Vector3d(marker.x(), marker.y(), z))) return false;
+  }
+  return mapPointSafe(approach);
 }
 
 // 2026-07-23: 只在当前里程计高度上下各0.40m内投影占据，地图和里程计共同漂移时仍保持相对一致；
@@ -3213,13 +3241,15 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
     const double signed_side =
         (cur_pos.head<2>() - exit_portal_center_.head<2>()).dot(exit_outward_direction_);
     if (signed_side >= exit_cross_confirm_distance_) {
-      mission_stage_ = SEARCH_OUTSIDE_QR;
+      mission_stage_ = SEARCH_OUTSIDE_LANDING;
       mission_stage_start_ = ros::Time::now();
       active_goal_valid_ = false;
       outside_search_anchor_ = cur_pos;
       outside_search_anchor_.z() = cruise_height_;
       search_exhausted_since_ = ros::Time(0);
-      ROS_ERROR("[exit_mission] stage CROSS_EXIT -> SEARCH_OUTSIDE_QR, signed_side=%.2fm.",
+      publishSearchState();
+      ROS_ERROR("[exit_mission] stage CROSS_EXIT -> SEARCH_OUTSIDE_LANDING, "
+                "signed_side=%.2fm.",
                 signed_side);
     } else {
       if (!buildSafeExitCrossingGoal(cur_pos, goal)) {
@@ -3232,15 +3262,15 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
     }
   }
 
-  if (mission_stage_ == SEARCH_OUTSIDE_QR) {
-    if (final_qrcode_.found) {
+  if (mission_stage_ == SEARCH_OUTSIDE_LANDING) {
+    if (final_landing_marker_.found) {
       mission_stage_ = APPROACH_LANDING;
       mission_stage_start_ = ros::Time::now();
       active_goal_valid_ = false;
-      ROS_ERROR("[exit_mission] stage SEARCH_OUTSIDE_QR -> APPROACH_LANDING.");
+      publishSearchState();
+      ROS_ERROR("[exit_mission] stage SEARCH_OUTSIDE_LANDING -> APPROACH_LANDING.");
     } else {
-      // 2026-07-21: 门外仍有frontier时把选择权交回任务搜索，才能展开图中圈出的外部区域；
-      // 只有门外frontier耗尽时才在已知FREE区域围绕穿出锚点做局部二维码扫描。
+      // 门外仍有 frontier 时继续覆盖；耗尽后围绕出口锚点做局部平台搜索。
       if (!search_exhausted) return false;
       const int phase = static_cast<int>(
           std::floor((ros::Time::now() - mission_stage_start_).toSec() /
@@ -3262,11 +3292,19 @@ bool TaskSearchManager::buildStage3Goal(const Eigen::Vector3d& cur_pos, double c
   }
 
   if (mission_stage_ == APPROACH_LANDING) {
-    goal = Eigen::Vector3d(final_qrcode_.pose.pose.position.x,
-                           final_qrcode_.pose.pose.position.y,
-                           landing_approach_height_);
+    const Eigen::Vector3d marker(final_landing_marker_.pose.pose.position.x,
+                                 final_landing_marker_.pose.pose.position.y,
+                                 final_landing_marker_.pose.pose.position.z);
+    goal = Eigen::Vector3d(marker.x(), marker.y(),
+                           marker.z() + landing_approach_height_);
+    if (!landingColumnSafe(marker, goal) || goalTemporarilyBlocked(goal)) {
+      ROS_WARN_THROTTLE(1.0,
+                        "[exit_mission] landing safety cylinder is not clear; "
+                        "continue mapping without handoff.");
+      return false;
+    }
     goal_yaw = std::atan2(goal.y() - cur_pos.y(), goal.x() - cur_pos.x());
-    geometry_msgs::PoseStamped landing_target = final_qrcode_.pose;
+    geometry_msgs::PoseStamped landing_target = final_landing_marker_.pose;
     landing_target.header.stamp = ros::Time::now();
     landing_target.header.frame_id = world_frame_;
     landing_target.pose.position.z = landing_approach_height_;
@@ -3390,7 +3428,7 @@ void TaskSearchManager::publishSearchState() {
     if (confirmed && mission_stage_ != SEARCH_CORRIDOR) {
       static const char* stage_names[] = {
           "SEARCH", "APPROACH_INSIDE", "CROSS_EXIT",
-          "SEARCH_OUTSIDE_QR", "APPROACH_LANDING", "LANDING"};
+          "SEARCH_OUTSIDE_LANDING", "APPROACH_LANDING", "LANDING"};
       const int stage_index = std::max(
           0, std::min(static_cast<int>(mission_stage_),
                       static_cast<int>(sizeof(stage_names) / sizeof(stage_names[0])) - 1));
@@ -3491,7 +3529,7 @@ void TaskSearchManager::publishSearchState() {
       side_text.color.r = 0.20;
       side_text.color.g = 1.00;
       side_text.color.b = 0.30;
-      side_text.text = "OUT / QR-LANDING";
+      side_text.text = "OUT / ARUCO-LANDING";
       marker_pub_.publish(side_text);
     } else {
       visualization_msgs::Marker delete_side = exit_marker;
@@ -3514,38 +3552,39 @@ void TaskSearchManager::publishSearchState() {
     }
   }
 
-  // 2026-07-13: 终点二维码连续确认后单独显示降落目标；未确认时只显示出口，不允许降落。
-  if (final_qrcode_.found) {
-    visualization_msgs::Marker qr_marker;
-    qr_marker.header = final_qrcode_.pose.header;
-    qr_marker.header.stamp = ros::Time::now();
-    if (qr_marker.header.frame_id.empty()) qr_marker.header.frame_id = world_frame_;
-    qr_marker.ns = "exit_mission";
-    qr_marker.id = 40;
-    qr_marker.type = visualization_msgs::Marker::CUBE;
-    qr_marker.action = visualization_msgs::Marker::ADD;
-    qr_marker.pose = final_qrcode_.pose.pose;
-    qr_marker.scale.x = qr_marker.scale.y = 0.36;
-    qr_marker.scale.z = 0.08;
-    qr_marker.color.r = 0.05;
-    qr_marker.color.g = 0.95;
-    qr_marker.color.b = 0.95;
-    qr_marker.color.a = 0.95;
-    marker_pub_.publish(qr_marker);
+  // 稳定 ArUco 世界位置确认后单独显示降落平台；未确认时禁止接近和降落。
+  if (final_landing_marker_.found) {
+    visualization_msgs::Marker landing_marker;
+    landing_marker.header = final_landing_marker_.pose.header;
+    landing_marker.header.stamp = ros::Time::now();
+    if (landing_marker.header.frame_id.empty()) landing_marker.header.frame_id = world_frame_;
+    landing_marker.ns = "exit_mission";
+    landing_marker.id = 40;
+    landing_marker.type = visualization_msgs::Marker::CUBE;
+    landing_marker.action = visualization_msgs::Marker::ADD;
+    landing_marker.pose = final_landing_marker_.pose.pose;
+    landing_marker.scale.x = landing_marker.scale.y = 0.60;
+    landing_marker.scale.z = 0.08;
+    landing_marker.color.r = 0.05;
+    landing_marker.color.g = 0.95;
+    landing_marker.color.b = 0.95;
+    landing_marker.color.a = 0.95;
+    marker_pub_.publish(landing_marker);
   }
 
   std_msgs::String status;
   std::ostringstream stream;
   // 2026-07-13: 状态话题输出完整任务阶段，供后续第二架无人机和比赛任务面板直接订阅。
-  // 2026-07-21: 状态话题明确区分门内接近、穿门和门外二维码搜索，避免把“出口确认”误读成“终点确认”。
+  // 状态话题明确区分门内接近、穿门和门外降落平台搜索。
   const char* stage_names[] = {"SEARCH_CORRIDOR", "EXIT_APPROACH_INSIDE", "CROSS_EXIT",
-                               "SEARCH_OUTSIDE_QR", "APPROACH_LANDING", "LANDING"};
+                               "SEARCH_OUTSIDE_LANDING", "APPROACH_LANDING", "LANDING"};
   stream << stage_names[static_cast<int>(mission_stage_)]
          << " color=" << targets_[0].found << " qrcode=" << targets_[1].found
          << " thermal=" << targets_[2].found << " exit=" << exit_candidate_confirmed_
          << " endpoint_hint=" << (exit_candidate_hits_ > 0)
          << " endpoint_outside=" << exit_endpoint_outside_verified_
-         << " final_qr=" << final_qrcode_.found << " landing=" << landing_requested_
+         << " landing_aruco=" << final_landing_marker_.found
+         << " landing=" << landing_requested_
          << " visited=" << visited_positions_.size();
   status.data = stream.str();
   status_pub_.publish(status);
