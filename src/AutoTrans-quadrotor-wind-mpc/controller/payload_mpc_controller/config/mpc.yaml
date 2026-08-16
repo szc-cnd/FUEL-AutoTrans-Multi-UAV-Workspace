@@ -195,8 +195,9 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     noisy_imu: false # *
 
 msg_timeout:
+    # odom 与 force_attitude_odom 超时仅门控外力估计和在线推力模型，不触发 NMPC/OFFBOARD 退出。
     odom: 0.5
-    # force_attitude_odom（UAV1 默认 FAST-LIO 高频里程计）提供姿态；超时后立即清零估计和补偿，单位 s。
+    # force_attitude_odom（UAV1 默认 MAVROS local odom）提供全部控制姿态，单位 s。
     force_attitude_odom: 0.1
     rc:   0.5
     cmd:  0.5

@@ -29,8 +29,7 @@ namespace PayloadMPC
 		State_Data_t state_data;
 		ExtendedState_Data_t extended_state_data;
 		Odom_Data_t odom_data;
-		// 外力估计专用的 MAVROS 融合里程计；只提供机体系到本地 ENU 世界系的姿态。
-		// NMPC 的位置、速度和姿态仍使用 odom_data（FAST-LIO /Odometry）。
+		// NMPC、推力模型和外力估计共用该姿态；平移状态仍来自 odom_data。
 		Odom_Data_t force_attitude_odom_data;
 		Imu_Data_t imu_data;
 		Command_Data_t cmd_data;
@@ -179,7 +178,8 @@ namespace PayloadMPC
 		ThrustModelGateReason last_thrust_model_gate_reason_{
 			ThrustModelGateReason::DISABLED_BY_PARAM};
 
-		void setEstimateState(const Odom_Data_t &odom_est_state);
+		void setEstimateState(const Odom_Data_t &translation_odom,
+						  const Odom_Data_t &attitude_odom);
 		void setForceEstimation();
 		void clearForceObserverState();
 		DisturbanceGateReason disturbanceCompensationGate(const ros::Time &now) const;

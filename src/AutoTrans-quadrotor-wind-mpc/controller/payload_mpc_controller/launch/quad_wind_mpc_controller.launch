@@ -1,8 +1,7 @@
 <launch>
-  <!-- Minimal real-quadrotor controller launch: PX4 EKF odom + MAVROS IMU. -->
-  <!-- AutoTrans 状态直接使用 FAST-LIO 雷达 Odometry，位置/速度/姿态均来自该世界系。 -->
+  <!-- NMPC 平移状态来自 odom_topic，姿态来自 force_attitude_odom_topic。 -->
   <arg name="odom_topic" default="/Odometry"/>
-  <!-- 外力估计与 NMPC 默认共用同一里程计姿态，避免世界系和状态时刻不一致。 -->
+  <!-- 通用入口默认共用里程计；实机入口可将该参数覆盖为 MAVROS 融合里程计。 -->
   <arg name="force_attitude_odom_topic" default="$(arg odom_topic)"/>
   <arg name="imu_topic" default="/mavros/imu/data"/>
   <!-- MAVROS topics and services are supplied by the vehicle integration launch. -->

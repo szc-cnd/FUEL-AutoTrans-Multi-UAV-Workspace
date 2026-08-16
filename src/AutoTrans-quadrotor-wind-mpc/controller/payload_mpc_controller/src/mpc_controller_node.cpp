@@ -43,7 +43,7 @@ int main(int argc, char **argv)
                                          ros::VoidConstPtr(),
                                          ros::TransportHints().tcpNoDelay());
 
-    // MAVROS 融合里程计只向外力估计器提供姿态四元数；NMPC 状态仍由上面的 FAST-LIO odom 提供。
+    // FAST-LIO odom 提供平移状态；MAVROS 融合里程计为 NMPC、推力模型和外力估计提供姿态。
     ros::Subscriber force_attitude_odom_sub =
         nh.subscribe<nav_msgs::Odometry>("force_attitude_odom",
                                          100,

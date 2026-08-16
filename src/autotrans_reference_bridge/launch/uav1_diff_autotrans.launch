@@ -1,16 +1,16 @@
 <launch>
   <!-- CAV1 单机集成入口：传感器/MAVROS 由 start_autotrans_quad_wind_lidar.sh 启动。 -->
-  <!-- NMPC 状态来源：FAST-LIO 高频预测里程计，提供 camera_init 世界系位置、速度和机体姿态。 -->
+  <!-- NMPC 平移状态来源：FAST-LIO 高频预测里程计，提供 camera_init 世界系位置和速度。 -->
   <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
-  <!-- Diff-Planner 与 NMPC 统一使用 FAST-LIO 高频预测里程计，避免两套状态源产生时刻偏差。 -->
+  <!-- Diff-Planner 与 NMPC 平移状态统一使用 FAST-LIO 高频预测里程计。 -->
   <arg name="planner_odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
   <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
   <arg name="frame_id" default="UAV1/camera_init"/>
   <!-- 外力估计使用 PX4/MAVROS 已对齐到机体系的 IMU：加速度单位 m/s^2，角速度单位 rad/s。 -->
   <arg name="imu_topic" default="/UAV1/mavros/imu/data"/>
-  <!-- 外力估计姿态与 NMPC 统一使用 FAST-LIO 高频预测里程计。 -->
-  <arg name="force_attitude_odom_topic" default="$(arg odom_topic)"/>
+  <!-- NMPC、推力模型与外力估计统一使用 PX4/MAVROS 融合姿态，不回退 FAST-LIO 姿态。 -->
+  <arg name="force_attitude_odom_topic" default="/UAV1/mavros/local_position/odom"/>
   <arg name="state_topic" default="/UAV1/mavros/state"/>
   <arg name="extended_state_topic" default="/UAV1/mavros/extended_state"/>
   <arg name="rc_topic" default="/UAV1/mavros/rc/in"/>
@@ -53,7 +53,7 @@
     <param name="frame_id" value="$(arg frame_id)"/>
   </node>
 
-  <!-- AutoTrans 直接订阅 FAST-LIO /Odometry，只发布唯一的 attitude setpoint。 -->
+  <!-- AutoTrans 使用 FAST-LIO 平移状态 + MAVROS 姿态，只发布唯一的 attitude setpoint。 -->
   <include if="$(arg enable_controller)" file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>

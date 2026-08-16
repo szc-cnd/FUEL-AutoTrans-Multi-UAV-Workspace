@@ -100,7 +100,7 @@ namespace PayloadMPC
 
 		if (auto_state && (!odom_is_received(now_time) || !odom_state_valid()))
 		{
-			enter_odom_failsafe("FAST-LIO 里程计超时或数据无效");
+			enter_odom_failsafe("FAST-LIO 平移状态或 MAVROS 姿态未接收/无效");
 			publish_failsafe_hold(now_time);
 			return;
 		}
@@ -124,7 +124,7 @@ namespace PayloadMPC
 			return;
 		}
 
-		setEstimateState(odom_data);
+		setEstimateState(odom_data, force_attitude_odom_data);
 		if (mpc_recovery_active_ || direct_auto_land_active_)
 		{
 			fq_estimated_.setZero();
@@ -528,7 +528,7 @@ namespace PayloadMPC
 		{
 			// 发布后再匹配历史命令；门控恢复时队列只有新样本，因此至少等待 35 ms 才会更新。
 			controller_.estimateThrustModel(
-				imu_data.a, odom_data.q, rpm_data.rpm_vec, bat_data.volt, params_);
+				imu_data.a, force_attitude_odom_data.q, rpm_data.rpm_vec, bat_data.volt, params_);
 		}
 		else
 		{
@@ -610,7 +610,7 @@ namespace PayloadMPC
 				{
 					// 只有完整轨迹正常结束时才使用缓存的轨迹终点；中止、空队列和异常均停在当前位置。
 					hover_pose_ = trajectory_data.last_end_position;
-					hover_yaw_ = get_yaw_from_quaternion(odom_data.q);
+					hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
 				}
 				else
 				{
@@ -689,29 +689,30 @@ namespace PayloadMPC
 		}
 	}
 
-	void MPCFSM::setEstimateState(const Odom_Data_t &odom_est_state)
+	void MPCFSM::setEstimateState(const Odom_Data_t &translation_odom,
+							  const Odom_Data_t &attitude_odom)
 	{
-		const double q_norm = odom_est_state.q.norm();
-		if (!odom_est_state.p.allFinite() || !odom_est_state.v.allFinite() ||
-			!odom_est_state.q.coeffs().allFinite() || !std::isfinite(q_norm) || q_norm <= 1.0e-6)
+		const double q_norm = attitude_odom.q.norm();
+		if (!translation_odom.p.allFinite() || !translation_odom.v.allFinite() ||
+			!attitude_odom.q.coeffs().allFinite() || !std::isfinite(q_norm) || q_norm <= 1.0e-6)
 		{
-			// 无效状态不进入求解器；使用单位姿态作为有限占位，真正的自动状态会在 process() 开头触发安全保护。
+			// 无效组合状态不进入求解器；自动状态会在 process() 开头触发安全保护。
 			est_state_.setZero();
 			est_state_(kOriW) = 1.0;
 			return;
 		}
-		est_state_(kPosX) = odom_est_state.p[0];
-		est_state_(kPosY) = odom_est_state.p[1];
-		est_state_(kPosZ) = odom_est_state.p[2];
-		auto rot_q = odom_est_state.q;
+		est_state_(kPosX) = translation_odom.p[0];
+		est_state_(kPosY) = translation_odom.p[1];
+		est_state_(kPosZ) = translation_odom.p[2];
+		auto rot_q = attitude_odom.q;
 		rot_q.normalize();
 		est_state_(kOriW) = rot_q.w();
 		est_state_(kOriX) = rot_q.x();
 		est_state_(kOriY) = rot_q.y();
 		est_state_(kOriZ) = rot_q.z();
-		est_state_(kVelX) = odom_est_state.v[0];
-		est_state_(kVelY) = odom_est_state.v[1];
-		est_state_(kVelZ) = odom_est_state.v[2];
+		est_state_(kVelX) = translation_odom.v[0];
+		est_state_(kVelY) = translation_odom.v[1];
+		est_state_(kVelZ) = translation_odom.v[2];
 	}
 
 	void MPCFSM::addNewForceObseverState()
@@ -775,7 +776,7 @@ namespace PayloadMPC
 			clearForceObserverState();
 			return;
 		}
-		// 加速度来自 MAVROS IMU 机体系；姿态默认与 NMPC 共用 FAST-LIO 高频里程计。
+		// 加速度来自 MAVROS IMU 机体系；姿态与 NMPC 共用 MAVROS local odom。
 		// 两个传感器的机体系安装偏差必须在标定中消除，否则会形成虚假外力分量。
 		force_estimator_.setSystemState(
 			imu_data.filtered_a, force_attitude_odom_data.q, rpm_data.filtered_rpm);
@@ -927,9 +928,10 @@ namespace PayloadMPC
 
 	bool MPCFSM::odom_state_valid() const
 	{
-		const double q_norm = odom_data.q.norm();
+		const double q_norm = force_attitude_odom_data.q.norm();
 		return odom_data.p.allFinite() && odom_data.v.allFinite() &&
-			odom_data.q.coeffs().allFinite() && std::isfinite(q_norm) && q_norm > 1.0e-6;
+			force_attitude_odom_data.q.coeffs().allFinite() &&
+			std::isfinite(q_norm) && q_norm > 1.0e-6;
 	}
 
 	void MPCFSM::clear_autonomous_inputs()
@@ -971,7 +973,7 @@ namespace PayloadMPC
 		}
 
 		hover_pose_ = odom_data.p;
-		hover_yaw_ = get_yaw_from_quaternion(odom_data.q);
+		hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
 		last_set_hover_pose_time = now;
 		trajectory_data.blockTrajectoryAcceptance();
 		exec_traj_state_ = MPC_RECOVERY_HOVER;
@@ -1088,7 +1090,7 @@ namespace PayloadMPC
 		odom_failsafe_active_ = true;
 		odom_failsafe_deadline_ = ros::Time::now() + ros::Duration(0.3);
 		ROS_ERROR_THROTTLE(1.0,
-			"[安全] FAST-LIO 里程计失效（%s），停止 NMPC；最多保持最后安全 setpoint 0.3 s，随后停止发送，等待 PX4 OFFBOARD 失联保护。",
+			"[安全] 混合状态失效（%s），停止 NMPC；最多保持最后安全 setpoint 0.3 s，随后停止发送，等待 PX4 OFFBOARD 失联保护。",
 			reason == nullptr ? "unknown" : reason);
 	}
 
@@ -1305,7 +1307,8 @@ namespace PayloadMPC
 			return false;
 		}
 		if (!odom_data.p.allFinite() || !odom_data.v.allFinite() ||
-			!odom_data.q.coeffs().allFinite() || odom_data.q.norm() <= 1.0e-6 ||
+			!force_attitude_odom_data.q.coeffs().allFinite() ||
+			force_attitude_odom_data.q.norm() <= 1.0e-6 ||
 			!imu_data.filtered_a.allFinite() || !rpm_data.rpm_vec.allFinite() ||
 			rpm_data.rpm_vec.minCoeff() < 0.0)
 		{
@@ -1340,7 +1343,7 @@ namespace PayloadMPC
 		takeoff_requested_ = false;
 		takeoff_start_pose_ = odom_data.p;
 		takeoff_target_z_ = params_.takeoff_.target_z;
-		takeoff_start_yaw_ = get_yaw_from_quaternion(odom_data.q);
+		takeoff_start_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
 		takeoff_start_time_ = now;
 		last_set_hover_pose_time = now;
 		hover_pose_ = takeoff_start_pose_;
@@ -1364,7 +1367,7 @@ namespace PayloadMPC
 		// hover_pose_(1) = params_.pos_y_;
 		// hover_pose_(2) = params_.takeoff_height_;
 
-		hover_yaw_ = get_yaw_from_quaternion(odom_data.q);
+		hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
 	}
 
 	void MPCFSM::update_mode_hover_pose()
@@ -1382,7 +1385,7 @@ namespace PayloadMPC
 			params_.fixed_hover_.y,
 			params_.fixed_hover_.z;
 		// 只固定 ENU 世界系位置；期望 yaw 保持切入时的当前航向，避免同时产生偏航阶跃。
-		hover_yaw_ = get_yaw_from_quaternion(odom_data.q);
+		hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
 		ROS_INFO("[AUTO_HOVER] 固定悬停参考：位置=(%.3f, %.3f, %.3f) m，yaw=%.3f rad。",
 			 hover_pose_.x(), hover_pose_.y(), hover_pose_.z(), hover_yaw_);
 	}
@@ -1493,7 +1496,9 @@ namespace PayloadMPC
 
 	bool MPCFSM::odom_is_received(const ros::Time &now_time) const
 	{
-		return (now_time - odom_data.rcv_stamp).toSec() < params_.msg_timeout_.odom;
+		(void)now_time;
+		return !odom_data.rcv_stamp.isZero() &&
+			!force_attitude_odom_data.rcv_stamp.isZero();
 	}
 
 	bool MPCFSM::imu_is_received(const ros::Time &now_time) const
