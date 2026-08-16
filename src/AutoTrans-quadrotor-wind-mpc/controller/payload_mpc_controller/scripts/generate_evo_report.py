@@ -12,11 +12,22 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import datetime
 
 
 ACTION_ADD = 1
 TERMINATING_ACTIONS = {2, 5}
 REPORT_DIR_NAME = "evo_report"
+SUMMARY_FILE_NAME = "summary.md"
+APE_STAT_LABELS = {
+    "max": "最大误差",
+    "mean": "平均误差",
+    "median": "中位数误差",
+    "min": "最小误差",
+    "rmse": "均方根误差（RMSE）",
+    "sse": "误差平方和（SSE）",
+    "std": "误差标准差",
+}
 
 
 def finite_float(value):
@@ -186,6 +197,84 @@ def promote_evo_plot(base_path, preferred_suffix, discard_suffixes=()):
             os.remove(extra_path)
 
 
+def format_local_time(timestamp):
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_ape_stats(stats_path):
+    stats = {}
+    with open(stats_path) as stats_file:
+        for line in stats_file:
+            fields = line.split()
+            if len(fields) >= 2 and fields[0].lower() in APE_STAT_LABELS:
+                value = finite_float(fields[1])
+                if value is not None:
+                    stats[fields[0].lower()] = value
+    return stats
+
+
+def localize_error(error):
+    if not error:
+        return "未知错误"
+    if "no rows contain both odometry and reference positions" in error:
+        return "没有同时包含有效里程计和参考位置的数据行。"
+    if "no samples fall inside a valid planned trajectory interval" in error:
+        return "没有样本落在有效的规划执行区间内。"
+    if "evo is not installed" in error:
+        return "未安装 evo；请执行 `python3 -m pip install --user evo`。"
+    if "command failed with exit code" in error:
+        return "evo 命令执行失败：%s" % error
+    return error
+
+
+def write_summary(summary_path, status, run_dir, full_samples=0, active_samples=0,
+                  intervals=(), ape_stats=None, error=None):
+    ape_stats = ape_stats or {}
+    with open(summary_path, "w") as summary:
+        summary.write("# Evo 轨迹分析摘要\n\n")
+        summary.write("## 运行信息\n\n")
+        summary.write("- 状态：%s\n" % ("成功" if status == "success" else "失败"))
+        summary.write("- 运行目录：`%s`\n" % run_dir)
+        summary.write("- 全程有效样本：%d\n" % full_samples)
+        summary.write("- 规划区间有效样本：%d\n" % active_samples)
+        if intervals:
+            interval_text = "；".join(
+                "%s 至 %s" % (format_local_time(start), format_local_time(end))
+                for start, end in intervals)
+            summary.write("- 规划执行区间：%s\n" % interval_text)
+        else:
+            summary.write("- 规划执行区间：无有效区间\n")
+
+        if status == "success":
+            summary.write("\n## 位置误差\n\n")
+            summary.write("- 误差类型：平移误差\n")
+            summary.write("- 轨迹对齐：未对齐\n")
+            summary.write("- 统计范围：仅统计规划执行区间\n")
+            for key, label in APE_STAT_LABELS.items():
+                if key in ape_stats:
+                    value = ape_stats[key]
+                    if key == "sse":
+                        summary.write("- %s：%.6f m²（%.2f cm²）\n" %
+                                      (label, value, value * 10000.0))
+                    else:
+                        summary.write("- %s：%.6f m（%.2f cm）\n" %
+                                      (label, value, value * 100.0))
+        else:
+            summary.write("\n## 失败原因\n\n")
+            summary.write("- %s\n" % localize_error(error))
+            summary.write("- 建议检查 report.log、CSV 数据和 evo 安装状态。\n")
+
+        summary.write("\n## 输出文件\n\n")
+        for filename, label in (
+                ("trajectory_full_xy.png", "全程 XY 轨迹"),
+                ("trajectory_full_xyz.png", "全程 XYZ 轨迹"),
+                ("ape_active.png", "规划区间位置误差图"),
+                ("ape_active_stats.txt", "evo 原始误差统计"),
+                ("report.log", "evo 原始命令和输出"),
+        ):
+            summary.write("- %s：`%s`\n" % (label, filename))
+
+
 def generate_report(run_dir, setpoint_csv_path=None, trajectory_csv_path=None,
                     evo_traj_command=None, evo_ape_command=None, timeout=60.0):
     run_dir = os.path.abspath(os.path.expanduser(run_dir))
@@ -198,6 +287,10 @@ def generate_report(run_dir, setpoint_csv_path=None, trajectory_csv_path=None,
     report_dir = os.path.join(run_dir, REPORT_DIR_NAME)
     os.makedirs(report_dir, exist_ok=True)
     report_log_path = os.path.join(report_dir, "report.log")
+    summary_path = os.path.join(report_dir, SUMMARY_FILE_NAME)
+    samples = []
+    active_samples = []
+    intervals = []
     with open(report_log_path, "w") as report_log:
         report_log.write("run_dir: %s\n" % run_dir)
         report_log.write("setpoint_csv: %s\n" % setpoint_csv_path)
@@ -290,9 +383,16 @@ def generate_report(run_dir, setpoint_csv_path=None, trajectory_csv_path=None,
                 os.path.join(report_dir, "ape_active.png"),
                 "_raw",
             )
+            ape_stats = parse_ape_stats(os.path.join(report_dir, "ape_active_stats.txt"))
+            write_summary(
+                summary_path, "success", run_dir, len(samples), len(active_samples),
+                intervals, ape_stats=ape_stats)
             report_log.write("status: success\n")
             return report_dir
         except Exception as exc:
+            write_summary(
+                summary_path, "failed", run_dir, len(samples), len(active_samples),
+                intervals, error=str(exc))
             report_log.write("status: failed\n")
             report_log.write("error: %s\n" % exc)
             raise

@@ -91,7 +91,14 @@ class EvoReportTest(unittest.TestCase):
                   "trajectory_id": 1, "action": 1, "duration": 1.0}],
             )
 
-            completed = subprocess.CompletedProcess([], 0, stdout="rmse 0.1\n")
+            completed = subprocess.CompletedProcess([], 0, stdout=(
+                "max 0.079710\n"
+                "mean 0.032907\n"
+                "median 0.030445\n"
+                "min 0.000073\n"
+                "rmse 0.036563\n"
+                "sse 6.494604\n"
+                "std 0.015938\n"))
             def fake_run(command, **_kwargs):
                 plot_path = pathlib.Path(command[command.index("--save_plot") + 1])
                 plot_path.write_bytes(b"fake png")
@@ -117,10 +124,23 @@ class EvoReportTest(unittest.TestCase):
             self.assertEqual(
                 len((pathlib.Path(output) / "reference_active.tum").read_text().splitlines()), 2)
             self.assertEqual(
-                (pathlib.Path(output) / "ape_active_stats.txt").read_text(), "rmse 0.1\n")
+                (pathlib.Path(output) / "ape_active_stats.txt").read_text(),
+                "max 0.079710\nmean 0.032907\nmedian 0.030445\nmin 0.000073\n"
+                "rmse 0.036563\nsse 6.494604\nstd 0.015938\n")
             for filename in (
                     "trajectory_full_xy.png", "trajectory_full_xyz.png", "ape_active.png"):
                 self.assertTrue((pathlib.Path(output) / filename).is_file())
+            summary = (pathlib.Path(output) / "summary.md").read_text()
+            self.assertIn("# Evo 轨迹分析摘要", summary)
+            self.assertIn("状态：成功", summary)
+            self.assertIn("全程有效样本：3", summary)
+            self.assertIn("规划区间有效样本：2", summary)
+            for label in ("最大误差", "平均误差", "中位数误差", "最小误差",
+                          "均方根误差（RMSE）", "误差平方和（SSE）", "误差标准差"):
+                self.assertIn(label, summary)
+            self.assertIn("最大误差：0.079710 m（7.97 cm）", summary)
+            self.assertIn("均方根误差（RMSE）：0.036563 m（3.66 cm）", summary)
+            self.assertIn("误差平方和（SSE）：6.494604 m²（64946.04 cm²）", summary)
 
     def test_missing_active_interval_leaves_failure_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -142,6 +162,9 @@ class EvoReportTest(unittest.TestCase):
                 REPORT.generate_report(run_dir)
             failure_log = (run_dir / "evo_report" / "report.log").read_text()
             self.assertIn("status: failed", failure_log)
+            failure_summary = (run_dir / "evo_report" / "summary.md").read_text()
+            self.assertIn("状态：失败", failure_summary)
+            self.assertIn("没有样本落在有效的规划执行区间内", failure_summary)
 
     def test_missing_evo_leaves_install_hint_in_failure_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -165,6 +188,39 @@ class EvoReportTest(unittest.TestCase):
                     REPORT.generate_report(run_dir)
             failure_log = (run_dir / "evo_report" / "report.log").read_text()
             self.assertIn("python3 -m pip install --user evo", failure_log)
+            failure_summary = (run_dir / "evo_report" / "summary.md").read_text()
+            self.assertIn("状态：失败", failure_summary)
+            self.assertIn("未安装 evo", failure_summary)
+
+    def test_evo_command_failure_writes_chinese_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = pathlib.Path(temp_dir) / "run"
+            run_dir.mkdir()
+            self.write_csv(
+                run_dir / "run_setpoint.csv",
+                ["stamp", "odom_x", "odom_y", "odom_z", "ref_x", "ref_y", "ref_z"],
+                [{"stamp": 1, "odom_x": 0, "odom_y": 0, "odom_z": 0,
+                  "ref_x": 0, "ref_y": 0, "ref_z": 0}],
+            )
+            self.write_csv(
+                run_dir / "trajectory.csv",
+                ["received_stamp", "header_stamp", "trajectory_id", "action", "duration"],
+                [{"received_stamp": 1, "header_stamp": 1, "trajectory_id": 1,
+                  "action": 1, "duration": 1}],
+            )
+
+            failed = subprocess.CompletedProcess([], 2, stdout="evo failed\n")
+            with mock.patch.object(REPORT.subprocess, "run", return_value=failed):
+                with self.assertRaisesRegex(RuntimeError, "command failed with exit code 2"):
+                    REPORT.generate_report(
+                        run_dir,
+                        evo_traj_command="/fake/evo_traj",
+                        evo_ape_command="/fake/evo_ape",
+                    )
+
+            failure_summary = (run_dir / "evo_report" / "summary.md").read_text()
+            self.assertIn("状态：失败", failure_summary)
+            self.assertIn("evo 命令执行失败", failure_summary)
 
 
 if __name__ == "__main__":
