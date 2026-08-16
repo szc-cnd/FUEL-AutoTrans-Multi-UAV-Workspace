@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -163,6 +164,7 @@ class AutoTransMpcLogger:
         self.rosbag_process = None
         self.rosbag_console_file = None
         self.enable_rosbag = bool(rospy.get_param("~enable_rosbag", True))
+        self.enable_evo_report = bool(rospy.get_param("~enable_evo_report", True))
         self.rosbag_topics = normalize_rosbag_topics(
             rospy.get_param("~rosbag_topics", []))
 
@@ -230,6 +232,7 @@ class AutoTransMpcLogger:
         self.write_text("trajectory.csv data: original polynomial coefficient array, JSON encoded")
         self.write_text("planner_trajectory.csv: raw Diff-Planner traj_utils/PolyTraj")
         self.write_text("planner_trajectory.csv arrays: JSON encoded without coefficient reordering")
+        self.write_text("evo_report_enabled: %s" % str(self.enable_evo_report).lower())
 
         setpoint_topic = rospy.get_param("~setpoint_topic", "/mavros/setpoint_raw/attitude")
         odom_topic = rospy.get_param("~odom_topic", "/mavros/local_position/odom")
@@ -342,6 +345,46 @@ class AutoTransMpcLogger:
             self.rosbag_console_file.flush()
             self.rosbag_console_file.close()
             self.rosbag_console_file = None
+
+    def generate_evo_report(self):
+        """原始日志关闭后同步生成报告；失败不能阻断 logger 退出。"""
+        if not self.enable_evo_report:
+            return
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "generate_evo_report.py")
+        command = [
+            sys.executable,
+            script_path,
+            "--run-dir",
+            self.run_dir,
+            "--setpoint-csv",
+            self.csv_path,
+            "--trajectory-csv",
+            self.trajectory_path,
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                timeout=60.0,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            rospy.logwarn("[autotrans_mpc_logger] evo report failed: %s", exc)
+            return
+
+        output = (result.stdout or "").strip()
+        if result.returncode == 0:
+            rospy.loginfo("[autotrans_mpc_logger] %s", output)
+        else:
+            rospy.logwarn(
+                "[autotrans_mpc_logger] evo report exited with code %d: %s",
+                result.returncode,
+                output,
+            )
 
     def odom_cb(self, msg):
         self.latest_odom = msg
@@ -711,6 +754,7 @@ class AutoTransMpcLogger:
         self.csv_file.close()
         self.text_file.flush()
         self.text_file.close()
+        self.generate_evo_report()
 
 
 if __name__ == "__main__":

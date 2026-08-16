@@ -103,6 +103,7 @@ target_link_libraries(mpc_controller_node
 
 catkin_install_python(PROGRAMS
   scripts/autotrans_mpc_logger.py
+  scripts/generate_evo_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 LOGGER = ROOT / "controller" / "payload_mpc_controller" / "scripts" / "autotrans_mpc_logger.py"
 LAUNCH = ROOT / "controller" / "payload_mpc_controller" / "launch" / "quad_wind_mpc_controller.launch"
+CMAKE = ROOT / "controller" / "payload_mpc_controller" / "CMakeLists.txt"
 
 
 class TrajectoryLoggingStaticTest(unittest.TestCase):
@@ -46,6 +47,21 @@ class TrajectoryLoggingStaticTest(unittest.TestCase):
             csv_close,
             "主日志定时器必须在关闭 CSV 文件前停止",
         )
+
+    def test_evo_report_runs_after_csv_close_and_is_configurable(self):
+        logger_source = LOGGER.read_text(encoding="utf-8")
+        launch_source = LAUNCH.read_text(encoding="utf-8")
+        cmake_source = CMAKE.read_text(encoding="utf-8")
+        self.assertLess(
+            logger_source.index("self.csv_file.close()"),
+            logger_source.index("self.generate_evo_report()"),
+        )
+        self.assertIn('arg name="enable_evo_report" default="true"', launch_source)
+        self.assertIn(
+            'param name="enable_evo_report" value="$(arg enable_evo_report)"',
+            launch_source,
+        )
+        self.assertIn("scripts/generate_evo_report.py", cmake_source)
 
 
 if __name__ == "__main__":

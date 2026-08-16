@@ -29,6 +29,8 @@
 
   <!-- Logger only records data; it does not arm, switch OFFBOARD, or change setpoints. -->
   <arg name="enable_logger" default="true"/>
+  <!-- Logger 退出后在本次日志目录中自动生成无界面的 evo 报告。 -->
+  <arg name="enable_evo_report" default="true"/>
   <!-- rosbag 由 logger 管理，因此与 CSV/文本日志共用同一个运行目录。 -->
   <arg name="enable_rosbag" default="true"/>
   <arg name="log_dir" default="$(env HOME)/.ros/autotrans_mpc_logs"/>
@@ -87,6 +89,7 @@
     <param name="setpoint_timeout" value="$(arg setpoint_timeout)"/>
     <param name="log_all_rosout" value="$(arg log_all_rosout)"/>
     <param name="enable_rosbag" value="$(arg enable_rosbag)"/>
+    <param name="enable_evo_report" value="$(arg enable_evo_report)"/>
     <param name="setpoint_topic" value="$(arg setpoint_topic)"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
     <param name="goal_topic" value="$(arg goal_topic)"/>
