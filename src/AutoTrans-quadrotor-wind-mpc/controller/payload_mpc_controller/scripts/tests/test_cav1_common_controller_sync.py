@@ -47,11 +47,19 @@ def test_cav1_vehicle_parameters_match_latest_hover_calibration():
     model_config = MODEL_CONFIG.read_text(encoding="utf-8")
     assert "mass_q: 1.817" in model_config
     for token in (
-        "kf: 1.84e-8",
         "hover_percentage: 0.54",
         "target_z: 0.5",
         "climb_rate: 0.15",
+        "Q_pos_xy:   220.0",
+        "R_pitchroll:  6.0",
         "max_velocity_xy: 0.5",
-        "max_velocity_z: 0.3",
+        "max_velocity_z: 0.5",
+        "kf: 1.790e-8",
+        "force_axis_gain_x: 1.0",
+        "force_axis_gain_y: 1.0",
+        "force_axis_gain_z: 1.0",
+        "max_force: 5.0",
+        "max_applied_force: 5.0",
+        "mpc_recovery_timeout: 1.0",
     ):
         assert token in config

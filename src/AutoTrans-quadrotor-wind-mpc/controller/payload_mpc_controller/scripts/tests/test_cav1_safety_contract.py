@@ -23,7 +23,7 @@ def test_velocity_limits_are_configured_and_forwarded():
     assert "params_.max_velocity_xy_" in controller
     assert "params_.max_velocity_z_" in controller
     assert "max_velocity_xy: 0.5" in yaml
-    assert "max_velocity_z: 0.3" in yaml
+    assert "max_velocity_z: 0.5" in yaml
 
 
 def test_solver_exposes_three_affine_velocity_constraints_and_runtime_overrides_them():
@@ -74,7 +74,7 @@ def test_nmpc_recovery_latches_hover_and_gates_trajectories():
     assert "trajectory_data.allowTrajectoryAcceptanceAfter(now);" in fsm
     assert "resetForHover" in fsm
     assert "mpc_recovery_success_cycles" in params
-    assert "mpc_recovery_timeout: 0.5" in yaml
+    assert "mpc_recovery_timeout: 1.0" in yaml
     assert "mpc_recovery_success_cycles: 1" in yaml
     assert "trajectory_acceptance_enabled" in input_h
     assert "pMsg->header.stamp <= accept_trajectory_after" in input_cpp

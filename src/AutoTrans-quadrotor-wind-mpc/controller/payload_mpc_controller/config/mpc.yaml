@@ -5,7 +5,7 @@ use_fix_yaw: false   # using fix yaw.
 
 # Cost on states
 # 室内低速首轮保守权重：降低位置/速度追赶强度，提高横滚俯仰动作代价。
-Q_pos_xy:   250.0    # 增强水平位置跟踪，同时仍低于原 250 的激进配置。
+Q_pos_xy:   220.0    # 增强水平位置跟踪，同时仍低于原 250 的激进配置。
 Q_pos_z:  250.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # Cost on Inputs
 R_thrust:    0.75  # Cost on thrust input            //default: 1
-R_pitchroll:  2.0   # 提高横滚/俯仰角速度动作代价。
+R_pitchroll:  6.0   # 提高横滚/俯仰角速度动作代价。
 R_yaw:        0.75      # Cost on yaw ratte
 
 # Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
@@ -38,7 +38,7 @@ max_bodyrate_z:     0.5         # 连续轨迹偏航的最大角速度 [rad/s]
 min_thrust:         1.0
 max_thrust:         29.5
 # NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
-max_velocity_xy: 0.4
+max_velocity_xy: 0.5
 max_velocity_z: 0.5
 
 # use ending pos for better ending tracking performance)
@@ -95,7 +95,7 @@ filter:
 force_estimator: # *
     # kf 将 CAV1 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；
     # 由 1.817 kg 实机稳定悬停日志反算，用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
-    kf: 1.84e-8
+    kf: 1.790e-8
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
@@ -107,19 +107,19 @@ force_estimator: # *
     # 运行并记录世界系三轴外力估计 f_Q；是否写入 NMPC 由补偿总开关和三轴增益共同决定。
     enable_force_estimation: true
     enable_disturbance_compensation: true
-    # 实际写入 NMPC 的世界系三轴补偿增益；当前只启用 Z 轴补偿。
-    force_axis_gain_x: 0.0
-    force_axis_gain_y: 0.0
+    # 实际写入 NMPC 的世界系三轴补偿增益；当前启用 XYZ 三轴补偿。
+    force_axis_gain_x: 1.0
+    force_axis_gain_y: 1.0
     force_axis_gain_z: 1.0
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
     min_valid_rpm: 1000.0
     # 外力估计结果的世界系三维模长上限，单位 N；用于保留并记录较大的风扰峰值。
-    max_force: 4.0
+    max_force: 5.0
     # 实际写入 NMPC OnlineData 的世界系三维补偿力模长上限，单位 N。
-    # 当前按实机试验选择设为 4 N；它与估计限幅独立，后续可单独降低。
-    max_applied_force: 4.0
+    # 当前按实机试验选择设为 5 N；它与估计限幅独立，后续可单独降低。
+    max_applied_force: 5.0
     # 外力观察器每 10 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
     # max_queue/force_observer_freq 决定滑动窗口时长：20/100 = 0.2 s。
     max_queue: 20
@@ -167,7 +167,7 @@ land:
 
 safety:
     # NMPC 首次失败后，在锁存位置尝试恢复求解的最长时间，单位 s。
-    mpc_recovery_timeout: 0.5
+    mpc_recovery_timeout: 1.0
     # 一次完整成功且输出有限的求解后，请求 Diff 从最新里程计重新规划。
     mpc_recovery_success_cycles: 1
     # 恢复超时后请求 PX4 AUTO.LAND 的重试周期，单位 s。
