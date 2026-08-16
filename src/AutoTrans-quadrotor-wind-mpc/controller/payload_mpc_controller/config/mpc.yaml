@@ -1,14 +1,14 @@
 # 普通四旋翼 + PX4/MAVROS 实机链路应设为 false：
-# NMPC 内部推力 T 的单位是 N，发布到 MAVROS AttitudeTarget.thrust 前会转为归一化 thrust。
+# NMPC 内部推力 T 的单位是 N，发布到 MAVROS AttitudeTarget.thrust 前会转为归一化推力。
 use_simulation: false
-use_fix_yaw: false   # using fix yaw.
+use_fix_yaw: false   # 是否固定偏航角。
 
-# Cost on states
+# 状态代价
 # 室内低速首轮保守权重：降低位置/速度追赶强度，提高横滚俯仰动作代价。
 Q_pos_xy:   220.0    # 增强水平位置跟踪，同时仍低于原 250 的激进配置。
-Q_pos_z:  250.0    # Cost for horizontal positon error //default: 200     0.5
-Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
-Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
+Q_pos_z:  250.0    # 垂直位置误差代价。
+Q_attitude_rp:  120.0   # 横滚和俯仰姿态误差代价。
+Q_attitude_yaw:  120.0    # 偏航姿态误差代价。
 Q_velocity:  15.0   # 降低速度参考变化引起的姿态冲击。
 
 # 以下 payload/cable 权重仅为兼容旧参数读取保留；普通四旋翼 NMPC 的 10 维状态不使用这些项。
@@ -18,40 +18,40 @@ Q_payload_velocity: 3.0
 Q_cable: 0.0
 Q_dcable: 0.0
 
-# Cost on Inputs
-R_thrust:    0.75  # Cost on thrust input            //default: 1
+# 输入代价
+R_thrust:    0.75  # 推力输入代价。
 R_pitchroll:  6.0   # 提高横滚/俯仰角速度动作代价。
-R_yaw:        0.75      # Cost on yaw ratte
+R_yaw:        0.75      # 偏航角速度输入代价。
 
-# Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
-# cost_scaling = 0 means no scaling W_i = W.
-state_cost_exponential: 0.5     # Scaling for state costs
-input_cost_exponential: 0.5     # scaling for input costs
+# 指数缩放：W_i = W * exp(-i/N * cost_scaling)。
+# cost_scaling = 0 表示不缩放，此时 W_i = W。
+state_cost_exponential: 0.5     # 状态代价指数缩放系数。
+input_cost_exponential: 0.5     # 输入代价指数缩放系数。
 
-# Limits for inputs
+# 输入限制
 # body_rate.x/y 是发给 MAVROS/PX4 的机体系角速度命令，单位 rad/s。
 max_bodyrate_xy:    1.5       # 室内低速飞行限制横滚/俯仰角速度冲击 [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
 max_bodyrate_z:     0.5         # 连续轨迹偏航的最大角速度 [rad/s]
-# min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
-# 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
+# min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化推力。
+# 对 1.817 kg、g=9.795、hover_percentage=0.54，29.5 N 标称约对应归一化推力 0.895。
 min_thrust:         1.0
 max_thrust:         29.5
 # NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
 max_velocity_xy: 0.5
 max_velocity_z: 0.5
 
-# use ending pos for better ending tracking performance)
+# 是否使用轨迹终点位置以改善末端跟踪性能。
 use_trajectory_ending_pos: true
 
-# Print information such as timing to terminal
+# 是否在终端打印包括计算耗时在内的诊断信息。
 print_info:   false
 
 # AutoTrans 主控制循环的设定频率，单位 Hz；决定状态机处理、NMPC 求解和 MAVROS 控制指令更新的目标频率。
 # 实际执行频率可能受 NMPC 计算耗时和 ROS 回调调度影响而低于该值。
 ctrl_freq_max: 100.0
 
-# control fsm param for real-world experiments
+# 实机实验使用的控制状态机参数
 max_manual_vel: 1.0
 # AUTO_HOVER 中是否允许 CH1~CH4 按 max_manual_vel 积分移动悬停参考点。
 # 注意 CH3 在这里表示高度参考速度，不是电机油门；非回中油门杆应保持 false。
@@ -66,9 +66,10 @@ fixed_hover:
     y: 0.0
     z: 0.5
 
-max_angle: 30  # Attitude angle limit in degree. A negative value means no limit.
-# 源码值 -0.1 等价于基本关闭低电压保护；实飞前应按你的电池节数和最低安全电压设置。
-low_voltage: -0.1 # 4S battery
+# 当前仅读取该参数，尚未接入控制状态机；数值单位为度，负值表示不限制。
+max_angle: 30
+# 当前版本未接入低电压自动保护；-0.1 表示禁用。实飞前应按电池节数和最低安全电压设置。
+low_voltage: -0.1 # 四芯电池
 
 filter:
     # /mavros/imu/data 实测为 200 Hz；加速度单位 m/s^2、角速度单位 rad/s，均为机体系数据。
@@ -85,7 +86,8 @@ filter:
     sample_freq_dcable: 400.0
 
     cutoff_freq_quad_acc: 20.0
-    cutoff_freq_quad_omg: 20.0 #0.0 means no filter
+    # 截止频率必须满足 0 < cutoff_freq < sample_freq / 2；0 或非法值会禁用滤波器。
+    cutoff_freq_quad_omg: 20.0
     cutoff_freq_load_acc: 20.0
     cutoff_freq_load_omg: 20.0
     cutoff_freq_rpm: 20.0
@@ -94,13 +96,13 @@ filter:
 
 force_estimator: # *
     # kf 将 CAV1 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；
-    # 由 1.817 kg 实机稳定悬停日志反算，用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    # 由 1.817 kg 实机稳定悬停日志反算，用于世界系外力估计和推力模型模式 1 的 RPM 推力反馈。
     kf: 1.790e-8
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
     sample_freq_fl: 400.0
-    # 当前保留源码 0.0；若 f_Q 抖动，后续建议改为 5~10 Hz 低通。
+    # 当前使用 3 Hz 低通，以降低 IMU/RPM 噪声，但会增加估计延迟。
     cutoff_freq_fq: 3.0  # 世界系外力估计 f_Q 的低通截止频率，单位 Hz；降低 IMU/RPM 噪声，但会增加估计延迟
     cutoff_freq_fl: 0.0
     imu_body_length: 0.66844507
@@ -115,10 +117,10 @@ force_estimator: # *
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
     min_valid_rpm: 1000.0
-    # 外力估计结果的世界系三维模长上限，单位 N；用于保留并记录较大的风扰峰值。
+    # 外力估计结果的世界系三维模长上限，单位 N；超过该值的估计结果会被截断。
     max_force: 5.0
     # 实际写入 NMPC OnlineData 的世界系三维补偿力模长上限，单位 N。
-    # 当前按实机试验选择设为 5 N；它与估计限幅独立，后续可单独降低。
+    # 当前按实机试验选择设为 5 N；必须满足 max_applied_force <= max_force。
     max_applied_force: 5.0
     # 外力观察器每 10 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
     # max_queue/force_observer_freq 决定滑动窗口时长：20/100 = 0.2 s。
@@ -173,18 +175,18 @@ safety:
     # 恢复超时后请求 PX4 AUTO.LAND 的重试周期，单位 s。
     auto_land_retry_period: 1.0
 
-thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 thrust。
-    # 初次模式 1 实机验证时以 1 Hz 打印在线 thrustscale、悬停比例和 RPM 推力。
+thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化推力。
+    # 初次模式 1 实机验证时以 1 Hz 打印在线推力比例、悬停比例和 RPM 推力。
     print_value: true
     accurate_thrust_model: 1
-    # 0 means use the scale factor to map thrust to commmand without online calibration
-    # 1 means use the scale factor to map thrust to commmand with online calibration(use the rotor speed to calibrate the scale factor)
+    # 0：使用固定比例将推力映射为控制指令，不进行在线标定。
+    # 1：使用比例将推力映射为控制指令，并根据电机转速在线标定该比例。
     # 原工程模式 2 依赖负载/电缆动力学；普通四旋翼版本已禁止该模式，配置为 2 时节点拒绝启动。
-    # approximate thrust mapping parameters
-    # CAV1 1.817 kg 实机稳定悬停归一化推力；这是 MAVROS/PX4 thrust 比例，不是牛顿力。
+    # 近似推力映射参数。
+    # CAV1 1.817 kg 实机稳定悬停归一化推力；这是 MAVROS/PX4 推力比例，不是牛顿力。
     # 模式 0 固定使用该映射，模式 1 将其作为在线学习初值。
     hover_percentage: 0.54
-    # RLS 新估计对 thrustscale 的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
+    # RLS 新估计对推力比例的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
     filter_factor: 0.2
     # 模式 1 学习门限，单位 rpm；只影响在线推力映射，不改变外力估计器的 1000 rpm 门限。
     min_learning_rpm: 7000.0
@@ -192,7 +194,7 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     max_normalized_thrust: 0.8
     # 单次 RLS 更新允许的归一化悬停推力比例最大变化量。
     max_hover_percentage_step: 0.01
-    noisy_imu: false # *
+    noisy_imu: false # 是否使用带噪声的 IMU 模型。
 
 msg_timeout:
     # odom 与 force_attitude_odom 超时仅门控外力估计和在线推力模型，不触发 NMPC/OFFBOARD 退出。
@@ -200,6 +202,7 @@ msg_timeout:
     # force_attitude_odom（UAV1 默认 MAVROS local odom）提供全部控制姿态，单位 s。
     force_attitude_odom: 0.1
     rc:   0.5
+    # 当前仅读取并校验，尚未用于命令超时状态切换。
     cmd:  0.5
     imu:  0.5
     # /mavros/battery 实测约 0.5 Hz，允许最长 4 s 未更新，避免 AUTO_TAKEOFF 误判电池超时。

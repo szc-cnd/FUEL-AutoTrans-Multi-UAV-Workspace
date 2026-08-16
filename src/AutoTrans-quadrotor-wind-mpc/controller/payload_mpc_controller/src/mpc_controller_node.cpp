@@ -111,7 +111,7 @@ int main(int argc, char **argv)
     fsm.traj_start_trigger_pub = nh.advertise<geometry_msgs::PoseStamped>("/traj_start_trigger", 10);
     fsm.des_yaw_pub = nh.advertise<nav_msgs::Odometry>("/des_yaw_pub", 10);
 
-    // fsm.debug_pub = nh.advertise<quadrotor_msgs::Px4ctrlDebug>("/debugPx4ctrl", 10); // debug
+    // fsm.debug_pub = nh.advertise<quadrotor_msgs::Px4ctrlDebug>("/debugPx4ctrl", 10); // 调试话题。
 
     fsm.set_FCU_mode_srv = nh.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
     fsm.reboot_FCU_srv = nh.serviceClient<mavros_msgs::CommandLong>("/mavros/cmd/command");
@@ -144,11 +144,11 @@ int main(int argc, char **argv)
         ROS_WARN("[启动] 仿真模式未使用遥控器，请确认当前不是实机运行。");
     }
 
-    // Create a ROS timer for force observer
+    // 创建外力观察器 ROS 定时器。
     ros::Timer force_state_timer = nh.createTimer(ros::Duration(1.0 / param.force_estimator_param_.force_observer_freq), system_state_update_main);
-    // Create a ROS timer for controller
+    // 创建控制器 ROS 定时器。
     ros::Timer MPC_controller_main_timer = nh.createTimer(ros::Duration(1.0 / param.ctrl_freq_max_), MPC_controller_main);
-    // We DO NOT rely on feedback as trigger, since there is no significant performance difference through our test.
+    // 不使用反馈作为触发器；实测表明两种触发方式的性能没有明显差异。
 
     ros::spin();
 
