@@ -8,7 +8,7 @@
     <arg name="enable_rviz" default="true"/>
     <arg name="enable_ldop" default="true"/>
     <arg name="flight_type" default="2"/>
-    <arg name="point_num" default="4"/>
+    <arg name="point_num" default="5"/>
     <arg name="max_tracking_error" default="0.20"/>
     <arg name="enable_occupied_recovery" default="true"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
@@ -79,7 +79,7 @@
         <arg name="point0_x" value="3.1" />
         <arg name="point0_y" value="0.0" />
         <arg name="point0_z" value="0.6" />
-        <arg name="point1_x" value="5.15" />
+        <arg name="point1_x" value="5.1" />
         <arg name="point1_y" value="0" />
         <arg name="point1_z" value="0.6" />
         <arg name="point2_x" value="5.1" />
@@ -88,10 +88,10 @@
         <arg name="point3_x" value="5.1" />
         <arg name="point3_y" value="5.3" />
         <arg name="point3_z" value="0.6" />
-        <!-- advanced_param_exp.xml 固定声明到 point4；point_num=4 时该占位点不会执行。 -->
+        <!-- advanced_param_exp.xml 固定声明到 point4；point_num=5 时执行全部航点。 -->
         <arg name="point4_x" value="5.0" />
-        <arg name="point4_y" value="4.5" />
-        <arg name="point4_z" value="0.7" />
+        <arg name="point4_y" value="5.9" />
+        <arg name="point4_z" value="0.6" />
     </include>
 
     <!-- LDOP 与 Diff-Planner 共用 UAV1 FAST-LIO 输入；这里只启动检测节点，不启动 LDOP 自带 RViz。 -->

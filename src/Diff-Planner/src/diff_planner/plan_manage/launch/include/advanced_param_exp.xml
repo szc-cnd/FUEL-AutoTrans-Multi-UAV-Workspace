@@ -205,7 +205,7 @@
         <param name="manager/use_multitopology_trajs" value="false" type="bool"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
         <!-- trajectory optimization -->
-        <param name="optimization/constraint_points_perPiece" value="8" type="int"/>
+        <param name="optimization/constraint_points_perPiece" value="6" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>
         <param name="optimization/weight_obstacle_soft" value="10000.0" type="double"/>
         <param name="optimization/weight_swarm" value="10000.0" type="double"/>
