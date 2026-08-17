@@ -56,6 +56,19 @@ bash shfiles/start_uav0_search_landing_test.sh --flight
 实飞模式启动简单控制器。它会先持续发布 `0.60 m` 原地起飞/悬停设定点，但仍需操作者
 按照现场安全流程手动解锁并切换 `OFFBOARD`。
 
+确认无人机已经在 `0.60 m` 稳定悬停后，另开终端发送一次“已出通道”信号：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/match_ws/devel/setup.bash
+
+rostopic pub -1 /UAV0/mission/task_status std_msgs/String \
+  "data: 'SEARCH_OUTSIDE_LANDING'"
+```
+
+该信号会解开前视/下视 ArUco 阶段门控、激活搜索管理器，并把规划命令所有者锁存为
+Diff。重新测试必须人工接管、落地上锁并重启独立测试节点。
+
 需要临时修改悬停高度时使用：
 
 ```bash
@@ -213,18 +226,6 @@ rostopic echo /UAV0/fast_lio/Odometry
 
 第一条应接近 `50 Hz`。手动解锁并切换 `OFFBOARD` 后，通过第二条确认世界系 `z` 已
 稳定在约 `0.60 m`，同时确认 XY 没有持续漂移。
-
-## 手动发送“已出通道”信号
-
-只有完成全部检查且无人机已在 `0.60 m` 稳定悬停后，执行一次：
-
-```bash
-rostopic pub -1 /UAV0/mission/task_status std_msgs/String \
-  "data: 'SEARCH_OUTSIDE_LANDING'"
-```
-
-这条命令同时解开前视/下视 ArUco 阶段门控、激活搜索管理器，并把规划命令所有者锁存
-为 Diff。它不会因为发布命令退出而取消。
 
 ## 触发后的查询指令
 
