@@ -77,13 +77,6 @@ struct TemporalGridKeyHash {
   }
 };
 
-struct TemporalCandidateVelocity {
-  double x{0.0};
-  double y{0.0};
-  double z{0.0};
-  double speed{0.0};
-};
-
 TemporalGridKey makeTemporalGridKey(const ufo::Point& point, const double cell_size) {
   return TemporalGridKey{
       static_cast<int>(std::floor(static_cast<double>(point.x) / cell_size)),
@@ -326,7 +319,6 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
       ? params.ground_estimation_max_slope : defaults.ground_estimation_max_slope;
   config.warmup_frames = std::max(0, params.warmup_frames);
   config.temporal_motion_enabled = params.temporal_motion_enabled;
-  config.temporal_recheck_occupied_enabled = params.temporal_recheck_occupied_enabled;
   config.temporal_match_distance = params.temporal_match_distance > 0.0
       ? params.temporal_match_distance : defaults.temporal_match_distance;
   const double minimum_search_radius = config.temporal_match_distance * 1.5;
@@ -336,15 +328,6 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.temporal_cluster_radius = params.temporal_cluster_radius > 0.0
       ? params.temporal_cluster_radius : defaults.temporal_cluster_radius;
   config.temporal_min_cluster_points = std::max(1, params.temporal_min_cluster_points);
-  config.temporal_default_dt = params.temporal_default_dt > 0.0
-      ? params.temporal_default_dt : defaults.temporal_default_dt;
-  config.temporal_max_dt = params.temporal_max_dt >= config.temporal_default_dt
-      ? params.temporal_max_dt : defaults.temporal_max_dt;
-  config.temporal_recheck_min_speed = std::max(0.0, params.temporal_recheck_min_speed);
-  config.temporal_recheck_max_ego_alignment_cosine =
-      std::clamp(params.temporal_recheck_max_ego_alignment_cosine, 0.0, 1.0);
-  config.temporal_recheck_min_velocity_coherence =
-      std::clamp(params.temporal_recheck_min_velocity_coherence, 0.0, 1.0);
   config.num_threads = std::max(0, params.num_threads);
   config.only_valid = params.only_valid;
   config.inflate_unknown = std::max(0, params.inflate_unknown);
@@ -462,9 +445,7 @@ UfomapMapper::UfomapMapper(ros::NodeHandle& nh,
                   << " (keep points above estimated ground plane)"
                   << ", warmup frames: " << config_.warmup_frames
                   << ", temporal motion: "
-                  << (config_.temporal_motion_enabled ? "on" : "off")
-                  << ", occupied recheck: "
-                  << (config_.temporal_recheck_occupied_enabled ? "on" : "off"));
+                  << (config_.temporal_motion_enabled ? "on" : "off"));
 }
 
 UfomapMapper::~UfomapMapper() = default;
@@ -496,9 +477,6 @@ void UfomapMapper::loadParameters() {
   pnh_.param("ufomap_warmup_frames", params_.warmup_frames, defaults.warmup_frames);
   pnh_.param("ufomap_temporal_motion_enabled", params_.temporal_motion_enabled,
              defaults.temporal_motion_enabled);
-  pnh_.param("ufomap_temporal_recheck_occupied_enabled",
-             params_.temporal_recheck_occupied_enabled,
-             defaults.temporal_recheck_occupied_enabled);
   pnh_.param("ufomap_temporal_match_distance", params_.temporal_match_distance,
              defaults.temporal_match_distance);
   pnh_.param("ufomap_temporal_search_radius", params_.temporal_search_radius,
@@ -507,18 +485,6 @@ void UfomapMapper::loadParameters() {
              defaults.temporal_cluster_radius);
   pnh_.param("ufomap_temporal_min_cluster_points", params_.temporal_min_cluster_points,
              defaults.temporal_min_cluster_points);
-  pnh_.param("ufomap_temporal_default_dt", params_.temporal_default_dt,
-             defaults.temporal_default_dt);
-  pnh_.param("ufomap_temporal_max_dt", params_.temporal_max_dt,
-             defaults.temporal_max_dt);
-  pnh_.param("ufomap_temporal_recheck_min_speed", params_.temporal_recheck_min_speed,
-             defaults.temporal_recheck_min_speed);
-  pnh_.param("ufomap_temporal_recheck_max_ego_alignment_cosine",
-             params_.temporal_recheck_max_ego_alignment_cosine,
-             defaults.temporal_recheck_max_ego_alignment_cosine);
-  pnh_.param("ufomap_temporal_recheck_min_velocity_coherence",
-             params_.temporal_recheck_min_velocity_coherence,
-             defaults.temporal_recheck_min_velocity_coherence);
   pnh_.param("ufomap_insert_hit_depth", params_.insert_hit_depth, defaults.insert_hit_depth);
   pnh_.param("ufomap_insert_miss_depth", params_.insert_miss_depth, defaults.insert_miss_depth);
   pnh_.param("ufomap_ray_casting_depth", params_.ray_casting_depth, defaults.ray_casting_depth);
@@ -837,9 +803,7 @@ UfomapMapper::UfomapPointCloud UfomapMapper::filterGroundPoints(
 }
 
 std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
-    const UfomapPointCloud& points,
-    const ufo::Point& sensor_origin,
-    const ros::Time& stamp) {
+    const UfomapPointCloud& points) {
   std::vector<std::size_t> motion_indices;
   if (!config_.temporal_motion_enabled || points.empty() ||
       previous_frame_points_.empty()) {
@@ -860,9 +824,8 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
     previous_grid[makeTemporalGridKey(previous_frame_points_[index], cell_size)].push_back(index);
   }
 
-  const auto nearestPreviousPoint = [&](const ufo::Point& point,
-                                        const double radius_sq)
-      -> std::optional<std::pair<std::size_t, double>> {
+  const auto hasNearbyPreviousPoint = [&](const ufo::Point& point,
+                                          const double radius_sq) {
     const double radius = std::sqrt(radius_sq);
     const TemporalGridKey min_key = makeTemporalGridKey(
         ufo::Point(static_cast<float>(static_cast<double>(point.x) - radius),
@@ -875,7 +838,6 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
                    static_cast<float>(static_cast<double>(point.z) + radius)),
         cell_size);
 
-    std::optional<std::pair<std::size_t, double>> nearest;
     for (int x = min_key.x; x <= max_key.x; ++x) {
       for (int y = min_key.y; y <= max_key.y; ++y) {
         for (int z = min_key.z; z <= max_key.z; ++z) {
@@ -888,58 +850,26 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
             const double dx = static_cast<double>(point.x) - previous_point.x;
             const double dy = static_cast<double>(point.y) - previous_point.y;
             const double dz = static_cast<double>(point.z) - previous_point.z;
-            const double distance_sq = dx * dx + dy * dy + dz * dz;
-            if (distance_sq <= radius_sq &&
-                (!nearest.has_value() || distance_sq < nearest->second)) {
-              nearest = std::make_pair(previous_index, distance_sq);
+            if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+              return true;
             }
           }
         }
       }
     }
-    return nearest;
+    return false;
   };
-
-  double frame_dt = (stamp - previous_frame_stamp_).toSec();
-  if (!std::isfinite(frame_dt) || frame_dt <= 0.0 || frame_dt > config_.temporal_max_dt) {
-    frame_dt = config_.temporal_default_dt;
-  }
-  const double inverse_frame_dt = 1.0 / frame_dt;
-  double ego_velocity_x = 0.0;
-  double ego_velocity_y = 0.0;
-  double ego_velocity_z = 0.0;
-  if (previous_sensor_origin_.has_value()) {
-    ego_velocity_x = (static_cast<double>(sensor_origin.x) - previous_sensor_origin_->x) *
-        inverse_frame_dt;
-    ego_velocity_y = (static_cast<double>(sensor_origin.y) - previous_sensor_origin_->y) *
-        inverse_frame_dt;
-    ego_velocity_z = (static_cast<double>(sensor_origin.z) - previous_sensor_origin_->z) *
-        inverse_frame_dt;
-  }
-  const double ego_speed = std::sqrt(ego_velocity_x * ego_velocity_x +
-                                     ego_velocity_y * ego_velocity_y +
-                                     ego_velocity_z * ego_velocity_z);
 
   std::vector<std::size_t> raw_motion_indices;
   raw_motion_indices.reserve(points.size() / 10U + 1U);
-  std::unordered_map<std::size_t, TemporalCandidateVelocity> rechecked_velocities;
-  std::size_t occupied_examined_count = 0U;
-  std::size_t speed_rejected_count = 0U;
-  std::size_t ego_rejected_count = 0U;
   std::shared_lock<std::shared_mutex> map_lock(map_mutex_);
   const auto& runtime = runtimeLocked();
   for (std::size_t index = 0U; index < points.size(); ++index) {
     const auto& point = points[index];
     const ufo::Point current_point(point.x, point.y, point.z);
-    if (nearestPreviousPoint(current_point, match_distance_sq).has_value()) {
+    if (hasNearbyPreviousPoint(current_point, match_distance_sq)) {
       continue;
     }
-    const auto previous_match = nearestPreviousPoint(current_point, search_radius_sq);
-    if (!previous_match.has_value()) {
-      continue;
-    }
-
-    bool occupied_history = false;
     const auto code = runtime.map.toCodeChecked(current_point);
     if (code.has_value()) {
       if (runtime.map.seenFree(current_point)) {
@@ -947,38 +877,14 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
       }
       if (runtime.map.exists(*code)) {
         const auto node = runtime.map(*code);
-        occupied_history = runtime.map.hits(node) > 0;
-      }
-    }
-    if (occupied_history && !config_.temporal_recheck_occupied_enabled) {
-      continue;
-    }
-    if (occupied_history) {
-      ++occupied_examined_count;
-      const auto& previous_point = previous_frame_points_[previous_match->first];
-      TemporalCandidateVelocity velocity;
-      velocity.x = (static_cast<double>(point.x) - previous_point.x) * inverse_frame_dt;
-      velocity.y = (static_cast<double>(point.y) - previous_point.y) * inverse_frame_dt;
-      velocity.z = (static_cast<double>(point.z) - previous_point.z) * inverse_frame_dt;
-      velocity.speed = std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y +
-                                 velocity.z * velocity.z);
-      if (velocity.speed < config_.temporal_recheck_min_speed) {
-        ++speed_rejected_count;
-        continue;
-      }
-      if (ego_speed >= config_.temporal_recheck_min_speed) {
-        const double ego_alignment = std::abs(
-            (velocity.x * ego_velocity_x + velocity.y * ego_velocity_y +
-             velocity.z * ego_velocity_z) /
-            (velocity.speed * ego_speed));
-        if (ego_alignment >= config_.temporal_recheck_max_ego_alignment_cosine) {
-          ++ego_rejected_count;
+        if (runtime.map.hits(node) > 0) {
           continue;
         }
       }
-      rechecked_velocities.emplace(index, velocity);
     }
-    raw_motion_indices.push_back(index);
+    if (hasNearbyPreviousPoint(current_point, search_radius_sq)) {
+      raw_motion_indices.push_back(index);
+    }
   }
 
   if (raw_motion_indices.empty()) {
@@ -994,7 +900,7 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
     candidate_grid[makeTemporalGridKey(points[index], cluster_cell_size)].push_back(index);
   }
 
-  const auto candidateHasMotionSupport = [&](const std::size_t candidate_index) {
+  const auto nearbyCandidateCount = [&](const std::size_t candidate_index) {
     const auto& point = points[candidate_index];
     const TemporalGridKey min_key = makeTemporalGridKey(
         ufo::Point(static_cast<float>(static_cast<double>(point.x) - cluster_radius),
@@ -1008,13 +914,6 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
         cluster_cell_size);
 
     std::size_t count = 0U;
-    std::size_t velocity_count = 0U;
-    double velocity_sum_x = 0.0;
-    double velocity_sum_y = 0.0;
-    double velocity_sum_z = 0.0;
-    double speed_sum = 0.0;
-    const bool requires_velocity_coherence =
-        rechecked_velocities.find(candidate_index) != rechecked_velocities.end();
     for (int x = min_key.x; x <= max_key.x; ++x) {
       for (int y = min_key.y; y <= max_key.y; ++y) {
         for (int z = min_key.z; z <= max_key.z; ++z) {
@@ -1029,79 +928,39 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
             const double dz = static_cast<double>(point.z) - neighbor.z;
             if (dx * dx + dy * dy + dz * dz <= cluster_radius_sq) {
               ++count;
-              if (!requires_velocity_coherence &&
-                  count >= static_cast<std::size_t>(config_.temporal_min_cluster_points)) {
-                return true;
-              }
-              if (requires_velocity_coherence) {
-                const auto velocity = rechecked_velocities.find(neighbor_index);
-                if (velocity != rechecked_velocities.end()) {
-                  ++velocity_count;
-                  velocity_sum_x += velocity->second.x;
-                  velocity_sum_y += velocity->second.y;
-                  velocity_sum_z += velocity->second.z;
-                  speed_sum += velocity->second.speed;
-                }
+              if (count >= static_cast<std::size_t>(config_.temporal_min_cluster_points)) {
+                return count;
               }
             }
           }
         }
       }
     }
-    if (count < static_cast<std::size_t>(config_.temporal_min_cluster_points)) {
-      return false;
-    }
-    if (!requires_velocity_coherence) {
-      return true;
-    }
-    if (velocity_count < static_cast<std::size_t>(config_.temporal_min_cluster_points) ||
-        speed_sum <= std::numeric_limits<double>::epsilon()) {
-      return false;
-    }
-    const double coherent_speed = std::sqrt(
-        velocity_sum_x * velocity_sum_x + velocity_sum_y * velocity_sum_y +
-        velocity_sum_z * velocity_sum_z);
-    const double velocity_coherence = coherent_speed / speed_sum;
-    return velocity_coherence >= config_.temporal_recheck_min_velocity_coherence;
+    return count;
   };
 
   motion_indices.reserve(raw_motion_indices.size());
-  std::size_t coherence_rejected_count = 0U;
   for (const std::size_t index : raw_motion_indices) {
-    if (candidateHasMotionSupport(index)) {
+    if (nearbyCandidateCount(index) >=
+        static_cast<std::size_t>(config_.temporal_min_cluster_points)) {
       motion_indices.push_back(index);
-    } else if (rechecked_velocities.find(index) != rechecked_velocities.end()) {
-      ++coherence_rejected_count;
     }
   }
   ROS_INFO_STREAM_THROTTLE(
       1.0, "Ufomap temporal candidates: raw=" << raw_motion_indices.size()
                                                << ", clustered=" << motion_indices.size()
-                                               << ", occupied_examined="
-                                               << occupied_examined_count
-                                               << ", rechecked_occupied="
-                                               << rechecked_velocities.size()
-                                               << ", speed_rejected="
-                                               << speed_rejected_count
-                                               << ", ego_rejected=" << ego_rejected_count
-                                               << ", coherence_rejected="
-                                               << coherence_rejected_count
                                                << ", radius=" << cluster_radius
                                                << ", min_points="
                                                << config_.temporal_min_cluster_points);
   return motion_indices;
 }
 
-void UfomapMapper::updatePreviousFrameSnapshot(const UfomapPointCloud& points,
-                                               const ufo::Point& sensor_origin,
-                                               const ros::Time& stamp) {
+void UfomapMapper::updatePreviousFrameSnapshot(const UfomapPointCloud& points) {
   previous_frame_points_.clear();
   previous_frame_points_.reserve(points.size());
   for (const auto& point : points) {
     previous_frame_points_.emplace_back(point.x, point.y, point.z);
   }
-  previous_sensor_origin_ = sensor_origin;
-  previous_frame_stamp_ = stamp;
 }
 
 UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2& cloud_msg,
@@ -1149,8 +1008,8 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   const ufo::PointCloud ground_filtered_points = filterGroundPoints(*range_filtered_points);
   const ufo::PointCloud* output_points = &ground_filtered_points;
   const std::vector<std::size_t> temporal_motion_indices =
-      detectTemporalMotion(*output_points, sensor_origin, cloud_msg.header.stamp);
-  updatePreviousFrameSnapshot(*output_points, sensor_origin, cloud_msg.header.stamp);
+      detectTemporalMotion(*output_points);
+  updatePreviousFrameSnapshot(*output_points);
 
   result.classification = classifyPoints(cloud_msg.header, *output_points);
   std::vector<bool> dynamic_mask(output_points->size(), false);
