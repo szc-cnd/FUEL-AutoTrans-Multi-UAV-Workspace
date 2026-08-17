@@ -121,6 +121,42 @@ Visualization Manager:
           Transport Hint: raw
           Unreliable: false
           Value: true
+        - Class: rviz/Image
+          Enabled: true
+          Image Topic: /UAV0/landing/front/debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: landing_front_aruco_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: true
+        - Class: rviz/Image
+          Enabled: true
+          Image Topic: /UAV0/landing/search/debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: landing_down_search_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: true
+        - Class: rviz/Image
+          Enabled: true
+          Image Topic: /UAV0/landing/debug_image
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: precision_landing_image
+          Normalize Range: true
+          Queue Size: 2
+          Transport Hint: raw
+          Unreliable: false
+          Value: true
         - Alpha: 0.25
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -202,6 +238,38 @@ Visualization Manager:
           Namespaces:
             {}
           Queue Size: 100
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /drone_0_diff_planner_node/optimal_list
+          Name: diff_optimal_traj
+          Namespaces:
+            {}
+          Queue Size: 100
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /drone_0_diff_planner_node/goal_point
+          Name: diff_goal_point
+          Namespaces:
+            {}
+          Queue Size: 20
+          Value: true
+        - Alpha: 1
+          Axes Length: 0.35
+          Axes Radius: 0.025
+          Class: rviz/Pose
+          Color: 255; 80; 20
+          Enabled: true
+          Head Length: 0.25
+          Head Radius: 0.08
+          Name: landing_search_subgoal
+          Queue Size: 10
+          Shaft Length: 0.7
+          Shaft Radius: 0.035
+          Shape: Arrow
+          Topic: /UAV0/landing_diff/subgoal
+          Unreliable: false
           Value: true
       Enabled: true
       Name: Planning

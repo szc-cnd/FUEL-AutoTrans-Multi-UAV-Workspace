@@ -1,6 +1,6 @@
 # UAV0 比赛启动流程（精简版）
 
-本流程对应 `~/match_ws` 的 UAV0 仿真/实机验证。启动顺序为：MAVROS、MID360、FAST-LIO、位姿回传、UAV0 统一检测与上报、FUEL 规划器和原控制器。五个功能包以及统一启动包都位于 `match_ws/src`，不再依赖 `~/db_ws`。检测结果只进入远程上报和本流程的 RViz 显示，不改变规划器逻辑。
+本流程对应 `~/match_ws` 的 UAV0 仿真/实机验证。启动顺序为：MAVROS、MID360、FAST-LIO、位姿回传、UAV0 统一检测与上报、FUEL 规划器和原控制器。五个功能包以及统一启动包都位于 `match_ws/src`，不再依赖 `~/db_ws`。通道内的颜色标签、普通二维码和热源检测只进入远程上报与 RViz，不改变规划器；门外降落 ArUco 检测会进入 Diff 搜索和精降控制链路。
 
 传感器和节点不会自动解锁，也不会自动切换 `OFFBOARD`。确认数据正常后，再按现场飞行流程操作。
 
@@ -300,8 +300,9 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   landing_vehicle_ns:=UAV0
 ```
 
-该配置会启动下视相机和降落控制节点，但不会自动解锁、切换 `OFFBOARD` 或发布
-降落触发；仍需按现场安全流程发布上升沿 `/UAV0/need_to_land`。相关话题均为
+该配置会启动下视相机和降落控制节点，但不会自动解锁、切换 `OFFBOARD` 或起飞。
+与第 6 步规划器共同运行时，门外搜索、平台接近和 `/UAV0/need_to_land` 由任务状态机
+自动触发；只单独启动本配置且没有任务状态机时，才需要人工发布测试触发。相关话题均为
 `/UAV0/down_camera/...`、`/UAV0/landing/...` 和 `/UAV0/mavros/...`。不要在统一入口已经
 运行后再次单独启动同名的 `precision_landing` 节点。
 
@@ -322,6 +323,13 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
 `/UAV0/target_reporting/detected_object_cloud` 也已配置在同一个 RViz 中。
 三维线框包围盒话题 `/UAV0/target_reporting/detected_object_boxes` 也已配置在
 `Detection Results` 分组中；包围盒由目标附近点云估计，只用于可视化。
+搜索降落相关显示也已加入同一个 RViz：`Planning` 分组中的
+`diff_optimal_traj` 显示 Diff 当前规划轨迹段，`diff_goal_point` 显示 Diff 当前目标，
+`landing_search_subgoal` 显示当前蛇形搜索航点；`Detection Results` 分组中的
+`landing_front_aruco_image`、`landing_down_search_image` 和
+`precision_landing_image` 分别显示前视粗搜索、下视稳定确认和精降阶段的带标注图像。
+搜索管理器每次只向 Diff 下发一个航点，因此 RViz 会显示当前轨迹段和当前航点，
+不会预先画出完整的 `3 m × 4 m` 蛇形路线。
 RViz 不单独显示 D435 深度图像，深度数据仅作为点云过滤和三维包围盒估计的输入。
 这里启动的 `target_rviz_marker` 只负责显示，不会给 FUEL 发布检测目标或观察位姿。
 
@@ -361,6 +369,79 @@ rostopic echo /UAV0/landing/control_owner
 ```
 
 确认上述话题持续有数据后，再进入飞行模式操作。`dual_ego_start.py` 是双机同步起飞工具，不属于 UAV0 单机启动的必要步骤。
+
+### 8.1 搜索降落专项测试流程
+
+当前代码已经启用完整自动链路：FUEL 完成通道任务并确认穿出出口后，任务状态进入
+`SEARCH_OUTSIDE_LANDING`，控制权自动切换给 Diff；随后依次执行前视 D435 扫描、
+前视粗定位或下视蛇形搜索、平台上方 2 m 接近、下视精降和 `AUTO.LAND`。节点不会
+替操作者解锁、切换 `OFFBOARD` 或起飞。
+
+第一次测试前先拆桨或可靠约束无人机，只检查节点、图像和状态，不执行解锁。七分屏
+全部启动后运行：
+
+```bash
+rosnode list | grep -E 'front_aruco_hint|landing_search|precision_landing|landing_setpoint|landing_diff'
+
+rostopic hz /UAV0/landing/front/debug_image
+rostopic hz /UAV0/landing/search/debug_image
+rostopic hz /UAV0/landing/debug_image
+
+rostopic echo /UAV0/landing/front/status
+rostopic echo /UAV0/landing/search/status
+rostopic echo /UAV0/mission/task_status
+rostopic echo /landing_diff_search_manager/state
+rostopic echo /UAV0/landing/control_owner
+```
+
+也可以单独打开图像窗口交叉确认：
+
+```bash
+rqt_image_view /UAV0/landing/front/debug_image
+rqt_image_view /UAV0/landing/search/debug_image
+rqt_image_view /UAV0/landing/debug_image
+```
+
+三个图像话题的用途不同：
+
+```text
+/UAV0/landing/front/debug_image
+  D435 前视 ArUco 粗定位；门外搜索阶段才接受目标。
+
+/UAV0/landing/search/debug_image
+  下视相机搜索与世界系稳定过滤；确认后发布 final_aruco。
+
+/UAV0/landing/debug_image
+  精降控制图；收到 need_to_land 并完成预检查后进入主动精降。
+```
+
+如果 RViz 图像面板暂时为空，先检查对应话题是否有频率。前视和下视搜索节点受
+`/UAV0/mission/task_status` 阶段门控，在通道内不接受 ArUco 属于正常现象；精降图像
+没有进入主动降落状态时也不代表搜索节点故障。
+
+完成无桨检查后，实飞测试按以下顺序进行：
+
+1. 确认 MAVROS 已连接，FAST-LIO 位置没有跳变，D435 和下视相机图像持续更新。
+2. 按现场安全流程解锁、切换 `OFFBOARD` 并起飞；保持人工随时可以切回手动模式。
+3. 在 RViz 点击一次 `2D Nav Goal`，作为前置通道搜索的开始触发，不把点击位置当作
+   降落平台坐标。
+4. 通道内观察 `Planning/bspline_traj` 和 `/UAV0/mission/task_status`。
+5. 正常状态应依次出现
+   `SEARCH_CORRIDOR -> EXIT_APPROACH_INSIDE -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING`。
+6. 切换后观察 `Planning/diff_optimal_traj`、`diff_goal_point`、
+   `landing_search_subgoal`，以及 `/landing_diff_search_manager/state`。前视完整扫描约
+   7 秒；没有前视结果时，Diff 升至平台上方搜索高度 2 m 并执行蛇形搜索。
+7. 下视稳定确认后，观察 `/UAV0/mission/detection/final_aruco` 和
+   `/UAV0/mission/landing_request`；到达平台上方后控制权应由 `CONTROLLER` 切换为
+   `LANDING`。
+8. 精降依次经过 `ACQUIRE -> ALIGN -> DESCEND_HIGH -> FIXED_XY_DESCENT ->
+   REQUEST_AUTO_LAND -> DONE`。任何位置、相机标定、时间戳或 MAVROS 状态异常时，
+   应保持或中止，不应继续盲降。
+
+测试过程中重点确认：Diff 轨迹不穿过 RViz 中的占据墙体；前视扫描期间高度没有回落
+到默认起飞高度；下视确认的是目标 ID；固定 XY 下降时水平位置没有持续漂移。出现
+轨迹穿墙、定位跳变、图像冻结、错误目标锁定或控制权异常时，立即切回人工模式并终止
+本轮测试。
 
 ## 9. 停止顺序
 
