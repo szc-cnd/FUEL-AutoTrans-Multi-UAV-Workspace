@@ -20,6 +20,8 @@ RUNTIME_CONFIG="${UAV0_SEARCH_TEST_RUNTIME_CONFIG:-/tmp/uav0_search_landing_test
 TERMINATOR_LOG="${UAV0_SEARCH_TEST_TERMINATOR_LOG:-/tmp/uav0_search_landing_test_${RUN_ID}.log}"
 TERMINATOR_PID_FILE="${UAV0_SEARCH_TEST_PID_FILE:-/tmp/uav0_search_landing_test_${RUN_ID}.pid}"
 START_LOCK_FILE="${UAV0_SEARCH_TEST_LOCK_FILE:-/tmp/uav0_search_landing_test.lock}"
+RUN_TIMESTAMP="${UAV0_SEARCH_TEST_RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+TEST_LOG_DIR="${UAV0_SEARCH_TEST_LOG_DIR:-${HOME}/search_landing_logs/${RUN_TIMESTAMP}}"
 
 FLIGHT_CONTROL="${UAV0_SEARCH_TEST_FLIGHT_CONTROL:-false}"
 ENABLE_RVIZ="${UAV0_SEARCH_TEST_ENABLE_RVIZ:-true}"
@@ -143,7 +145,13 @@ wait_for_topic() {
 }
 
 pane_init() {
+  mkdir -p "${TEST_LOG_DIR}" || {
+    log "无法创建日志目录：${TEST_LOG_DIR}"
+    keep_pane_open
+  }
+  exec > >(tee -a "${TEST_LOG_DIR}/${PANE}.log") 2>&1
   printf '\n========== UAV0 搜索降落独立测试：%s ==========\n' "$1"
+  printf '[日志] %s\n' "${TEST_LOG_DIR}/${PANE}.log"
   source_ros_environment || keep_pane_open
 }
 
@@ -311,12 +319,20 @@ export UAV0_SEARCH_TEST_FLIGHT_CONTROL="${FLIGHT_CONTROL}"
 export UAV0_SEARCH_TEST_ENABLE_RVIZ="${ENABLE_RVIZ}"
 export UAV0_SEARCH_TEST_HOVER_HEIGHT="${HOVER_HEIGHT}"
 export UAV0_SEARCH_TEST_ODOM_TOPIC="${ODOM_TOPIC}"
+export UAV0_SEARCH_TEST_RUN_TIMESTAMP="${RUN_TIMESTAMP}"
+export UAV0_SEARCH_TEST_LOG_DIR="${TEST_LOG_DIR}"
+
+mkdir -p "${TEST_LOG_DIR}" || {
+  log "无法创建日志目录：${TEST_LOG_DIR}"
+  exit 1
+}
 
 sed "s|__UAV0_SEARCH_TEST_SCRIPT__|${SCRIPT_PATH}|g" \
   "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
 
 log "打开六分屏：flight=${FLIGHT_CONTROL}, hover=${HOVER_HEIGHT}m, rviz=${ENABLE_RVIZ}"
 log '脚本不会自动发布出通道信号'
+log "本次六分屏日志：${TEST_LOG_DIR}"
 nohup terminator --no-dbus --maximise \
   --config="${RUNTIME_CONFIG}" \
   --layout=uav0_search_landing_test \

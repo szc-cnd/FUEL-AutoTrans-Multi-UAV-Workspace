@@ -43,6 +43,14 @@ bash shfiles/start_uav0_search_landing_test.sh
 4 位姿回传 | 5 搜索降落与 RViz | 6 状态与人工触发
 ```
 
+每次启动都会把六个分屏的完整终端输出保存到独立目录：
+
+```text
+~/search_landing_logs/YYYYMMDD_HHMMSS/
+```
+
+DIFF 的规划、地图和崩溃前诊断位于 `search.log`，测试后可直接保留该目录用于复盘。
+
 默认不启动简单控制器，并把位置设定点、姿态设定点和模式服务全部接到
 `/UAV0/search_landing_test/blocked_*`，因此只能观察识别、搜索航点和 Diff 轨迹。
 
@@ -68,6 +76,10 @@ rostopic pub -1 /UAV0/mission/task_status std_msgs/String \
 
 该信号会解开前视/下视 ArUco 阶段门控、激活搜索管理器，并把规划命令所有者锁存为
 Diff。重新测试必须人工接管、落地上锁并重启独立测试节点。
+
+前视原地扫描期间控制器继续保持当前位置，搜索管理器只发送偏航指令，不向 Diff
+发送与当前位置重合的零长度目标。前视发现平台或扫描完成后，才向 Diff 下发第一个
+有实际位移的目标。
 
 需要临时修改悬停高度时使用：
 
@@ -232,6 +244,7 @@ rostopic echo /UAV0/fast_lio/Odometry
 ```bash
 rostopic echo /landing_diff_search_manager/state
 rostopic echo /planner_command_arbiter/owner
+rostopic echo /drone_0_planning/status
 rostopic echo /UAV0/landing_diff/subgoal
 rostopic echo /UAV0/landing/front/status
 rostopic echo /UAV0/landing/front_aruco_hint
@@ -241,8 +254,10 @@ rostopic echo /UAV0/mission/landing_request
 rostopic echo /UAV0/landing/control_owner
 ```
 
-这些话题依次用于查看搜索状态、规划所有者、当前 Diff 航点、前视检测、前视粗定位、
-下视稳定检测、最终平台世界坐标、降落请求和最终控制权。
+这些话题依次用于查看搜索状态、规划所有者、Diff 规划结果、当前 Diff 航点、前视检测、
+前视粗定位、下视稳定检测、最终平台世界坐标、降落请求和最终控制权。正常生成轨迹时
+`/drone_0_planning/status` 应显示 `TRAJECTORY_PUBLISHED`；无效或过近目标会被安全拒绝，
+不会再导致 DIFF 节点退出。
 
 典型状态变化为：
 
@@ -272,6 +287,16 @@ WAIT_EXIT_SWITCH
 
 出现定位跳变、轨迹穿墙、图像冻结、错误 ArUco 锁定或控制权异常时，立即通过遥控器
 退出 `OFFBOARD`。不要先关闭唯一的设定点发布节点。
+
+查看最近一次测试日志：
+
+```bash
+latest_search_log=$(find ~/search_landing_logs -mindepth 1 -maxdepth 1 \
+  -type d | sort | tail -n 1)
+echo "${latest_search_log}"
+ls -lh "${latest_search_log}"
+grep -RniE "error|warn|failed|abort|assert" "${latest_search_log}"
+```
 
 确认无人机已经人工接管、落地、上锁并退出 `OFFBOARD` 后，再按以下顺序停止：
 
