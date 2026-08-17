@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <numbers>
 #include <numeric>
 #include <optional>
 
@@ -145,6 +146,7 @@ void applyBranchColor(const ldop::DynamicObjectPredictionBranch& branch,
 // 预测模式类别，用于区分不同意图假设。
 enum class PredictionModeKind {
   Keep,
+  CorridorOscillation,
   LongitudinalDecelerate,
   LongitudinalStop,
   TurnLeft,
@@ -154,6 +156,15 @@ enum class PredictionModeKind {
   VerticalClimb,
   VerticalDescend,
   VerticalHold,
+};
+
+struct CorridorOscillationModel {
+  Eigen::Vector3d axis{Eigen::Vector3d::UnitX()};
+  Eigen::Vector3d orthogonal_anchor{Eigen::Vector3d::Zero()};
+  double center_coordinate{0.0};
+  double amplitude{0.0};
+  double angular_frequency{0.0};
+  double phase{0.0};
 };
 
 // 从历史轨迹中提取的运动特征，供模式生成使用。
@@ -177,6 +188,7 @@ struct PredictionMode {
   double feedback_noise_scale{1.0};
   double probability{0.0};
   double mode_uncertainty_scale{1.0};
+  std::shared_ptr<const CorridorOscillationModel> corridor_oscillation;
 };
 
 struct BranchRolloutContext {
@@ -297,6 +309,169 @@ MotionHistoryFeatures estimateHistoryFeatures(const TrackPredictionInput& input,
   features.history_quality_scale =
       1.0 + (config.history_quality_noise_scale - 1.0) * quality_penalty;
   return features;
+}
+
+std::optional<CorridorOscillationModel> estimateCorridorOscillation(
+    const TrackPredictionInput& input,
+    const PredictionMapQuery* map_query,
+    const DynamicObjectPredictorConfig& config) {
+  const CorridorOscillationConfig& oscillation = config.corridor_oscillation_config;
+  if (!oscillation.enabled || input.motion_model_type != MotionModelType::CV3D ||
+      map_query == nullptr || !map_query->available()) {
+    return std::nullopt;
+  }
+
+  struct TimedPosition {
+    double stamp{0.0};
+    Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+  };
+  std::vector<TimedPosition> samples;
+  samples.reserve(std::min(input.history.size(), oscillation.max_history_samples));
+  const std::size_t first_index =
+      input.history.size() > oscillation.max_history_samples
+          ? input.history.size() - oscillation.max_history_samples
+          : 0U;
+  for (std::size_t index = first_index; index < input.history.size(); ++index) {
+    const TrackHistorySample& sample = input.history[index];
+    if (!sample.matched || sample.model_state.size() < 3) {
+      continue;
+    }
+    samples.push_back({sample.stamp.toSec(), sample.model_state.segment<3>(0)});
+  }
+  if (samples.size() < oscillation.min_samples) {
+    return std::nullopt;
+  }
+
+  Eigen::Vector2d mean = Eigen::Vector2d::Zero();
+  for (const TimedPosition& sample : samples) {
+    mean += sample.position.head<2>();
+  }
+  mean /= static_cast<double>(samples.size());
+  Eigen::Matrix2d covariance = Eigen::Matrix2d::Zero();
+  for (const TimedPosition& sample : samples) {
+    const Eigen::Vector2d centered = sample.position.head<2>() - mean;
+    covariance += centered * centered.transpose();
+  }
+  covariance /= static_cast<double>(samples.size());
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigensolver(covariance);
+  if (eigensolver.info() != Eigen::Success) {
+    return std::nullopt;
+  }
+  const double major_variance = eigensolver.eigenvalues()(1);
+  const double minor_variance = eigensolver.eigenvalues()(0);
+  if (major_variance <= 1e-8 ||
+      minor_variance / major_variance > oscillation.max_orthogonal_variance_ratio) {
+    return std::nullopt;
+  }
+  Eigen::Vector3d axis(eigensolver.eigenvectors()(0, 1),
+                       eigensolver.eigenvectors()(1, 1),
+                       0.0);
+  axis.normalize();
+
+  std::vector<double> coordinates;
+  coordinates.reserve(samples.size());
+  for (const TimedPosition& sample : samples) {
+    coordinates.push_back(axis.dot(sample.position));
+  }
+  const auto [minimum_iter, maximum_iter] =
+      std::minmax_element(coordinates.begin(), coordinates.end());
+  const double observed_minimum = *minimum_iter;
+  const double observed_maximum = *maximum_iter;
+  const double observed_span = observed_maximum - observed_minimum;
+  if (observed_span < oscillation.min_motion_span) {
+    return std::nullopt;
+  }
+
+  std::vector<double> reversal_times;
+  int previous_direction = 0;
+  for (std::size_t index = 1U; index < samples.size(); ++index) {
+    const double dt = samples[index].stamp - samples[index - 1U].stamp;
+    if (dt <= kTimeEpsilon) {
+      continue;
+    }
+    const double projected_velocity = (coordinates[index] - coordinates[index - 1U]) / dt;
+    if (std::abs(projected_velocity) < oscillation.reversal_velocity_epsilon) {
+      continue;
+    }
+    const int direction = projected_velocity > 0.0 ? 1 : -1;
+    if (previous_direction != 0 && direction != previous_direction) {
+      reversal_times.push_back(samples[index - 1U].stamp);
+    }
+    previous_direction = direction;
+  }
+  if (reversal_times.size() < 2U) {
+    return std::nullopt;
+  }
+  std::vector<double> half_periods;
+  for (std::size_t index = 1U; index < reversal_times.size(); ++index) {
+    const double half_period = reversal_times[index] - reversal_times[index - 1U];
+    if (half_period >= oscillation.min_half_period &&
+        half_period <= oscillation.max_half_period) {
+      half_periods.push_back(half_period);
+    }
+  }
+  if (half_periods.empty()) {
+    return std::nullopt;
+  }
+  std::sort(half_periods.begin(), half_periods.end());
+  const double half_period = half_periods[half_periods.size() / 2U];
+
+  Eigen::Vector3d query_center(mean.x(), mean.y(), samples.back().position.z());
+  const auto occupied_nodes = map_query->queryLocalOccupied(
+      query_center,
+      oscillation.wall_query_radius,
+      oscillation.wall_query_max_results,
+      config.interaction_config.map_query_depth);
+  double negative_wall_surface = -std::numeric_limits<double>::infinity();
+  double positive_wall_surface = std::numeric_limits<double>::infinity();
+  for (const PredictionLocalOccupiedNode& node : occupied_nodes) {
+    if (std::abs(node.center.z() - query_center.z()) > oscillation.wall_vertical_window) {
+      continue;
+    }
+    const double coordinate = axis.dot(node.center);
+    const double half_voxel = 0.5 * std::max(0.0, node.voxel_size);
+    if (coordinate < observed_minimum - oscillation.wall_min_outside_gap) {
+      negative_wall_surface = std::max(negative_wall_surface, coordinate + half_voxel);
+    } else if (coordinate > observed_maximum + oscillation.wall_min_outside_gap) {
+      positive_wall_surface = std::min(positive_wall_surface, coordinate - half_voxel);
+    }
+  }
+  if (!std::isfinite(negative_wall_surface) || !std::isfinite(positive_wall_surface)) {
+    return std::nullopt;
+  }
+
+  const double object_half_extent =
+      0.5 * (std::abs(axis.x()) * input.bbox.size.x +
+             std::abs(axis.y()) * input.bbox.size.y);
+  const double lower_bound = negative_wall_surface + object_half_extent +
+                             oscillation.wall_clearance_margin;
+  const double upper_bound = positive_wall_surface - object_half_extent -
+                             oscillation.wall_clearance_margin;
+  const double center_coordinate = 0.5 * (observed_minimum + observed_maximum);
+  const double wall_limited_amplitude =
+      std::min(center_coordinate - lower_bound, upper_bound - center_coordinate);
+  const double amplitude = std::min(0.5 * observed_span, wall_limited_amplitude);
+  if (amplitude < 0.5 * oscillation.min_motion_span) {
+    return std::nullopt;
+  }
+
+  const double angular_frequency = std::numbers::pi / half_period;
+  const double current_coordinate = axis.dot(input.model_state.segment<3>(0));
+  const double current_velocity = axis.dot(velocityFromState(input.motion_model_type,
+                                                              input.model_state));
+  const double sine = std::clamp(
+      (current_coordinate - center_coordinate) / amplitude, -1.0, 1.0);
+  const double cosine_magnitude = std::sqrt(std::max(0.0, 1.0 - sine * sine));
+  const double cosine = current_velocity < 0.0 ? -cosine_magnitude : cosine_magnitude;
+
+  CorridorOscillationModel model;
+  model.axis = axis;
+  model.orthogonal_anchor = input.model_state.segment<3>(0) - axis * current_coordinate;
+  model.center_coordinate = center_coordinate;
+  model.amplitude = amplitude;
+  model.angular_frequency = angular_frequency;
+  model.phase = std::atan2(sine, cosine);
+  return model;
 }
 
 // 构造一个预测模式实例。
@@ -792,6 +967,7 @@ void applyModeControl(const PredictionMode& mode,
 
   switch (mode.kind) {
     case PredictionModeKind::Keep:
+    case PredictionModeKind::CorridorOscillation:
     case PredictionModeKind::VerticalHold:
       break;
     case PredictionModeKind::LongitudinalDecelerate: {
@@ -890,6 +1066,20 @@ ldop::DynamicObjectPredictionBranch rollOutMode(
     const Eigen::MatrixXd process_noise = noise_scale * model->getProcessNoiseQ();
     covariance = transition * covariance * transition.transpose() + process_noise;
     covariance = 0.5 * (covariance + covariance.transpose());
+
+    if (mode.corridor_oscillation != nullptr) {
+      const CorridorOscillationModel& oscillator = *mode.corridor_oscillation;
+      const double angle = oscillator.phase + oscillator.angular_frequency * elapsed;
+      const double coordinate = oscillator.center_coordinate +
+                                oscillator.amplitude * std::sin(angle);
+      const double projected_velocity = oscillator.amplitude *
+                                        oscillator.angular_frequency * std::cos(angle);
+      const Eigen::Vector3d position =
+          oscillator.orthogonal_anchor + oscillator.axis * coordinate;
+      const Eigen::Vector3d velocity = oscillator.axis * projected_velocity;
+      state.segment<3>(0) = position;
+      state.segment<3>(3) = velocity;
+    }
 
     ldop::DynamicObjectPredictionPoint point;
     point.time_from_start = ros::Duration(elapsed);
@@ -991,6 +1181,55 @@ PredictionFeedbackConfig buildPredictionFeedbackConfig(
   return config;
 }
 
+CorridorOscillationConfig buildCorridorOscillationConfig(
+    const CorridorOscillationParams& params) {
+  const CorridorOscillationParams defaults;
+  CorridorOscillationConfig config;
+  config.enabled = params.enabled;
+  const int min_samples = params.min_samples >= 4 ? params.min_samples : defaults.min_samples;
+  config.min_samples = static_cast<std::size_t>(min_samples);
+  config.max_history_samples = static_cast<std::size_t>(
+      params.max_history_samples >= min_samples
+          ? params.max_history_samples
+          : defaults.max_history_samples);
+  config.min_motion_span =
+      params.min_motion_span > 0.0 ? params.min_motion_span : defaults.min_motion_span;
+  config.max_orthogonal_variance_ratio =
+      (params.max_orthogonal_variance_ratio >= 0.0 &&
+       params.max_orthogonal_variance_ratio < 1.0)
+          ? params.max_orthogonal_variance_ratio
+          : defaults.max_orthogonal_variance_ratio;
+  config.reversal_velocity_epsilon =
+      params.reversal_velocity_epsilon >= 0.0
+          ? params.reversal_velocity_epsilon
+          : defaults.reversal_velocity_epsilon;
+  config.min_half_period =
+      params.min_half_period > 0.0 ? params.min_half_period : defaults.min_half_period;
+  config.max_half_period =
+      params.max_half_period > config.min_half_period
+          ? params.max_half_period
+          : std::max(defaults.max_half_period, 2.0 * config.min_half_period);
+  config.wall_query_radius =
+      params.wall_query_radius > 0.0 ? params.wall_query_radius : defaults.wall_query_radius;
+  config.wall_query_max_results = static_cast<std::size_t>(
+      params.wall_query_max_results > 0
+          ? params.wall_query_max_results
+          : defaults.wall_query_max_results);
+  config.wall_vertical_window =
+      params.wall_vertical_window > 0.0
+          ? params.wall_vertical_window
+          : defaults.wall_vertical_window;
+  config.wall_min_outside_gap =
+      params.wall_min_outside_gap >= 0.0
+          ? params.wall_min_outside_gap
+          : defaults.wall_min_outside_gap;
+  config.wall_clearance_margin =
+      params.wall_clearance_margin >= 0.0
+          ? params.wall_clearance_margin
+          : defaults.wall_clearance_margin;
+  return config;
+}
+
 DynamicObjectPredictorConfig buildPredictorConfig(
     const DynamicObjectPredictorParams& params) {
   const DynamicObjectPredictorParams defaults;
@@ -1022,6 +1261,8 @@ DynamicObjectPredictorConfig buildPredictorConfig(
   config.hypothesis_noise_scale =
       params.hypothesis_noise_scale >= 1.0 ? params.hypothesis_noise_scale
                                            : defaults.hypothesis_noise_scale;
+  config.corridor_oscillation_config =
+      buildCorridorOscillationConfig(params.corridor_oscillation);
   config.feedback_config = buildPredictionFeedbackConfig(params.feedback);
   config.filter_config = buildMultiModelKalmanFilterConfig(params.filter);
   config.interaction_config = buildPredictionInteractionConfig(params.interaction);
@@ -1062,6 +1303,45 @@ void DynamicObjectPredictor::loadParameters() {
   pnh_.param("prediction_hypothesis_noise_scale",
              params_.hypothesis_noise_scale,
              defaults.hypothesis_noise_scale);
+  pnh_.param("prediction_enable_corridor_oscillation",
+             params_.corridor_oscillation.enabled,
+             defaults.corridor_oscillation.enabled);
+  pnh_.param("prediction_corridor_oscillation_min_samples",
+             params_.corridor_oscillation.min_samples,
+             defaults.corridor_oscillation.min_samples);
+  pnh_.param("prediction_corridor_oscillation_max_history_samples",
+             params_.corridor_oscillation.max_history_samples,
+             defaults.corridor_oscillation.max_history_samples);
+  pnh_.param("prediction_corridor_oscillation_min_motion_span",
+             params_.corridor_oscillation.min_motion_span,
+             defaults.corridor_oscillation.min_motion_span);
+  pnh_.param("prediction_corridor_oscillation_max_orthogonal_variance_ratio",
+             params_.corridor_oscillation.max_orthogonal_variance_ratio,
+             defaults.corridor_oscillation.max_orthogonal_variance_ratio);
+  pnh_.param("prediction_corridor_oscillation_reversal_velocity_epsilon",
+             params_.corridor_oscillation.reversal_velocity_epsilon,
+             defaults.corridor_oscillation.reversal_velocity_epsilon);
+  pnh_.param("prediction_corridor_oscillation_min_half_period",
+             params_.corridor_oscillation.min_half_period,
+             defaults.corridor_oscillation.min_half_period);
+  pnh_.param("prediction_corridor_oscillation_max_half_period",
+             params_.corridor_oscillation.max_half_period,
+             defaults.corridor_oscillation.max_half_period);
+  pnh_.param("prediction_corridor_oscillation_wall_query_radius",
+             params_.corridor_oscillation.wall_query_radius,
+             defaults.corridor_oscillation.wall_query_radius);
+  pnh_.param("prediction_corridor_oscillation_wall_query_max_results",
+             params_.corridor_oscillation.wall_query_max_results,
+             defaults.corridor_oscillation.wall_query_max_results);
+  pnh_.param("prediction_corridor_oscillation_wall_vertical_window",
+             params_.corridor_oscillation.wall_vertical_window,
+             defaults.corridor_oscillation.wall_vertical_window);
+  pnh_.param("prediction_corridor_oscillation_wall_min_outside_gap",
+             params_.corridor_oscillation.wall_min_outside_gap,
+             defaults.corridor_oscillation.wall_min_outside_gap);
+  pnh_.param("prediction_corridor_oscillation_wall_clearance_margin",
+             params_.corridor_oscillation.wall_clearance_margin,
+             defaults.corridor_oscillation.wall_clearance_margin);
   pnh_.param("prediction_enable_feedback",
              params_.feedback.enabled,
              defaults.feedback.enabled);
@@ -1173,17 +1453,33 @@ DynamicObjectPredictorFrameResult DynamicObjectPredictor::predict(
     prediction.motion_model_type = toRosMotionModelType(input.motion_model_type);
     prediction.matched_in_current_frame = input.matched_in_current_frame;
 
-    // GMM 意图分支路径：提取历史特征，生成多模式假设，逐模式滚出分支。
+    // 通道往复模型只有在运动、端点周期和两侧墙均有证据时才覆盖通用 GMM。
     BranchRolloutContext rollout_context;
     rollout_context.input = &input;
     rollout_context.features = estimateHistoryFeatures(input, config_);
-    const PredictionFeedbackModeHintMap* feedback_hints = nullptr;
-    const auto hint_iter = feedback_hints_by_object.find(input.id);
-    if (hint_iter != feedback_hints_by_object.end()) {
-      feedback_hints = &hint_iter->second;
+    const std::optional<CorridorOscillationModel> oscillator =
+        estimateCorridorOscillation(input, map_query, config_);
+    if (oscillator.has_value()) {
+      PredictionMode mode = makeMode(
+          PredictionModeKind::CorridorOscillation,
+          ldop::DynamicObjectPredictionBranch::BEHAVIOR_LATERAL,
+          0.0,
+          1.0,
+          1.0);
+      mode.probability = 1.0;
+      mode.corridor_oscillation =
+          std::make_shared<CorridorOscillationModel>(*oscillator);
+      rollout_context.modes.push_back(std::move(mode));
+      ++result.corridor_oscillation_object_count;
+    } else {
+      const PredictionFeedbackModeHintMap* feedback_hints = nullptr;
+      const auto hint_iter = feedback_hints_by_object.find(input.id);
+      if (hint_iter != feedback_hints_by_object.end()) {
+        feedback_hints = &hint_iter->second;
+      }
+      rollout_context.modes =
+          generatePredictionModes(input, rollout_context.features, config_, feedback_hints);
     }
-    rollout_context.modes =
-        generatePredictionModes(input, rollout_context.features, config_, feedback_hints);
 
     for (const PredictionMode& mode : rollout_context.modes) {
       prediction.branches.push_back(
@@ -1234,6 +1530,8 @@ DynamicObjectPredictorFrameResult DynamicObjectPredictor::predict(
                                        << "ms, inputs=" << inputs.size()
                                        << ", predictions="
                                        << result.predictions_msg.predictions.size()
+                                       << ", corridorOscillationObjects="
+                                       << result.corridor_oscillation_object_count
                                        << ", feedbackUpdatedBranches="
                                        << feedback.feedback_updated_branch_count
                                        << ", feedbackMaxNis=" << feedback.max_nis

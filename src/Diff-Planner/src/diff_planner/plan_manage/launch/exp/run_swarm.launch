@@ -12,11 +12,12 @@
     <arg name="max_tracking_error" default="0.20"/>
     <arg name="enable_occupied_recovery" default="true"/>
     <arg name="enable_swing_obstacle_guard" default="true"/>
+    <arg name="enable_swing_harmonic_prediction" default="true"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
-        <!-- 1.5m通道摆球：优先校验球底净空，否则按通道边界反射预测并停车等待穿越窗口。 -->
+        <!-- 1.5m通道摆球：优先校验球底净空，否则学习左右端点和周期并停车等待穿越窗口。 -->
         <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
         <arg name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
         <arg name="swing_corridor_width" value="1.50"/>
@@ -29,6 +30,13 @@
         <arg name="swing_underpass_learning_time" value="3.0"/>
         <arg name="swing_velocity_deadband" value="0.08"/>
         <arg name="swing_minimum_speed" value="0.25"/>
+        <arg name="swing_enable_harmonic_prediction" value="$(arg enable_swing_harmonic_prediction)"/>
+        <arg name="swing_harmonic_min_samples" value="12"/>
+        <arg name="swing_harmonic_max_history_samples" value="80"/>
+        <arg name="swing_harmonic_min_motion_span" value="0.35"/>
+        <arg name="swing_harmonic_reversal_velocity_epsilon" value="0.04"/>
+        <arg name="swing_harmonic_min_half_period" value="0.3"/>
+        <arg name="swing_harmonic_max_half_period" value="4.0"/>
         <arg name="swing_prediction_horizon" value="5.0"/>
         <arg name="swing_prediction_dt" value="0.05"/>
         <arg name="swing_release_clear_time" value="0.35"/>

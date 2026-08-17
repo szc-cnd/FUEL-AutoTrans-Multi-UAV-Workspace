@@ -76,6 +76,25 @@ void appendCvSpeedRampHistory(TrackPredictionInput& input,
   }
 }
 
+void appendCvOscillationHistory(TrackPredictionInput& input,
+                                const double start_time,
+                                const int count,
+                                const double dt,
+                                const double amplitude,
+                                const double half_period) {
+  input.history.clear();
+  const double omega = std::acos(-1.0) / half_period;
+  for (int index = 0; index < count; ++index) {
+    const double elapsed = static_cast<double>(index) * dt;
+    Eigen::VectorXd state = Eigen::VectorXd::Zero(6);
+    state(0) = amplitude * std::sin(omega * elapsed);
+    state(3) = amplitude * omega * std::cos(omega * elapsed);
+    input.history.push_back(makeHistorySample(
+        start_time + elapsed, MotionModelType::CV3D, state));
+  }
+  input.model_state = input.history.back().model_state;
+}
+
 double probabilitySum(const ldop::DynamicObjectPrediction& prediction) {
   double sum = 0.0;
   for (const auto& branch : prediction.branches) {
@@ -116,6 +135,9 @@ class PredictorFakeMapQuery final : public PredictionMapQuery {
       const Eigen::Vector3d& center,
       double /*radius*/,
       std::size_t /*max_results*/) const override {
+    if (!local_occupied_nodes_.empty()) {
+      return local_occupied_nodes_;
+    }
     if (!isOccupied(center)) {
       if (available_ && near_node_enabled_) {
         PredictionLocalOccupiedNode node;
@@ -140,6 +162,7 @@ class PredictorFakeMapQuery final : public PredictionMapQuery {
   double occupied_min_x_{-std::numeric_limits<double>::infinity()};
   double occupied_max_x_{std::numeric_limits<double>::infinity()};
   double near_node_offset_{0.86};
+  std::vector<PredictionLocalOccupiedNode> local_occupied_nodes_;
 
  private:
   bool isOccupied(const Eigen::Vector3d& point) const {
@@ -176,6 +199,126 @@ TEST(DynamicObjectPredictorTest, GeneratesBaselineCvPredictionPoints) {
   EXPECT_NEAR(branch.points[1].model_state[0], 0.2, 1e-9);
   EXPECT_NEAR(branch.points[1].influence_weight, 0.3, 1e-9);
   EXPECT_EQ(branch.points[1].model_covariance.size(), 36U);
+}
+
+TEST(DynamicObjectPredictorTest, CorridorOscillationSwitchDisabledKeepsCvExtrapolation) {
+  DynamicObjectPredictorConfig config;
+  config.prediction_horizon = 1.0;
+  config.filter_config.default_dt = 0.05;
+  config.max_branches = 1U;
+  config.interaction_config.enabled = false;
+  config.corridor_oscillation_config.enabled = false;
+  DynamicObjectPredictor predictor(config);
+
+  TrackPredictionInput input = makeCvInput();
+  input.bbox.size.x = 0.2;
+  input.bbox.size.y = 0.2;
+  appendCvOscillationHistory(input, 10.0, 61, 0.05, 0.45, 0.5);
+
+  PredictorFakeMapQuery map_query;
+  for (const double wall_x : {-0.75, 0.75}) {
+    PredictionLocalOccupiedNode node;
+    node.center = Eigen::Vector3d(wall_x, 0.0, 0.0);
+    node.voxel_size = 0.1;
+    node.hits = 10U;
+    map_query.local_occupied_nodes_.push_back(node);
+  }
+
+  std_msgs::Header header;
+  header.stamp = ros::Time(13.0);
+  header.frame_id = "map";
+  const auto result = predictor.predict(header, {input}, &map_query);
+
+  EXPECT_EQ(result.corridor_oscillation_object_count, 0U);
+  ASSERT_EQ(result.predictions_msg.predictions.size(), 1U);
+  const auto& branch = result.predictions_msg.predictions.front().branches.front();
+  ASSERT_FALSE(branch.points.empty());
+  EXPECT_GT(branch.points.back().model_state[0], 0.7);
+}
+
+TEST(DynamicObjectPredictorTest, CorridorOscillationUsesLearnedPeriodAndWallBounds) {
+  DynamicObjectPredictorConfig config;
+  config.prediction_horizon = 1.0;
+  config.filter_config.default_dt = 0.05;
+  config.interaction_config.enabled = false;
+  config.corridor_oscillation_config.enabled = true;
+  config.corridor_oscillation_config.min_samples = 12U;
+  config.corridor_oscillation_config.max_history_samples = 80U;
+  config.corridor_oscillation_config.min_motion_span = 0.35;
+  config.corridor_oscillation_config.reversal_velocity_epsilon = 0.02;
+  config.corridor_oscillation_config.wall_clearance_margin = 0.05;
+  DynamicObjectPredictor predictor(config);
+
+  TrackPredictionInput input = makeCvInput();
+  input.bbox.size.x = 0.2;
+  input.bbox.size.y = 0.2;
+  appendCvOscillationHistory(input, 20.0, 61, 0.05, 0.45, 0.5);
+
+  PredictorFakeMapQuery map_query;
+  for (const double wall_x : {-0.75, 0.75}) {
+    PredictionLocalOccupiedNode node;
+    node.center = Eigen::Vector3d(wall_x, 0.0, 0.0);
+    node.voxel_size = 0.1;
+    node.hits = 10U;
+    map_query.local_occupied_nodes_.push_back(node);
+  }
+
+  std_msgs::Header header;
+  header.stamp = ros::Time(23.0);
+  header.frame_id = "map";
+  const auto result = predictor.predict(header, {input}, &map_query);
+
+  EXPECT_EQ(result.corridor_oscillation_object_count, 1U);
+  ASSERT_EQ(result.predictions_msg.predictions.size(), 1U);
+  const auto& prediction = result.predictions_msg.predictions.front();
+  ASSERT_EQ(prediction.branches.size(), 1U);
+  const auto& branch = prediction.branches.front();
+  ASSERT_EQ(branch.points.size(), 20U);
+  for (const auto& point : branch.points) {
+    ASSERT_GE(point.model_state.size(), 6U);
+    EXPECT_GE(point.model_state[0], -0.451);
+    EXPECT_LE(point.model_state[0], 0.451);
+    EXPECT_NEAR(point.model_state[1], 0.0, 1e-9);
+  }
+  EXPECT_NEAR(branch.points[4].model_state[0], 0.45, 1e-6);
+  EXPECT_NEAR(branch.points[4].model_state[3], 0.0, 1e-6);
+  EXPECT_LT(branch.points[5].model_state[3], 0.0);
+  EXPECT_NEAR(branch.points[14].model_state[0], -0.45, 1e-6);
+  EXPECT_NEAR(branch.points[14].model_state[3], 0.0, 1e-6);
+  EXPECT_GT(branch.points[15].model_state[3], 0.0);
+}
+
+TEST(DynamicObjectPredictorTest, CorridorOscillationRequiresBothCorridorWalls) {
+  DynamicObjectPredictorConfig config;
+  config.prediction_horizon = 0.2;
+  config.filter_config.default_dt = 0.05;
+  config.max_branches = 1U;
+  config.interaction_config.enabled = false;
+  config.corridor_oscillation_config.enabled = true;
+  DynamicObjectPredictor predictor(config);
+
+  TrackPredictionInput input = makeCvInput();
+  input.bbox.size.x = 0.2;
+  input.bbox.size.y = 0.2;
+  appendCvOscillationHistory(input, 30.0, 61, 0.05, 0.45, 0.5);
+
+  PredictorFakeMapQuery map_query;
+  PredictionLocalOccupiedNode wall;
+  wall.center = Eigen::Vector3d(-0.75, 0.0, 0.0);
+  wall.voxel_size = 0.1;
+  wall.hits = 10U;
+  map_query.local_occupied_nodes_.push_back(wall);
+
+  std_msgs::Header header;
+  header.stamp = ros::Time(33.0);
+  header.frame_id = "map";
+  const auto result = predictor.predict(header, {input}, &map_query);
+
+  EXPECT_EQ(result.corridor_oscillation_object_count, 0U);
+  ASSERT_EQ(result.predictions_msg.predictions.size(), 1U);
+  ASSERT_EQ(result.predictions_msg.predictions.front().branches.size(), 1U);
+  EXPECT_GT(result.predictions_msg.predictions.front().branches.front().points.back().model_state[0],
+            0.5);
 }
 
 TEST(DynamicObjectPredictorTest, GeneratesHumanIntentBranchesWithNormalizedProbabilities) {

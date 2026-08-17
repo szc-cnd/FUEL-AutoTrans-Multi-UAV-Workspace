@@ -58,6 +58,38 @@ struct PredictionFeedbackDiagnostics {
   double max_abs_probability_bias{0.0};
 };
 
+struct CorridorOscillationParams {
+  bool enabled{false};
+  int min_samples{12};
+  int max_history_samples{80};
+  double min_motion_span{0.35};
+  double max_orthogonal_variance_ratio{0.15};
+  double reversal_velocity_epsilon{0.04};
+  double min_half_period{0.3};
+  double max_half_period{4.0};
+  double wall_query_radius{1.5};
+  int wall_query_max_results{4096};
+  double wall_vertical_window{0.5};
+  double wall_min_outside_gap{0.05};
+  double wall_clearance_margin{0.08};
+};
+
+struct CorridorOscillationConfig {
+  bool enabled{false};
+  std::size_t min_samples{12U};
+  std::size_t max_history_samples{80U};
+  double min_motion_span{0.35};
+  double max_orthogonal_variance_ratio{0.15};
+  double reversal_velocity_epsilon{0.04};
+  double min_half_period{0.3};
+  double max_half_period{4.0};
+  double wall_query_radius{1.5};
+  std::size_t wall_query_max_results{4096U};
+  double wall_vertical_window{0.5};
+  double wall_min_outside_gap{0.05};
+  double wall_clearance_margin{0.08};
+};
+
 // ROS 参数快照；predictor 和 tracker 各自读取，不共享同一个实例。
 struct DynamicObjectPredictorParams {
   double prediction_horizon{1.0};
@@ -71,6 +103,7 @@ struct DynamicObjectPredictorParams {
   double vertical_speed{0.3};                  // >=0，UAV 垂向分支的 z 速度幅值。
   double history_quality_noise_scale{1.5};     // >=1，短历史/漏检/不稳定轨迹的未来噪声放大上限。
   double hypothesis_noise_scale{1.3};          // >=1，假设性更强 mode 的未来噪声放大尺度。
+  CorridorOscillationParams corridor_oscillation;
   PredictionFeedbackParams feedback;
   MultiModelKalmanFilterParams filter;
   PredictionInteractionParams interaction;
@@ -89,6 +122,7 @@ struct DynamicObjectPredictorConfig {
   double vertical_speed{0.3};
   double history_quality_noise_scale{1.5};
   double hypothesis_noise_scale{1.3};
+  CorridorOscillationConfig corridor_oscillation_config;
   PredictionFeedbackConfig feedback_config;
   MultiModelKalmanFilterConfig filter_config;
   PredictionInteractionConfig interaction_config;
@@ -107,6 +141,7 @@ struct DynamicObjectPredictorFrameResult {
   visualization_msgs::MarkerArray prediction_markers_msg;
   PredictionInteractionDiagnostics interaction_diagnostics;
   PredictionFeedbackDiagnostics feedback_diagnostics;
+  std::size_t corridor_oscillation_object_count{0U};
   DynamicObjectPredictorTimingStats timing;
 };
 

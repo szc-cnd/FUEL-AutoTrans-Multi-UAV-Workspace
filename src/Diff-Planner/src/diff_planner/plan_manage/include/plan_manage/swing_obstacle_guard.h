@@ -4,6 +4,7 @@
 #include <Eigen/Eigen>
 
 #include <cstdint>
+#include <deque>
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +48,13 @@ public:
     double underpass_learning_time{3.0};
     double velocity_deadband{0.08};
     double minimum_swing_speed{0.25};
+    bool enable_harmonic_prediction{false};
+    int harmonic_min_samples{12};
+    int harmonic_max_history_samples{80};
+    double harmonic_min_motion_span{0.35};
+    double harmonic_reversal_velocity_epsilon{0.04};
+    double harmonic_min_half_period{0.3};
+    double harmonic_max_half_period{4.0};
   };
 
   SwingObstacleGuard();
@@ -64,12 +72,22 @@ public:
 
   static double reflectedCoordinate(double coordinate, double velocity,
                                     double time, double half_width);
+  static double harmonicCoordinate(double coordinate, double velocity,
+                                   double time, double center,
+                                   double amplitude, double half_period);
 
 private:
   struct Track
   {
+    struct TimedPosition
+    {
+      double time{0.0};
+      Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+    };
+
     SwingObstacleObservation observation;
     Eigen::Vector3d motion_hint{Eigen::Vector3d::Zero()};
+    std::deque<TimedPosition> position_history;
     double first_observation_time{0.0};
     double minimum_bottom_z{0.0};
     double observation_time{0.0};

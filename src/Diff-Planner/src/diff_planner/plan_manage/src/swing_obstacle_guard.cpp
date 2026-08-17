@@ -25,6 +25,80 @@ double nonnegativeOr(double value, double fallback)
   return std::isfinite(value) && value >= 0.0 ? value : fallback;
 }
 
+struct HarmonicEstimate
+{
+  double center{0.0};
+  double amplitude{0.0};
+  double half_period{0.0};
+};
+
+template <typename History>
+bool estimateHarmonicMotion(
+    const History &history,
+    const Eigen::Vector3d &origin, const Eigen::Vector3d &lateral,
+    const SwingObstacleGuard::Config &config, double half_width,
+    HarmonicEstimate *estimate)
+{
+  if (estimate == nullptr ||
+      history.size() < static_cast<std::size_t>(config.harmonic_min_samples))
+    return false;
+
+  std::vector<double> coordinates;
+  coordinates.reserve(history.size());
+  for (const auto &sample : history)
+    coordinates.push_back((sample.position - origin).dot(lateral));
+
+  const auto extrema = std::minmax_element(coordinates.begin(), coordinates.end());
+  const double observed_minimum = *extrema.first;
+  const double observed_maximum = *extrema.second;
+  const double observed_span = observed_maximum - observed_minimum;
+  if (observed_span < config.harmonic_min_motion_span)
+    return false;
+
+  std::vector<double> reversal_times;
+  int previous_direction = 0;
+  for (std::size_t index = 1; index < history.size(); ++index)
+  {
+    const double dt = history[index].time - history[index - 1].time;
+    if (dt <= 1.0e-6)
+      continue;
+    const double speed = (coordinates[index] - coordinates[index - 1]) / dt;
+    if (std::abs(speed) < config.harmonic_reversal_velocity_epsilon)
+      continue;
+    const int direction = speed > 0.0 ? 1 : -1;
+    if (previous_direction != 0 && direction != previous_direction)
+      reversal_times.push_back(history[index - 1].time);
+    previous_direction = direction;
+  }
+  if (reversal_times.size() < 2)
+    return false;
+
+  std::vector<double> half_periods;
+  for (std::size_t index = 1; index < reversal_times.size(); ++index)
+  {
+    const double half_period = reversal_times[index] - reversal_times[index - 1];
+    if (half_period >= config.harmonic_min_half_period &&
+        half_period <= config.harmonic_max_half_period)
+      half_periods.push_back(half_period);
+  }
+  if (half_periods.empty())
+    return false;
+  std::sort(half_periods.begin(), half_periods.end());
+
+  const double center = 0.5 * (observed_minimum + observed_maximum);
+  const double corridor_limited_amplitude =
+      std::min(center + half_width, half_width - center);
+  const double amplitude =
+      std::min(0.5 * observed_span, corridor_limited_amplitude);
+  if (amplitude < 0.5 * config.harmonic_min_motion_span)
+    return false;
+
+  estimate->center = center;
+  estimate->amplitude = amplitude;
+  estimate->half_period = half_periods[half_periods.size() / 2];
+  return true;
+}
+
 } // namespace
 
 SwingObstacleGuard::SwingObstacleGuard()
@@ -62,6 +136,20 @@ SwingObstacleGuard::Config SwingObstacleGuard::sanitizeConfig(const Config &conf
       nonnegativeOr(config.underpass_learning_time, 3.0);
   sanitized.velocity_deadband = nonnegativeOr(config.velocity_deadband, 0.08);
   sanitized.minimum_swing_speed = positiveOr(config.minimum_swing_speed, 0.25);
+  sanitized.harmonic_min_samples = std::max(4, config.harmonic_min_samples);
+  sanitized.harmonic_max_history_samples =
+      std::max(sanitized.harmonic_min_samples, config.harmonic_max_history_samples);
+  sanitized.harmonic_min_motion_span =
+      positiveOr(config.harmonic_min_motion_span, 0.35);
+  sanitized.harmonic_reversal_velocity_epsilon =
+      nonnegativeOr(config.harmonic_reversal_velocity_epsilon, 0.04);
+  sanitized.harmonic_min_half_period =
+      positiveOr(config.harmonic_min_half_period, 0.3);
+  sanitized.harmonic_max_half_period =
+      positiveOr(config.harmonic_max_half_period, 4.0);
+  if (sanitized.harmonic_max_half_period <= sanitized.harmonic_min_half_period)
+    sanitized.harmonic_max_half_period =
+        std::max(4.0, 2.0 * sanitized.harmonic_min_half_period);
   return sanitized;
 }
 
@@ -83,6 +171,7 @@ void SwingObstacleGuard::update(
         observation.position.z() - 0.5 * observation.size.z();
     double first_observation_time = observation_time;
     double minimum_bottom_z = object_bottom;
+    std::deque<Track::TimedPosition> position_history;
     if (existing != tracks_.end())
     {
       const double dt = observation_time - existing->second.observation_time;
@@ -105,12 +194,19 @@ void SwingObstacleGuard::update(
         first_observation_time = existing->second.first_observation_time;
         minimum_bottom_z =
             std::min(existing->second.minimum_bottom_z, object_bottom);
+        position_history = existing->second.position_history;
       }
     }
+
+    position_history.push_back({observation_time, observation.position});
+    while (position_history.size() >
+           static_cast<std::size_t>(config_.harmonic_max_history_samples))
+      position_history.pop_front();
 
     Track track;
     track.observation = observation;
     track.motion_hint = motion_hint;
+    track.position_history = std::move(position_history);
     track.first_observation_time = first_observation_time;
     track.minimum_bottom_z = minimum_bottom_z;
     track.observation_time = observation_time;
@@ -152,6 +248,30 @@ double SwingObstacleGuard::reflectedCoordinate(double coordinate,
   return phase <= 2.0 * half_width
              ? -half_width + phase
              : 3.0 * half_width - phase;
+}
+
+double SwingObstacleGuard::harmonicCoordinate(double coordinate,
+                                              double velocity,
+                                              double time,
+                                              double center,
+                                              double amplitude,
+                                              double half_period)
+{
+  if (!std::isfinite(coordinate) || !std::isfinite(velocity) ||
+      !std::isfinite(time) || !std::isfinite(center) ||
+      !std::isfinite(amplitude) || !std::isfinite(half_period) ||
+      amplitude <= 0.0 || half_period <= 0.0)
+    return coordinate;
+
+  const double angular_frequency = std::acos(-1.0) / half_period;
+  const double sine = std::max(
+      -1.0, std::min(1.0, (coordinate - center) / amplitude));
+  const double cosine_magnitude =
+      std::sqrt(std::max(0.0, 1.0 - sine * sine));
+  const double cosine = velocity < 0.0 ? -cosine_magnitude : cosine_magnitude;
+  const double phase = std::atan2(sine, cosine);
+  return center + amplitude *
+                      std::sin(phase + angular_frequency * std::max(0.0, time));
 }
 
 bool SwingObstacleGuard::findCollision(
@@ -205,6 +325,12 @@ bool SwingObstacleGuard::findCollision(
              lateral_velocity > 0.0)
       lateral_velocity = -speed;
 
+    HarmonicEstimate harmonic_estimate;
+    const bool use_harmonic_prediction =
+        config_.enable_harmonic_prediction &&
+        estimateHarmonicMotion(track.position_history, origin, lateral, config_,
+                               half_width, &harmonic_estimate);
+
     const double horizontal_clearance = object_radius + config_.vehicle_radius +
                                         config_.horizontal_margin;
     const bool underpass_height_learned =
@@ -224,9 +350,15 @@ bool SwingObstacleGuard::findCollision(
       if (underpass_height_learned && vehicle_top <= track.minimum_bottom_z)
         continue;
 
-      const double predicted_lateral = reflectedCoordinate(
-          lateral_coordinate, lateral_velocity, age + sample.time_from_now,
-          half_width);
+      const double prediction_time = age + sample.time_from_now;
+      const double predicted_lateral =
+          use_harmonic_prediction
+              ? harmonicCoordinate(lateral_coordinate, lateral_velocity,
+                                   prediction_time, harmonic_estimate.center,
+                                   harmonic_estimate.amplitude,
+                                   harmonic_estimate.half_period)
+              : reflectedCoordinate(lateral_coordinate, lateral_velocity,
+                                    prediction_time, half_width);
       const Eigen::Vector3d predicted_position =
           origin + forward * longitudinal_coordinate + lateral * predicted_lateral +
           Eigen::Vector3d(0.0, 0.0, track.observation.position.z() - origin.z());

@@ -45,6 +45,69 @@ TEST(SwingObstacleGuard, ReflectedPredictionNeverLeavesCorridor)
             -half_width);
 }
 
+TEST(SwingObstacleGuard, HarmonicPredictionStopsAndReversesAtEndpoint)
+{
+  constexpr double center = 0.10;
+  constexpr double amplitude = 0.45;
+  constexpr double half_period = 0.50;
+  const double initial_velocity = amplitude * std::acos(-1.0) / half_period;
+
+  EXPECT_NEAR(SwingObstacleGuard::harmonicCoordinate(
+                  center, initial_velocity, 0.25, center, amplitude, half_period),
+              center + amplitude, 1.0e-9);
+  const double before_endpoint = SwingObstacleGuard::harmonicCoordinate(
+      center, initial_velocity, 0.24, center, amplitude, half_period);
+  const double after_endpoint = SwingObstacleGuard::harmonicCoordinate(
+      center, initial_velocity, 0.26, center, amplitude, half_period);
+  EXPECT_NEAR(before_endpoint, after_endpoint, 1.0e-9);
+  EXPECT_LT(after_endpoint, center + amplitude);
+
+  for (double time = 0.0; time <= 10.0; time += 0.01)
+  {
+    const double coordinate = SwingObstacleGuard::harmonicCoordinate(
+        center, initial_velocity, time, center, amplitude, half_period);
+    EXPECT_GE(coordinate, center - amplitude - 1.0e-12);
+    EXPECT_LE(coordinate, center + amplitude + 1.0e-12);
+  }
+}
+
+TEST(SwingObstacleGuard, LearnedHarmonicPredictionIsUsedForCollisionTiming)
+{
+  SwingObstacleGuard::Config harmonic_config;
+  harmonic_config.enable_harmonic_prediction = true;
+  harmonic_config.vehicle_radius = 0.0;
+  harmonic_config.horizontal_margin = 0.0;
+  harmonic_config.harmonic_reversal_velocity_epsilon = 0.02;
+  SwingObstacleGuard harmonic_guard(harmonic_config);
+
+  SwingObstacleGuard::Config reflected_config = harmonic_config;
+  reflected_config.enable_harmonic_prediction = false;
+  SwingObstacleGuard reflected_guard(reflected_config);
+
+  constexpr double amplitude = 0.45;
+  constexpr double half_period = 0.50;
+  const double omega = std::acos(-1.0) / half_period;
+  for (int index = 0; index <= 60; ++index)
+  {
+    const double time = 0.05 * index;
+    SwingObstacleObservation ball;
+    ball.id = 9;
+    ball.position = Eigen::Vector3d(0.5, amplitude * std::sin(omega * time), 0.6);
+    ball.velocity = Eigen::Vector3d(0.0, amplitude * omega * std::cos(omega * time), 0.0);
+    ball.size = Eigen::Vector3d(0.1, 0.1, 0.1);
+    harmonic_guard.update({ball}, time);
+    reflected_guard.update({ball}, time);
+  }
+
+  const std::vector<SwingTrajectorySample> trajectory = {
+      {0.0, Eigen::Vector3d(0.0, 0.0, 0.6)},
+      {0.5, Eigen::Vector3d(0.5, 0.0, 0.6)}};
+  SwingCollisionResult result;
+  EXPECT_TRUE(harmonic_guard.findCollision(trajectory, 3.0, &result));
+  EXPECT_NEAR(result.time_from_now, 0.5, 1.0e-12);
+  EXPECT_FALSE(reflected_guard.findCollision(trajectory, 3.0, nullptr));
+}
+
 TEST(SwingObstacleGuard, AllowsCompleteVehicleEnvelopeBelowBall)
 {
   SwingObstacleGuard guard;

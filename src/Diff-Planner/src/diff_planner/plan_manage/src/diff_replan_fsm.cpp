@@ -107,6 +107,20 @@ namespace diff_planner
              swing_config.underpass_learning_time, 3.0);
     nh.param("fsm/swing_velocity_deadband", swing_config.velocity_deadband, 0.08);
     nh.param("fsm/swing_minimum_speed", swing_config.minimum_swing_speed, 0.25);
+    nh.param("fsm/swing_enable_harmonic_prediction",
+             swing_config.enable_harmonic_prediction, false);
+    nh.param("fsm/swing_harmonic_min_samples",
+             swing_config.harmonic_min_samples, 12);
+    nh.param("fsm/swing_harmonic_max_history_samples",
+             swing_config.harmonic_max_history_samples, 80);
+    nh.param("fsm/swing_harmonic_min_motion_span",
+             swing_config.harmonic_min_motion_span, 0.35);
+    nh.param("fsm/swing_harmonic_reversal_velocity_epsilon",
+             swing_config.harmonic_reversal_velocity_epsilon, 0.04);
+    nh.param("fsm/swing_harmonic_min_half_period",
+             swing_config.harmonic_min_half_period, 0.3);
+    nh.param("fsm/swing_harmonic_max_half_period",
+             swing_config.harmonic_max_half_period, 4.0);
     swing_obstacle_guard_.setConfig(swing_config);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
@@ -161,10 +175,11 @@ namespace diff_planner
       swing_obstacle_sub_ = nh.subscribe(swing_obstacle_topic_, 10,
                                          &DiffReplanFSM::dynamicObjectsCallback, this,
                                          ros::TransportHints().tcpNoDelay());
-      ROS_INFO("Swing obstacle guard enabled: topic=%s, corridor=%.2fm, horizon=%.2fs.",
+      ROS_INFO("Swing obstacle guard enabled: topic=%s, corridor=%.2fm, horizon=%.2fs, harmonic=%s.",
                swing_obstacle_topic_.c_str(),
                swing_obstacle_guard_.config().corridor_width,
-               swing_prediction_horizon_);
+               swing_prediction_horizon_,
+               swing_obstacle_guard_.config().enable_harmonic_prediction ? "on" : "off");
     }
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */

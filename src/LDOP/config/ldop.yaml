@@ -84,6 +84,21 @@ prediction_vertical_speed: 0.3  # UAV 垂向意图使用的 z 速度幅值
 prediction_history_quality_noise_scale: 1.5  # 短历史/漏检/不稳定轨迹的未来噪声放大上限
 prediction_hypothesis_noise_scale: 1.3  # 假设性分支相对 keep 分支的未来噪声尺度
 
+# 窄通道内水平往复障碍物：轨迹、换向周期和两侧墙证据同时成立后，以端点速度为零的简谐模型替代CV外推。
+prediction_enable_corridor_oscillation: true  # 总开关；关闭后完全回到原通用预测路径
+prediction_corridor_oscillation_min_samples: 12  # 至少需要的有效匹配历史点数
+prediction_corridor_oscillation_max_history_samples: 80  # 用于识别摆动的最大历史点数
+prediction_corridor_oscillation_min_motion_span: 0.35  # 已观察到的最小左右运动范围，单位m
+prediction_corridor_oscillation_max_orthogonal_variance_ratio: 0.15  # 垂直于主运动轴的方差/主轴方差上限
+prediction_corridor_oscillation_reversal_velocity_epsilon: 0.04  # 忽略端点附近的小速度抖动，单位m/s
+prediction_corridor_oscillation_min_half_period: 0.3  # 相邻左右端点的最短时间，单位s
+prediction_corridor_oscillation_max_half_period: 4.0  # 相邻左右端点的最长时间，单位s
+prediction_corridor_oscillation_wall_query_radius: 1.5  # 从历史轨迹中心查询两侧墙的半径，单位m
+prediction_corridor_oscillation_wall_query_max_results: 4096  # 单目标局部墙体查询最大体素数
+prediction_corridor_oscillation_wall_vertical_window: 0.5  # 只使用目标高度附近的墙体体素，单位m
+prediction_corridor_oscillation_wall_min_outside_gap: 0.05  # 墙体必须位于观测摆幅之外的最小距离，单位m
+prediction_corridor_oscillation_wall_clearance_margin: 0.08  # 球体包围盒外额外保留的墙边距，单位m
+
 prediction_enable_feedback: false  # 启用P4闭环反馈：用上一轮预测残差/NIS调整同一目标的下一帧分支概率和未来Q尺度
 prediction_feedback_max_age: 1.5  # 超过该时间差的预测缓存不再用于反馈，单位s
 prediction_feedback_probability_gain: 1.0  # likelihood bias对下一轮mode score的影响强度
