@@ -13,7 +13,9 @@ def test_trajectory_timeout_does_not_reuse_takeoff_xy():
     assert "if (!ever_received_trajectory)" in code
     assert "timeout_hold_x = position_x;" in code
     assert "timeout_hold_y = position_y;" in code
+    assert "timeout_hold_z = position_z;" in code
     assert "timeout_hold_yaw = current_yaw;" in code
     assert "hold_speed_xy_max = 0.08;" in code
     assert "hold_kp_xy * (timeout_hold_x - position_x)" in code
     assert "hold_kp_xy * (timeout_hold_y - position_y)" in code
+    assert "takeoff_kp_z * (hold_z - position_z)" in code

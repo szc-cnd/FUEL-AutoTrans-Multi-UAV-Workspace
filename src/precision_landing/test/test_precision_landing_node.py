@@ -691,7 +691,7 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.publish_camera_info(valid=True)
         self.trigger_pub.publish(Bool(data=True))
         self.publish_centered_marker(
-            marker_id=37, frames=10, marker_size_px=150
+            marker_id=37, frames=10, marker_size_px=200
         )
         self.assertTrue(
             self.wait_for(
@@ -703,6 +703,7 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             "node did not reach active fixed-XY descent",
         )
 
+        setpoint_count_before_falling_trigger = self._setpoint_count()
         self.trigger_pub.publish(Bool(data=False))
         for center_x in (360, 400, 440, 480, 520):
             self.publish_centered_marker(
@@ -727,9 +728,16 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             ),
             "falling trigger froze jump history and caused false target loss",
         )
+        setpoints_after_falling_trigger = self._setpoint_snapshot()[
+            setpoint_count_before_falling_trigger:
+        ]
         self.assertTrue(
-            any(msg.velocity.z < 0.0 for msg in self._setpoint_snapshot()),
-            "falling trigger interrupted fixed-XY descent",
+            any(
+                not (msg.type_mask & PositionTarget.IGNORE_PZ)
+                and msg.position.z < 1.99
+                for msg in setpoints_after_falling_trigger
+            ),
+            "falling trigger interrupted fixed-XY position descent",
         )
 
         for center_x in (480, 440, 400, 360, 320):

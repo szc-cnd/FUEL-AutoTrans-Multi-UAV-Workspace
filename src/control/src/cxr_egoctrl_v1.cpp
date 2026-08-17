@@ -127,7 +127,7 @@ public:
     double mavros_position_x, mavros_position_y, mavros_position_z, mavros_yaw;
     double safety_hold_x, safety_hold_y, safety_hold_z, safety_hold_yaw;
     double endpoint_hold_x, endpoint_hold_y, endpoint_hold_z, endpoint_hold_yaw;
-    double timeout_hold_x, timeout_hold_y, timeout_hold_yaw;
+    double timeout_hold_x, timeout_hold_y, timeout_hold_z, timeout_hold_yaw;
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
     bool landing_search_speed_active;
@@ -230,7 +230,7 @@ Ctrl::Ctrl()
     mavros_position_x = mavros_position_y = mavros_position_z = mavros_yaw = 0.0;
     safety_hold_x = safety_hold_y = safety_hold_z = safety_hold_yaw = 0.0;
     endpoint_hold_x = endpoint_hold_y = endpoint_hold_z = endpoint_hold_yaw = 0.0;
-    timeout_hold_x = timeout_hold_y = timeout_hold_yaw = 0.0;
+    timeout_hold_x = timeout_hold_y = timeout_hold_z = timeout_hold_yaw = 0.0;
     safety_hold_uses_mavros_frame = false;
     landing_requested = false;
     landing_search_speed_active = false;
@@ -693,8 +693,11 @@ void Ctrl::control(const ros::TimerEvent&)
             current_goal.velocity.x = hold_vx;
             current_goal.velocity.y = hold_vy;
         }
+        const double hold_z = ever_received_trajectory
+                                  ? timeout_hold_z
+                                  : offboard_takeoff_height;
         current_goal.velocity.z = std::max(-max_takeoff_speed_z, std::min(max_takeoff_speed_z,
-            takeoff_kp_z * (offboard_takeoff_height - position_z)));
+            takeoff_kp_z * (hold_z - position_z)));
         current_goal.acceleration_or_force.x = 0.0;
         current_goal.acceleration_or_force.y = 0.0;
         current_goal.acceleration_or_force.z = 0.0;
@@ -705,7 +708,7 @@ void Ctrl::control(const ros::TimerEvent&)
         last_cmd_vz = current_goal.velocity.z;
         ROS_INFO_THROTTLE(2.0,
                           "未收到轨迹，OFFBOARD 起飞/悬停 z=%.2f -> %.2f，armed=%d",
-                          position_z, offboard_takeoff_height, armed);
+                          position_z, hold_z, armed);
         return;
     }
 
@@ -716,12 +719,14 @@ void Ctrl::control(const ros::TimerEvent&)
         {
             timeout_hold_x = position_x;
             timeout_hold_y = position_y;
+            timeout_hold_z = position_z;
             timeout_hold_yaw = current_yaw;
             timeout_hold_latched = true;
             receive = false;
             ROS_WARN_THROTTLE(1.0,
-                              "规划轨迹超时 %.2fs > %.2fs，锁存当前位置(%.2f,%.2f)等待新轨迹",
-                              traj_stale, traj_cmd_timeout, timeout_hold_x, timeout_hold_y);
+                              "规划轨迹超时 %.2fs > %.2fs，锁存当前位置(%.2f,%.2f,%.2f)等待新轨迹",
+                              traj_stale, traj_cmd_timeout, timeout_hold_x, timeout_hold_y,
+                              timeout_hold_z);
             return;
         }
     }
