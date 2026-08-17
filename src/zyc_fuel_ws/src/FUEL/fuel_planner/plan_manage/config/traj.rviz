@@ -135,23 +135,11 @@ Visualization Manager:
           Value: true
         - Class: rviz/Image
           Enabled: true
-          Image Topic: /UAV0/landing/search/debug_image
+          Image Topic: /UAV0/landing/combined_debug_image
           Max Value: 1
           Median window: 5
           Min Value: 0
-          Name: landing_down_search_image
-          Normalize Range: true
-          Queue Size: 2
-          Transport Hint: raw
-          Unreliable: false
-          Value: true
-        - Class: rviz/Image
-          Enabled: true
-          Image Topic: /UAV0/landing/debug_image
-          Max Value: 1
-          Median window: 5
-          Min Value: 0
-          Name: precision_landing_image
+          Name: landing_down_combined_image
           Normalize Range: true
           Queue Size: 2
           Transport Hint: raw

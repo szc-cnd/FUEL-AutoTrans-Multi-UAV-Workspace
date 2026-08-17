@@ -50,6 +50,9 @@ target_link_libraries(precision_landing_node
 add_executable(landing_setpoint_arbiter_node src/landing_setpoint_arbiter_node.cpp)
 target_link_libraries(landing_setpoint_arbiter_node ${catkin_LIBRARIES})
 
+add_executable(landing_debug_image_mux_node src/landing_debug_image_mux_node.cpp)
+target_link_libraries(landing_debug_image_mux_node ${catkin_LIBRARIES})
+
 add_executable(landing_test_mission_node src/landing_test_mission_node.cpp)
 target_link_libraries(landing_test_mission_node ${catkin_LIBRARIES})
 
@@ -57,6 +60,7 @@ catkin_install_python(PROGRAMS test/test_precision_landing_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 install(TARGETS precision_landing_node landing_search_node front_aruco_hint_node landing_setpoint_arbiter_node
+        landing_debug_image_mux_node
         landing_test_mission_node landing_controller landing_state_machine aruco_tracker
         landing_search_core
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

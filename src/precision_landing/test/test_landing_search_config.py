@@ -70,3 +70,32 @@ def test_precision_launch_wires_optional_front_hint_without_final_marker_access(
     assert params["topics/hint_world"] == "$(arg front_aruco_hint_topic)"
     assert "topics/marker_world" not in params
     assert "topics/landing_trigger" not in params
+
+
+def test_precision_launch_combines_downward_debug_views():
+    root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
+    nodes = [
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "landing_debug_image_mux_node"
+    ]
+    assert len(nodes) == 1
+    params = {
+        param.attrib["name"]: param.attrib["value"]
+        for param in nodes[0].findall("param")
+    }
+    assert params == {
+        "search_image_topic": "$(arg topic_prefix)/landing/search/debug_image",
+        "precision_image_topic": "$(arg topic_prefix)/landing/debug_image",
+        "trigger_topic": "$(arg trigger_topic)",
+        "output_topic": "$(arg topic_prefix)/landing/combined_debug_image",
+    }
+
+    rviz_config = (
+        PACKAGE.parent
+        / "zyc_fuel_ws/src/FUEL/fuel_planner/plan_manage/config/traj.rviz"
+    ).read_text()
+    assert rviz_config.count(
+        "Image Topic: /UAV0/landing/combined_debug_image"
+    ) == 1
+    assert "Name: landing_down_search_image" not in rviz_config
+    assert "Name: precision_landing_image" not in rviz_config

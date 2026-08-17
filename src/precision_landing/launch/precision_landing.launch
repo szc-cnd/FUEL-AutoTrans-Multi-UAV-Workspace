@@ -101,4 +101,17 @@
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/debug_image"/>
     <param name="topics/success" value="$(arg topic_prefix)/landing/success"/>
   </node>
+
+  <!-- RViz只订阅统一下视画面：触发精降前显示搜索标注，触发后显示精降标注。 -->
+  <node if="$(arg enable_landing_search)" pkg="precision_landing"
+        type="landing_debug_image_mux_node" name="landing_debug_image_mux"
+        ns="$(arg vehicle_ns)" output="screen">
+    <param name="search_image_topic"
+           value="$(arg topic_prefix)/landing/search/debug_image"/>
+    <param name="precision_image_topic"
+           value="$(arg topic_prefix)/landing/debug_image"/>
+    <param name="trigger_topic" value="$(arg trigger_topic)"/>
+    <param name="output_topic"
+           value="$(arg topic_prefix)/landing/combined_debug_image"/>
+  </node>
 </launch>

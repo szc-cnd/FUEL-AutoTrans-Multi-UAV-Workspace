@@ -186,19 +186,19 @@ rostopic hz /UAV0/mavros/vision_pose/pose
 第一条确认 MAVROS 已连接；后三条分别确认 FAST-LIO 位姿、注册点云和 PX4 位姿回传。
 持续查询频率的命令看到稳定输出后，按 `Ctrl+C` 再执行下一条。
 
-### 2. 检查两台相机和三路调试图
+### 2. 检查两台相机和两路调试图
 
 ```bash
 rostopic hz /camera/color/image_raw
 rostopic hz /camera/aligned_depth_to_color/image_raw
 rostopic hz /UAV0/down_camera/image_raw
 rostopic hz /UAV0/landing/front/debug_image
-rostopic hz /UAV0/landing/search/debug_image
-rostopic hz /UAV0/landing/debug_image
+rostopic hz /UAV0/landing/combined_debug_image
 ```
 
-依次确认 D435 彩色图、D435 对齐深度图、下视原图、前视粗搜索图、下视稳定搜索图和
-精降调试图正常发布。也可以分别使用 `rqt_image_view <话题名>` 查看画面。
+依次确认 D435 彩色图、D435 对齐深度图、下视原图、前视粗搜索图和统一下视调试图
+正常发布。统一下视图在精降触发前显示搜索标注，触发后自动切换为精降标注。也可以
+分别使用 `rqt_image_view <话题名>` 查看画面。
 
 ### 3. 检查启动后尚未触发
 
@@ -263,7 +263,7 @@ WAIT_EXIT_SWITCH
 - UAV0 机体模型和 FAST-LIO 历史路径。
 - FAST-LIO 注册点云和 Diff 占据地图。
 - Diff 当前规划轨迹、当前目标点和 `landing_search_subgoal`。
-- 前视 ArUco、下视搜索和精降三路带标注图像。
+- 前视 ArUco 带标注图像，以及自动切换搜索/精降标注的统一下视图像。
 
 搜索管理器每次只发送一个航点，因此 RViz 不会一次画出完整蛇形路线，而是随着当前
 航点到达逐段更新。
