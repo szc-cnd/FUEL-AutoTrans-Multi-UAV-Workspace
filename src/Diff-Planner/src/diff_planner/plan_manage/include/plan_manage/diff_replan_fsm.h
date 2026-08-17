@@ -14,6 +14,7 @@
 #include <std_msgs/String.h>
 #include <vector>
 #include <visualization_msgs/Marker.h>
+#include <ldop/DynamicObjectArray.h>
 
 #include <optimizer/poly_traj_optimizer.h>
 #include <plan_env/grid_map.h>
@@ -24,6 +25,7 @@
 #include <traj_utils/planning_visualization.h>
 #include <traj_utils/PolyTraj.h>
 #include <traj_utils/MINCOTraj.h>
+#include <plan_manage/swing_obstacle_guard.h>
 
 using std::vector;
 
@@ -109,10 +111,19 @@ namespace diff_planner
     bool enable_random_global_init_;
     std::string search_subgoal_topic_;
     std::string manual_goal_topic_; // 2026-07-28: UAV1接力规划使用独立目标话题，避免与前机全局/goal串线。
+    bool enable_swing_obstacle_guard_;
+    std::string swing_obstacle_topic_;
+    double swing_prediction_horizon_;
+    double swing_prediction_dt_;
+    double swing_release_clear_time_;
+    double swing_release_speed_;
 
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
     // AutoTrans 恢复成功后置位；在基于最新里程计发布新轨迹前禁止继续使用旧局部轨迹。
     bool controller_restart_pending_;
+    bool swing_wait_active_;
+    double swing_clear_since_;
+    uint32_t swing_wait_obstacle_id_;
     FSM_EXEC_STATE exec_state_;
     int continously_called_times_{0};
 
@@ -145,9 +156,10 @@ namespace diff_planner
     /* ROS utils */
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
-    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, subgoal_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, planning_restart_sub_;
+    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, subgoal_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, planning_restart_sub_, swing_obstacle_sub_;
     ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_;
     ros::Publisher planning_status_pub_;  // 2026-07-28: 向接力管理器反馈Diff规划成功/连续失败。
+    SwingObstacleGuard swing_obstacle_guard_;
 
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);
@@ -158,6 +170,13 @@ namespace diff_planner
     /* safety */
     void checkCollisionCallback(const ros::TimerEvent &e);
     bool callEmergencyStop(Eigen::Vector3d stop_pos);
+    void dynamicObjectsCallback(const ldop::DynamicObjectArrayConstPtr &msg);
+    std::vector<SwingTrajectorySample> sampleCurrentTrajectory(double now) const;
+    std::vector<SwingTrajectorySample> sampleReleaseTrajectory() const;
+    bool swingTrajectoryBlocked(const std::vector<SwingTrajectorySample> &samples,
+                                double now,
+                                SwingCollisionResult *result) const;
+    void startSwingWait(const SwingCollisionResult &collision);
     bool callOccupiedRecovery(const Eigen::Vector3d &target);
     void updateFreeOdomHistory(double now);
     bool startOccupiedRecovery(double now);

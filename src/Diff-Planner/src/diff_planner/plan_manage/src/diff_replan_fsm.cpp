@@ -15,6 +15,9 @@ namespace diff_planner
     flag_escape_emergency_ = true;
     mandatory_stop_ = false;
     controller_restart_pending_ = false;
+    swing_wait_active_ = false;
+    swing_clear_since_ = 0.0;
+    swing_wait_obstacle_id_ = 0;
 
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);
@@ -73,6 +76,38 @@ namespace diff_planner
     nh.param("fsm/search_subgoal_topic", search_subgoal_topic_, std::string("/corridor_search/subgoal"));
     // 2026-07-28: 外部目标话题参数化；双机时后机只接收接力管理器发布的/UAV1/planning/goal。
     nh.param("fsm/manual_goal_topic", manual_goal_topic_, std::string("/goal"));
+    nh.param("fsm/enable_swing_obstacle_guard", enable_swing_obstacle_guard_, false);
+    nh.param("fsm/swing_obstacle_topic", swing_obstacle_topic_,
+             std::string("/UAV1/ldop/dynamic_objects"));
+    nh.param("fsm/swing_prediction_horizon", swing_prediction_horizon_, 5.0);
+    nh.param("fsm/swing_prediction_dt", swing_prediction_dt_, 0.05);
+    nh.param("fsm/swing_release_clear_time", swing_release_clear_time_, 0.35);
+    nh.param("fsm/swing_release_speed", swing_release_speed_, 0.20);
+    if (!std::isfinite(swing_prediction_horizon_) || swing_prediction_horizon_ <= 0.0)
+      swing_prediction_horizon_ = 5.0;
+    if (!std::isfinite(swing_prediction_dt_) || swing_prediction_dt_ <= 0.0)
+      swing_prediction_dt_ = 0.05;
+    swing_prediction_dt_ = std::min(swing_prediction_dt_, swing_prediction_horizon_);
+    if (!std::isfinite(swing_release_clear_time_) || swing_release_clear_time_ < 0.0)
+      swing_release_clear_time_ = 0.35;
+    if (!std::isfinite(swing_release_speed_) || swing_release_speed_ <= 0.0)
+      swing_release_speed_ = 0.20;
+
+    SwingObstacleGuard::Config swing_config;
+    nh.param("fsm/swing_corridor_width", swing_config.corridor_width, 1.5);
+    nh.param("fsm/swing_corridor_boundary_margin",
+             swing_config.corridor_boundary_margin, 0.02);
+    nh.param("fsm/swing_vehicle_radius", swing_config.vehicle_radius, 0.25);
+    nh.param("fsm/swing_vehicle_half_height", swing_config.vehicle_half_height, 0.15);
+    nh.param("fsm/swing_horizontal_margin", swing_config.horizontal_margin, 0.10);
+    nh.param("fsm/swing_vertical_margin", swing_config.vertical_margin, 0.10);
+    nh.param("fsm/swing_observation_retention", swing_config.observation_retention,
+             0.80);
+    nh.param("fsm/swing_underpass_learning_time",
+             swing_config.underpass_learning_time, 3.0);
+    nh.param("fsm/swing_velocity_deadband", swing_config.velocity_deadband, 0.08);
+    nh.param("fsm/swing_minimum_speed", swing_config.minimum_swing_speed, 0.25);
+    swing_obstacle_guard_.setConfig(swing_config);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -121,6 +156,16 @@ namespace diff_planner
     mandatory_stop_sub_ = nh.subscribe("mandatory_stop", 1, &DiffReplanFSM::mandatoryStopCallback, this);
     planning_restart_sub_ = nh.subscribe("/planning_restart_trigger", 1,
                                          &DiffReplanFSM::planningRestartCallback, this);
+    if (enable_swing_obstacle_guard_)
+    {
+      swing_obstacle_sub_ = nh.subscribe(swing_obstacle_topic_, 10,
+                                         &DiffReplanFSM::dynamicObjectsCallback, this,
+                                         ros::TransportHints().tcpNoDelay());
+      ROS_INFO("Swing obstacle guard enabled: topic=%s, corridor=%.2fm, horizon=%.2fs.",
+               swing_obstacle_topic_.c_str(),
+               swing_obstacle_guard_.config().corridor_width,
+               swing_prediction_horizon_);
+    }
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */
     broadcast_ploytraj_pub_ = nh.advertise<traj_utils::MINCOTraj>("planning/broadcast_traj_send", 10);
@@ -448,6 +493,43 @@ namespace diff_planner
       }
       else if (enable_fail_safe_ && odom_vel_.norm() < escape_stop_speed_)
       {
+        if (swing_wait_active_)
+        {
+          SwingCollisionResult collision;
+          const bool blocked = swingTrajectoryBlocked(sampleReleaseTrajectory(),
+                                                       now_sec, &collision);
+          if (blocked)
+          {
+            swing_clear_since_ = 0.0;
+            swing_wait_obstacle_id_ = collision.obstacle_id;
+            ROS_WARN_THROTTLE(
+                0.5,
+                "[摆球避障] 保持悬停：id=%u，若现在放行将在 %.2fs 后相交，球预测=(%.2f, %.2f, %.2f)。",
+                collision.obstacle_id, collision.time_from_now,
+                collision.obstacle_position.x(), collision.obstacle_position.y(),
+                collision.obstacle_position.z());
+            break;
+          }
+
+          if (swing_clear_since_ <= 0.0)
+            swing_clear_since_ = now_sec;
+          if (now_sec - swing_clear_since_ < swing_release_clear_time_)
+            break;
+
+          ROS_INFO("[摆球避障] 穿越窗口已连续安全 %.2fs，恢复原目标并重新规划。",
+                   now_sec - swing_clear_since_);
+          publishPlanningStatus("SWING_OBSTACLE_RELEASED");
+          swing_wait_active_ = false;
+          swing_clear_since_ = 0.0;
+          swing_wait_obstacle_id_ = 0;
+          need_hover_stop_ = false;
+          replan_fail_count_ = 0;
+          last_target_change_time_ = now_sec;
+          stuck_detect_ignore_until_ = now_sec + stuck_detect_grace_time_;
+          changeFSMExecState(GEN_NEW_TRAJ, "SWING_RELEASE");
+          break;
+        }
+
         const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
         if (enable_occupied_recovery_ && current_occ != 0)
         {
@@ -675,6 +757,18 @@ namespace diff_planner
       changeFSMExecState(EMERGENCY_STOP, "SAFETY");
     }
 
+    if (enable_swing_obstacle_guard_ && !swing_wait_active_)
+    {
+      SwingCollisionResult collision;
+      const double swing_query_time = ros::Time::now().toSec();
+      if (swingTrajectoryBlocked(sampleCurrentTrajectory(swing_query_time),
+                                 swing_query_time, &collision))
+      {
+        startSwingWait(collision);
+        return;
+      }
+    }
+
     /* ---------- check trajectory ---------- */
     double t_temp = t_cur; // t_temp will be changed in the next function!
     int i_start = info->traj.locatePieceIdx(t_temp);
@@ -761,6 +855,135 @@ namespace diff_planner
       }
       j_start = 0;
     }
+  }
+
+  void DiffReplanFSM::dynamicObjectsCallback(
+      const ldop::DynamicObjectArrayConstPtr &msg)
+  {
+    std::vector<SwingObstacleObservation> observations;
+    observations.reserve(msg->objects.size());
+    for (const ldop::DynamicObject &object : msg->objects)
+    {
+      if (object.motion_model_type != ldop::DynamicObject::MOTION_MODEL_CV3D ||
+          object.model_state.size() < 6)
+      {
+        ROS_WARN_THROTTLE(2.0,
+                          "[摆球避障] 跳过非CV3D或状态长度不足的LDOP目标 id=%u。",
+                          object.id);
+        continue;
+      }
+
+      SwingObstacleObservation observation;
+      observation.id = object.id;
+      observation.position = Eigen::Vector3d(object.model_state[0],
+                                             object.model_state[1],
+                                             object.model_state[2]);
+      observation.velocity = Eigen::Vector3d(object.model_state[3],
+                                             object.model_state[4],
+                                             object.model_state[5]);
+      observation.size = Eigen::Vector3d(std::max(0.0, object.size.x),
+                                         std::max(0.0, object.size.y),
+                                         std::max(0.0, object.size.z));
+      observations.push_back(observation);
+    }
+
+    const double stamp = msg->header.stamp.isZero()
+                             ? ros::Time::now().toSec()
+                             : msg->header.stamp.toSec();
+    swing_obstacle_guard_.update(observations, stamp);
+
+    if (!msg->header.frame_id.empty() && msg->header.frame_id != "world" &&
+        msg->header.frame_id != "UAV1/camera_init" &&
+        msg->header.frame_id != "camera_init")
+    {
+      ROS_WARN_THROTTLE(
+          2.0,
+          "[摆球避障] LDOP frame_id=%s；当前启动文件只保证 world 与 UAV1/camera_init 重合，请确认坐标系。",
+          msg->header.frame_id.c_str());
+    }
+  }
+
+  std::vector<SwingTrajectorySample> DiffReplanFSM::sampleCurrentTrajectory(
+      double now) const
+  {
+    std::vector<SwingTrajectorySample> samples;
+    const LocalTrajData &local = planner_manager_->traj_.local_traj;
+    if (local.traj_id <= 0 || local.duration <= 0.0 || !std::isfinite(now))
+      return samples;
+
+    const double current_time =
+        std::max(0.0, std::min(local.duration, now - local.start_time));
+    const double remaining = local.duration - current_time;
+    const double horizon = std::min(swing_prediction_horizon_, remaining);
+    for (double dt = 0.0; dt < horizon; dt += swing_prediction_dt_)
+      samples.push_back({dt, local.traj.getPos(current_time + dt)});
+    samples.push_back({horizon, local.traj.getPos(current_time + horizon)});
+    return samples;
+  }
+
+  std::vector<SwingTrajectorySample> DiffReplanFSM::sampleReleaseTrajectory() const
+  {
+    std::vector<SwingTrajectorySample> samples;
+    Eigen::Vector3d target = local_target_pt_;
+    Eigen::Vector3d displacement = target - odom_pos_;
+    displacement.z() = 0.0;
+    if (!displacement.allFinite() || displacement.head<2>().norm() < 0.05)
+    {
+      target = final_goal_;
+      displacement = target - odom_pos_;
+      displacement.z() = 0.0;
+    }
+    if (!displacement.allFinite() || displacement.head<2>().norm() < 0.05)
+      return samples;
+
+    const double horizontal_distance = displacement.head<2>().norm();
+    const Eigen::Vector3d direction = displacement / horizontal_distance;
+    for (double time = 0.0; time < swing_prediction_horizon_;
+         time += swing_prediction_dt_)
+    {
+      const double progress =
+          std::min(horizontal_distance, swing_release_speed_ * time);
+      Eigen::Vector3d position = odom_pos_ + direction * progress;
+      const double ratio = horizontal_distance > 1.0e-6
+                               ? progress / horizontal_distance
+                               : 0.0;
+      position.z() = odom_pos_.z() + ratio * (target.z() - odom_pos_.z());
+      samples.push_back({time, position});
+    }
+    const double final_progress = std::min(
+        horizontal_distance, swing_release_speed_ * swing_prediction_horizon_);
+    Eigen::Vector3d final_position = odom_pos_ + direction * final_progress;
+    final_position.z() = odom_pos_.z() +
+                         (final_progress / horizontal_distance) *
+                             (target.z() - odom_pos_.z());
+    samples.push_back({swing_prediction_horizon_, final_position});
+    return samples;
+  }
+
+  bool DiffReplanFSM::swingTrajectoryBlocked(
+      const std::vector<SwingTrajectorySample> &samples, double now,
+      SwingCollisionResult *result) const
+  {
+    return enable_swing_obstacle_guard_ &&
+           swing_obstacle_guard_.findCollision(samples, now, result);
+  }
+
+  void DiffReplanFSM::startSwingWait(const SwingCollisionResult &collision)
+  {
+    swing_wait_active_ = true;
+    swing_clear_since_ = 0.0;
+    swing_wait_obstacle_id_ = collision.obstacle_id;
+    need_hover_stop_ = true;
+    flag_escape_emergency_ = true;
+    occupied_recovery_active_ = false;
+    publishPlanningStatus("SWING_OBSTACLE_WAIT");
+    ROS_ERROR(
+        "[摆球避障] 轨迹将在 %.2fs 后与 id=%u 相交，停车等待；球预测=(%.2f, %.2f, %.2f)，轨迹点=(%.2f, %.2f, %.2f)。",
+        collision.time_from_now, collision.obstacle_id,
+        collision.obstacle_position.x(), collision.obstacle_position.y(),
+        collision.obstacle_position.z(), collision.vehicle_position.x(),
+        collision.vehicle_position.y(), collision.vehicle_position.z());
+    changeFSMExecState(EMERGENCY_STOP, "SWING_GUARD");
   }
 
   bool DiffReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)

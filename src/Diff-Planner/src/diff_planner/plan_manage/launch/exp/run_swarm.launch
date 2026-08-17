@@ -11,10 +11,28 @@
     <arg name="point_num" default="5"/>
     <arg name="max_tracking_error" default="0.20"/>
     <arg name="enable_occupied_recovery" default="true"/>
+    <arg name="enable_swing_obstacle_guard" default="true"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
+        <!-- 1.5m通道摆球：优先校验球底净空，否则按通道边界反射预测并停车等待穿越窗口。 -->
+        <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
+        <arg name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
+        <arg name="swing_corridor_width" value="1.50"/>
+        <arg name="swing_corridor_boundary_margin" value="0.02"/>
+        <arg name="swing_vehicle_radius" value="0.25"/>
+        <arg name="swing_vehicle_half_height" value="0.15"/>
+        <arg name="swing_horizontal_margin" value="0.10"/>
+        <arg name="swing_vertical_margin" value="0.10"/>
+        <arg name="swing_observation_retention" value="0.80"/>
+        <arg name="swing_underpass_learning_time" value="3.0"/>
+        <arg name="swing_velocity_deadband" value="0.08"/>
+        <arg name="swing_minimum_speed" value="0.25"/>
+        <arg name="swing_prediction_horizon" value="5.0"/>
+        <arg name="swing_prediction_dt" value="0.05"/>
+        <arg name="swing_release_clear_time" value="0.35"/>
+        <arg name="swing_release_speed" value="0.20"/>
         <!-- UAV1窄通道实飞：占据起点先尝试历史自由点，否则低速侧移到实时地图中的宽阔区域。 -->
         <arg name="enable_occupied_recovery" value="$(arg enable_occupied_recovery)"/>
         <arg name="escape_max_distance" value="0.40"/>
@@ -59,6 +77,8 @@
         <!-- 1.5m窄通道使用10cm体素；障碍膨胀两格，给机体和停车漂移留出余量。 -->
         <arg name="map_resolution" value="0.10"/>
         <arg name="inflation_size" value="0.099"/>
+        <!-- 动态球旧位置0.8s内退出占据层；持续观测到的墙体仍会保持占据。 -->
+        <arg name="fading_time" value="0.8"/>
 
         <!-- UAV1 FAST-LIO 的里程计和点云共用局部坐标系，不能重复叠加出生点偏移。 -->
         <arg name="init_x" value="0.0"/>

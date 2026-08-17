@@ -18,6 +18,23 @@
     <arg name="planning_horizon"/>
     <!-- 旧局部轨迹预测与实际里程计的三维偏差超过该值时，从里程计强制重规划。 -->
     <arg name="max_tracking_error" default="0.30"/>
+    <!-- 通道摆球避障默认关闭，由明确接入LDOP的实飞launch开启。 -->
+    <arg name="enable_swing_obstacle_guard" default="false"/>
+    <arg name="swing_obstacle_topic" default="/UAV1/ldop/dynamic_objects"/>
+    <arg name="swing_corridor_width" default="1.5"/>
+    <arg name="swing_corridor_boundary_margin" default="0.02"/>
+    <arg name="swing_vehicle_radius" default="0.25"/>
+    <arg name="swing_vehicle_half_height" default="0.15"/>
+    <arg name="swing_horizontal_margin" default="0.10"/>
+    <arg name="swing_vertical_margin" default="0.10"/>
+    <arg name="swing_observation_retention" default="0.80"/>
+    <arg name="swing_underpass_learning_time" default="3.0"/>
+    <arg name="swing_velocity_deadband" default="0.08"/>
+    <arg name="swing_minimum_speed" default="0.25"/>
+    <arg name="swing_prediction_horizon" default="5.0"/>
+    <arg name="swing_prediction_dt" default="0.05"/>
+    <arg name="swing_release_clear_time" default="0.35"/>
+    <arg name="swing_release_speed" default="0.20"/>
     <!-- 起点进入膨胀障碍时，先退回近期自由位置；不可用时在实时地图中搜索宽阔的侧向安全点。 -->
     <arg name="enable_occupied_recovery" default="false"/>
     <arg name="escape_max_distance" default="0.40"/>
@@ -104,6 +121,22 @@
         <param name="fsm/thresh_replan_time" value="1.0" type="double"/>
         <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
         <param name="fsm/max_tracking_error" value="$(arg max_tracking_error)" type="double"/>
+        <param name="fsm/enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)" type="bool"/>
+        <param name="fsm/swing_obstacle_topic" value="$(arg swing_obstacle_topic)"/>
+        <param name="fsm/swing_corridor_width" value="$(arg swing_corridor_width)" type="double"/>
+        <param name="fsm/swing_corridor_boundary_margin" value="$(arg swing_corridor_boundary_margin)" type="double"/>
+        <param name="fsm/swing_vehicle_radius" value="$(arg swing_vehicle_radius)" type="double"/>
+        <param name="fsm/swing_vehicle_half_height" value="$(arg swing_vehicle_half_height)" type="double"/>
+        <param name="fsm/swing_horizontal_margin" value="$(arg swing_horizontal_margin)" type="double"/>
+        <param name="fsm/swing_vertical_margin" value="$(arg swing_vertical_margin)" type="double"/>
+        <param name="fsm/swing_observation_retention" value="$(arg swing_observation_retention)" type="double"/>
+        <param name="fsm/swing_underpass_learning_time" value="$(arg swing_underpass_learning_time)" type="double"/>
+        <param name="fsm/swing_velocity_deadband" value="$(arg swing_velocity_deadband)" type="double"/>
+        <param name="fsm/swing_minimum_speed" value="$(arg swing_minimum_speed)" type="double"/>
+        <param name="fsm/swing_prediction_horizon" value="$(arg swing_prediction_horizon)" type="double"/>
+        <param name="fsm/swing_prediction_dt" value="$(arg swing_prediction_dt)" type="double"/>
+        <param name="fsm/swing_release_clear_time" value="$(arg swing_release_clear_time)" type="double"/>
+        <param name="fsm/swing_release_speed" value="$(arg swing_release_speed)" type="double"/>
         <param name="fsm/enable_occupied_recovery" value="$(arg enable_occupied_recovery)" type="bool"/>
         <param name="fsm/escape_max_distance" value="$(arg escape_max_distance)" type="double"/>
         <param name="fsm/escape_history_time" value="$(arg escape_history_time)" type="double"/>
