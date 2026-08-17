@@ -1,9 +1,7 @@
 <launch>
-    <!-- 与 run_uav1_relay_diff.launch 对齐：使用 UAV1 的里程计和规划输出话题。 -->
+    <!-- 与 run_uav1_relay_diff.launch 对齐：使用 UAV1 的 FAST-LIO 输入和规划输出话题。 -->
     <arg name="odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
-    <!-- LDOP继续读取FAST-LIO原始点云；Diff只接收当前帧静态点，避免摆球扫掠写入占据地图。 -->
-    <!-- 若以 enable_ldop:=false 启动，必须同时将 cloud_topic 改回FAST-LIO原始点云。 -->
-    <arg name="cloud_topic" default="/UAV1/ldop/static_cloud"/>
+    <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
     <arg name="goal_topic" default="/UAV1/planning/goal"/>
     <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
     <arg name="drone_id" default="1"/>

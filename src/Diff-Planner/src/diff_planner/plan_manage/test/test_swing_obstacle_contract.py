@@ -37,10 +37,3 @@ def test_run_swarm_enables_bounded_corridor_model_and_map_fading():
     assert 'name="swing_underpass_learning_time" value="3.0"' in run_swarm
     assert 'name="swing_corridor_width" value="1.50"' in run_swarm
     assert 'name="fading_time" value="0.8"' in run_swarm
-
-
-def test_run_swarm_maps_only_ldop_static_cloud():
-    run_swarm = RUN_SWARM.read_text(encoding="utf-8")
-
-    assert 'name="enable_ldop" default="true"' in run_swarm
-    assert 'name="cloud_topic" default="/UAV1/ldop/static_cloud"' in run_swarm
