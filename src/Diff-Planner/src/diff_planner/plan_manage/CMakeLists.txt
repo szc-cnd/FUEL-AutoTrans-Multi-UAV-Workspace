@@ -24,13 +24,14 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   cv_bridge
   pcl_conversions
+  visualization_msgs
 )
 
 # catkin_package(CATKIN_DEPENDS message_runtime)
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES diff_planner
- CATKIN_DEPENDS ldop plan_env path_searching traj_opt traj_utils
+ CATKIN_DEPENDS ldop plan_env path_searching traj_opt traj_utils visualization_msgs
 #  DEPENDS system_lib
 )
 
@@ -70,6 +71,12 @@ target_link_libraries(goal_height_bridge ${catkin_LIBRARIES})
 add_executable(corridor_search_manager src/corridor_search_manager.cpp)
 target_link_libraries(corridor_search_manager ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+add_executable(corridor_dynamic_rechecker
+  src/corridor_dynamic_rechecker.cpp
+  src/corridor_dynamic_rechecker_node.cpp)
+target_link_libraries(corridor_dynamic_rechecker ${catkin_LIBRARIES})
+add_dependencies(corridor_dynamic_rechecker ${ldop_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_swing_obstacle_guard
     test/test_swing_obstacle_guard.cpp
@@ -77,6 +84,12 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_swing_obstacle_guard)
     target_link_libraries(test_swing_obstacle_guard ${catkin_LIBRARIES})
+  endif()
+  catkin_add_gtest(test_corridor_dynamic_rechecker
+    test/test_corridor_dynamic_rechecker.cpp
+    src/corridor_dynamic_rechecker.cpp)
+  if(TARGET test_corridor_dynamic_rechecker)
+    target_link_libraries(test_corridor_dynamic_rechecker ${catkin_LIBRARIES})
   endif()
 endif()
 # add_executable(monitor_node src/monitor_node.cpp)

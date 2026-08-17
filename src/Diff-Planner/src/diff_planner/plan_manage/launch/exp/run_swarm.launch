@@ -19,7 +19,7 @@
         <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
         <!-- 1.5m通道摆球：优先校验球底净空，否则学习左右端点和周期并停车等待穿越窗口。 -->
         <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
-        <arg name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
+        <arg name="swing_obstacle_topic" value="/UAV1/corridor_dynamic_objects"/>
         <arg name="swing_corridor_width" value="1.50"/>
         <arg name="swing_corridor_boundary_margin" value="0.02"/>
         <arg name="swing_vehicle_radius" value="0.25"/>
@@ -127,6 +127,26 @@
         <arg name="vehicle_ns" value="UAV1"/>
         <arg name="rviz" value="false"/>
     </include>
+
+    <node pkg="diff_planner" type="corridor_dynamic_rechecker" name="UAV1_corridor_dynamic_rechecker" output="screen">
+        <param name="cloud_topic" value="$(arg cloud_topic)"/>
+        <param name="odom_topic" value="$(arg odom_topic)"/>
+        <param name="object_topic" value="/UAV1/corridor_dynamic_objects"/>
+        <param name="marker_topic" value="/UAV1/corridor_dynamic_markers"/>
+        <param name="corridor_width" value="1.5"/>
+        <param name="wall_clearance" value="0.20"/>
+        <param name="roi_min_z" value="0.15"/>
+        <param name="roi_max_z" value="1.50"/>
+        <param name="voxel_resolution" value="0.08"/>
+        <param name="history_frames" value="5"/>
+        <param name="min_confirm_hits" value="3"/>
+        <param name="min_lateral_speed" value="0.10"/>
+        <param name="max_forward_speed" value="0.80"/>
+        <param name="max_vertical_speed" value="0.80"/>
+        <param name="track_timeout" value="0.40"/>
+        <param name="min_cluster_voxels" value="3"/>
+        <param name="min_wall_points" value="12"/>
+    </node>
 
     <node pkg="diff_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
         <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
