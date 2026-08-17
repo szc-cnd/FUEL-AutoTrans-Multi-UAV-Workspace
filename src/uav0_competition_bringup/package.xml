@@ -14,8 +14,14 @@
   <exec_depend>uvc_ubuntu</exec_depend>
   <exec_depend>target_reporting</exec_depend>
   <exec_depend>precision_landing</exec_depend>
+  <exec_depend>diff_planner</exec_depend>
+  <exec_depend>exploration_control</exec_depend>
+  <exec_depend>odom_visualization</exec_depend>
+  <exec_depend>plan_manage</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>rviz</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
   <exec_depend>usb_cam</exec_depend>
 
   <export />

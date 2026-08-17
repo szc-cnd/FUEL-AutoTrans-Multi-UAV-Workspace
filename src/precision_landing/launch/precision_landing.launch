@@ -9,6 +9,8 @@
   <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
+  <arg name="attitude_setpoint_topic"
+       default="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
   <arg name="set_mode_service" default="$(arg topic_prefix)/mavros/set_mode"/>
   <arg name="enable_setpoint_arbiter" default="true"/>
   <arg name="controller_position_input" default="$(arg topic_prefix)/control/position_setpoint"/>
@@ -72,7 +74,7 @@
     <param name="controller_attitude_input" value="$(arg controller_attitude_input)"/>
     <param name="landing_position_input" value="$(arg landing_setpoint_input)"/>
     <param name="mavros_position_output" value="$(arg setpoint_topic)"/>
-    <param name="mavros_attitude_output" value="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
+    <param name="mavros_attitude_output" value="$(arg attitude_setpoint_topic)"/>
     <param name="active_topic" value="$(arg topic_prefix)/landing/control_active"/>
     <param name="owner_topic" value="$(arg topic_prefix)/landing/control_owner"/>
   </node>

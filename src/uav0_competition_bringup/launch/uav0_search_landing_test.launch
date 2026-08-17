@@ -1,0 +1,217 @@
+<launch>
+  <!--
+    UAV0 搜索降落独立测试入口。
+    不启动 FUEL、通道搜索或 LDOP；默认隔离所有飞控输出，不会解锁或起飞。
+  -->
+  <arg name="enable_flight_control" default="false" />
+  <arg name="enable_rviz" default="true" />
+  <arg name="vehicle_ns" default="UAV0" />
+  <arg name="topic_prefix" default="/UAV0" />
+  <arg name="drone_id" default="0" />
+
+  <arg name="odom_topic" default="/UAV0/fast_lio/Odometry" />
+  <arg name="cloud_topic" default="/UAV0/fast_lio/cloud_registered" />
+  <arg name="down_camera_device"
+       default="/dev/v4l/by-id/usb-Generic_USB_Camera_20000001-video-index0" />
+  <arg name="down_camera_info_url"
+       default="file://$(env HOME)/.ros/camera_info/down_camera.yaml" />
+
+  <arg name="search_height" default="2.0" />
+  <arg name="search_width" default="3.0" />
+  <arg name="search_depth" default="4.0" />
+  <arg name="lane_spacing" default="1.0" />
+  <arg name="hover_height" default="0.60" />
+  <arg name="max_vel" default="0.50" />
+  <arg name="max_acc" default="0.60" />
+
+  <!-- 只启动搜索降落需要的两台相机和 D435 到机体的静态外参。 -->
+  <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+    <arg name="align_depth" value="true" />
+    <arg name="enable_color" value="true" />
+    <arg name="enable_depth" value="true" />
+    <arg name="color_width" value="1280" />
+    <arg name="color_height" value="720" />
+    <arg name="depth_width" value="1280" />
+    <arg name="depth_height" value="720" />
+    <arg name="enable_pointcloud" value="false" />
+  </include>
+
+  <include file="$(find target_reporting)/launch/camera_body_tf.launch">
+    <arg name="enable_odom_tf" value="false" />
+    <arg name="calibration_file"
+         value="$(env HOME)/handeye_calibration/body_camera_03.yaml" />
+    <arg name="parent_frame" value="UAV0/body" />
+    <arg name="child_frame" value="camera_link" />
+  </include>
+
+  <include file="$(find precision_landing)/launch/down_camera.launch">
+    <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+    <arg name="video_device" value="$(arg down_camera_device)" />
+    <arg name="camera_info_url" value="$(arg down_camera_info_url)" />
+  </include>
+
+  <!--
+    无桨测试时，把设定点和模式服务改到不存在的隔离接口。
+    搜索、识别、轨迹生成和状态机仍完整运行，但不能控制 MAVROS。
+  -->
+  <group unless="$(arg enable_flight_control)">
+    <include file="$(find precision_landing)/launch/precision_landing.launch">
+      <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+      <arg name="enable_front_aruco_hint" value="true" />
+      <arg name="setpoint_topic"
+           value="$(arg topic_prefix)/search_landing_test/blocked_setpoint" />
+      <arg name="attitude_setpoint_topic"
+           value="$(arg topic_prefix)/search_landing_test/blocked_attitude_setpoint" />
+      <arg name="set_mode_service"
+           value="$(arg topic_prefix)/search_landing_test/blocked_set_mode" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_flight_control)">
+    <include file="$(find precision_landing)/launch/precision_landing.launch">
+      <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+      <arg name="enable_front_aruco_hint" value="true" />
+    </include>
+  </group>
+
+  <!-- Diff 独立雷达占据图和轨迹规划，不加载 FUEL。 -->
+  <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="drone_id" value="$(arg drone_id)" />
+    <arg name="camera_pose_topic" value="no_use_diff_pose" />
+    <arg name="depth_topic" value="no_use_diff_depth" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="cx" value="319.31427001953125" />
+    <arg name="cy" value="239.09725952148438" />
+    <arg name="fx" value="386.2706298828125" />
+    <arg name="fy" value="386.2706298828125" />
+    <arg name="flight_type" value="4" />
+    <arg name="point_num" value="1" />
+    <arg name="point0_x" value="0.0" /><arg name="point0_y" value="0.0" /><arg name="point0_z" value="2.0" />
+    <arg name="point1_x" value="0.0" /><arg name="point1_y" value="0.0" /><arg name="point1_z" value="2.0" />
+    <arg name="point2_x" value="0.0" /><arg name="point2_y" value="0.0" /><arg name="point2_z" value="2.0" />
+    <arg name="point3_x" value="0.0" /><arg name="point3_y" value="0.0" /><arg name="point3_z" value="2.0" />
+    <arg name="point4_x" value="0.0" /><arg name="point4_y" value="0.0" /><arg name="point4_z" value="2.0" />
+    <arg name="max_vel" value="$(arg max_vel)" />
+    <arg name="max_acc" value="$(arg max_acc)" />
+    <arg name="max_jer" value="2.0" />
+    <arg name="planning_horizon" value="6.0" />
+    <arg name="waypoint_switch_dist" value="0.25" />
+    <arg name="local_map_size_x" value="15.0" />
+    <arg name="local_map_size_y" value="9.0" />
+    <arg name="local_map_size_z" value="3.0" />
+    <arg name="enable_virtual_wall" value="true" />
+    <arg name="virtual_ceil" value="2.25" />
+    <arg name="virtual_ground" value="0.10" />
+    <arg name="map_resolution" value="0.15" />
+    <arg name="inflation_size" value="0.15" />
+    <arg name="obstacle_clearance" value="0.15" />
+    <arg name="init_x" value="0.0" /><arg name="init_y" value="0.0" /><arg name="init_z" value="0.0" />
+    <arg name="cloud_use_init_offset" value="false" />
+    <arg name="preserve_global_map" value="true" />
+    <arg name="enable_stuck_detect" value="false" />
+    <arg name="stuck_detect_grace_time" value="20.0" />
+    <arg name="require_pre_agent_trajectory" value="false" />
+    <arg name="enable_random_global_init" value="false" />
+    <arg name="search_subgoal_topic" value="/UAV0/landing_diff/subgoal" />
+    <arg name="search_trigger_topic" value="/UAV0/landing_diff/trigger" />
+    <arg name="search_goal_trigger_topic" value="/UAV0/landing_diff/manual_trigger" />
+  </include>
+
+  <node pkg="diff_planner" name="landing_diff_traj_server"
+        type="traj_server" output="screen">
+    <remap from="position_cmd" to="/UAV0/diff/planning/pos_cmd" />
+    <remap from="~planning/trajectory" to="/drone_$(arg drone_id)_planning/trajectory" />
+    <remap from="~planning/yaw" to="/UAV0/landing_diff/yaw" />
+    <remap from="~heartbeat" to="/drone_$(arg drone_id)_traj_server/heartbeat" />
+    <param name="traj_server/time_forward" value="1.0" type="double" />
+    <param name="traj_server/yaw_dot_max" value="3.14" type="double" />
+    <param name="traj_server/yaw_dot_dot_max" value="15.71" type="double" />
+  </node>
+
+  <node pkg="diff_planner" name="planner_command_arbiter"
+        type="planner_command_arbiter" output="screen">
+    <param name="fuel_topic" value="/UAV0/search_landing_test/unused_fuel_pos_cmd" />
+    <param name="diff_topic" value="/UAV0/diff/planning/pos_cmd" />
+    <param name="output_topic" value="/UAV0/planning/pos_cmd" />
+    <param name="stage_topic" value="/UAV0/mission/task_status" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="dynamic_avoidance_enabled" value="false" />
+  </node>
+
+  <node pkg="diff_planner" name="landing_diff_search_manager"
+        type="landing_diff_search_manager" output="screen">
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="stage_topic" value="/UAV0/mission/task_status" />
+    <param name="marker_topic" value="/UAV0/mission/detection/final_aruco" />
+    <param name="front_hint_topic" value="/UAV0/landing/front_aruco_hint" />
+    <param name="subgoal_topic" value="/UAV0/landing_diff/subgoal" />
+    <param name="trigger_topic" value="/UAV0/landing_diff/trigger" />
+    <param name="yaw_topic" value="/UAV0/landing_diff/yaw" />
+    <param name="landing_request_topic" value="/UAV0/mission/landing_request" />
+    <param name="search_height" value="$(arg search_height)" />
+    <param name="lane_spacing" value="$(arg lane_spacing)" />
+    <param name="search_width" value="$(arg search_width)" />
+    <param name="search_depth" value="$(arg search_depth)" />
+    <param name="arrive_xy" value="0.35" />
+    <param name="arrive_z" value="0.20" />
+    <param name="front_hint_dwell_sec" value="2.0" />
+    <param name="front_hint_initial_wait_sec" value="1.0" />
+    <param name="front_yaw_scan_half_angle_rad" value="0.5236" />
+    <param name="front_yaw_scan_rate_rad_s" value="0.35" />
+    <param name="front_hint_forward_margin" value="1.0" />
+    <param name="front_hint_lateral_margin" value="1.0" />
+    <param name="front_hint_min_z" value="-0.50" />
+    <param name="front_hint_max_z" value="1.50" />
+    <param name="target_frame" value="world" />
+    <param name="marker_timeout_sec" value="0.50" />
+    <param name="front_hint_timeout_sec" value="0.50" />
+    <param name="max_header_future_sec" value="0.05" />
+  </node>
+
+  <!-- 当前 FAST-LIO 的 camera_init 与测试世界系数值对齐。 -->
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="search_test_world_to_map" args="0 0 0 0 0 0 world map" />
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="search_test_world_to_camera_init"
+        args="0 0 0 0 0 0 world UAV0/camera_init" />
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="search_test_body_to_base_link"
+        args="0 0 0 0 0 0 UAV0/body UAV0/base_link" />
+  <node pkg="tf" type="static_transform_publisher"
+        name="search_test_world_to_navigation"
+        args="0 0 0 0 0 0 world navigation 100" />
+
+  <node pkg="odom_visualization" type="odom_visualization"
+        name="search_test_uav0_odom_visualization" output="screen">
+    <remap from="~odom" to="$(arg odom_topic)" />
+    <remap from="~cmd" to="/UAV0/planning/pos_cmd" />
+    <remap from="~pose" to="/UAV0/odom_visualization/pose" />
+    <remap from="~path" to="/UAV0/odom_visualization/path" />
+    <remap from="~velocity" to="/UAV0/odom_visualization/velocity" />
+    <remap from="~covariance" to="/UAV0/odom_visualization/covariance" />
+    <remap from="~covariance_velocity" to="/UAV0/odom_visualization/covariance_velocity" />
+    <remap from="~trajectory" to="/UAV0/odom_visualization/trajectory" />
+    <remap from="~sensor" to="/UAV0/odom_visualization/sensor" />
+    <remap from="~robot" to="/UAV0/odom_visualization/robot" />
+    <remap from="~height" to="/UAV0/odom_visualization/height" />
+    <param name="frame_id" value="UAV0/camera_init" />
+    <param name="robot_scale" value="0.35" />
+    <param name="use_cmd_yaw_for_mesh" value="true" />
+    <param name="cmd_yaw_timeout" value="0.8" />
+    <param name="rotate_yaw_deg" value="90.0" />
+    <param name="tf45" value="false" />
+    <param name="drone_id" value="$(arg drone_id)" />
+  </node>
+
+  <include if="$(arg enable_flight_control)"
+           file="$(find exploration_control)/launch/simple_controller.launch">
+    <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+    <arg name="node_name" value="UAV0_search_landing_controller" />
+    <arg name="offboard_takeoff_height" value="$(arg hover_height)" />
+  </include>
+
+  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz"
+        name="search_landing_test_rviz"
+        args="-d $(find plan_manage)/config/traj.rviz" />
+</launch>

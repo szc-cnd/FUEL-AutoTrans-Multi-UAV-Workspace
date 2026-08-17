@@ -622,6 +622,68 @@ rqt_image_view /UAV0/landing/debug_image
 轨迹穿墙、定位跳变、图像冻结、错误目标锁定或控制权异常时，立即切回人工模式并终止
 本轮测试。
 
+### 8.2 不经过通道任务，单独测试搜索降落
+
+专用入口只启动 D435、下视相机、前后视 ArUco、精降节点、Diff 雷达地图与轨迹、
+搜索管理器、两个仲裁器和 RViz，不启动 FUEL、通道搜索或 LDOP。测试起点应放在模拟
+“已经飞出通道约 0.6 m”的位置；这里的手动信号只模拟比赛状态机确认出通道。
+
+先按前面的终端 1～4 启动 MAVROS、MID360、FAST-LIO 和位姿回传。第一次必须拆桨，
+使用默认的飞控输出隔离模式：
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch uav0_competition_bringup uav0_search_landing_test.launch \
+  enable_flight_control:=false
+```
+
+该模式会完整生成搜索航点和 Diff 轨迹，但把降落设定点和模式服务接到
+`/UAV0/search_landing_test/blocked_*`，不会启动简单控制器，也不会向 MAVROS 发送
+搜索降落控制指令。确认图像、里程计和点云正常后，手动发布一次“已出通道”信号：
+
+```bash
+rostopic pub -1 /UAV0/mission/task_status std_msgs/String \
+  "data: 'SEARCH_OUTSIDE_LANDING'"
+```
+
+信号发出后，正常状态为：当前位置锁存为搜索起点和出口航向，前视相机先原地扫描，
+未发现时生成上升到世界系 `z=2.00 m` 的目标，然后开始 `3 m × 4 m` 下视蛇形搜索。
+可使用下面的命令观察完整链路：
+
+```bash
+rostopic echo /landing_diff_search_manager/state
+rostopic echo /planner_command_arbiter/owner
+rostopic echo /UAV0/landing_diff/subgoal
+rostopic echo /UAV0/landing/front/status
+rostopic echo /UAV0/landing/search/status
+rostopic hz /UAV0/planning/pos_cmd
+rostopic hz /UAV0/search_landing_test/blocked_setpoint
+```
+
+无桨检查通过后，实飞入口为：
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch uav0_competition_bringup uav0_search_landing_test.launch \
+  enable_flight_control:=true \
+  hover_height:=0.60
+```
+
+实飞模式仍不会自动解锁或切换 `OFFBOARD`。启动后，简单控制器会先以 50 Hz 发布原地
+起飞设定点；按现场安全流程手动解锁并切换 `OFFBOARD` 后，无人机原地升至世界系
+`z=0.60 m` 并持续悬停。确认高度稳定、定位无跳变且遥控器可随时接管后，再执行上面的
+`SEARCH_OUTSIDE_LANDING` 单次发布命令。此后才允许 Diff 接管并开始前视扫描和搜索。
+
+“已出通道”切换在搜索管理器和规划仲裁器中都会锁存，发布 `false` 或停止话题不能退回
+悬停状态；需要重新测试时，应先人工接管、落地上锁，然后重启该专用 launch。测试中
+出现异常时立即用遥控器退出 `OFFBOARD`，不要先关闭当前唯一的设定点发布节点。
+
 ## 9. 停止顺序
 
 1. 退出 UAV0 控制器和规划器。
