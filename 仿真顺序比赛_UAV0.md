@@ -133,38 +133,18 @@ rostopic hz /UAV0/mavros/vision_pose/pose
 
 ### 手动终端 5：D435、目标检测、下视相机和精降节点
 
-下面命令默认启用热成像。没有接入热成像相机时，将 `thermal=true` 改为
-`thermal=false`。下视相机存在时自动启动下视搜索和精降；没有找到下视相机时只启动
-D435、通道内检测、相机 TF 和目标上报，不让整个终端退出。
+当前下视相机设备为
+`/dev/v4l/by-id/usb-Generic_USB_Camera_20000001-video-index0`，直接执行下面的启动命令：
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
 
-thermal=true
-mission_id="onboard_test_$(date +%Y%m%d)"
-down_camera=/dev/video0
-enable_down_camera=false
-enable_precision_landing=false
-
-detected_down_camera=$(find /dev/v4l/by-id -maxdepth 1 -type l \
-  -name 'usb-Generic_USB_Camera_*-video-index0' 2>/dev/null | sort | head -n 1)
-
-if [ -n "${detected_down_camera}" ]; then
-  down_camera="${detected_down_camera}"
-  enable_down_camera=true
-  enable_precision_landing=true
-else
-  echo "[跳过] 未发现下视相机，暂不启动下视搜索和精降"
-fi
-
-echo "[参数] down_camera_enabled=${enable_down_camera}, precision_landing=${enable_precision_landing}, device=${down_camera}"
-
 rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_realsense:=true \
-  enable_thermal:="${thermal}" \
-  enable_thermal_d435_fusion:="${thermal}" \
+  enable_thermal:=true \
+  enable_thermal_d435_fusion:=true \
   realsense_color_width:=1280 \
   realsense_color_height:=720 \
   realsense_depth_width:=1280 \
@@ -173,19 +153,12 @@ rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
   enable_camera_body_tf:=true \
   enable_camera_body_odom_tf:=false \
   enable_target_reporting:=true \
-  target_reporting_mission_id:="${mission_id}" \
-  enable_down_camera:="${enable_down_camera}" \
-  enable_precision_landing:="${enable_precision_landing}" \
+  target_reporting_mission_id:=onboard_test_$(date +%Y%m%d) \
+  enable_down_camera:=true \
+  enable_precision_landing:=true \
   enable_front_aruco_hint:=true \
   landing_vehicle_ns:=UAV0 \
-  down_camera_device:="${down_camera}"
-```
-
-若要测试完整搜索降落，必须确认终端输出中
-`down_camera_enabled=true`、`precision_landing=true`，并检查：
-
-```bash
-rosnode list | grep -E 'front_aruco_hint|landing_search|precision_landing|landing_setpoint'
+  down_camera_device:=/dev/v4l/by-id/usb-Generic_USB_Camera_20000001-video-index0
 ```
 
 ### 手动终端 6：FUEL、Diff、搜索管理器和 RViz
