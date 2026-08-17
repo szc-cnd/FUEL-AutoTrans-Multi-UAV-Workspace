@@ -277,6 +277,16 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
   observation.valid = true;
   observation.id = selected.id;
   observation.position_camera = selected_position;
+  const std::vector<cv::Point2f>& selected_corners =
+      corners[selected.detection_index];
+  if (!selected_corners.empty()) {
+    cv::Point2f center(0.0F, 0.0F);
+    for (const cv::Point2f& corner : selected_corners) {
+      center += corner;
+    }
+    center *= 1.0F / static_cast<float>(selected_corners.size());
+    observation.image_center_px = Eigen::Vector2d(center.x, center.y);
+  }
   observation.reprojection_error_px = selected.reprojection_error_px;
 
   // 位姿文字固定在左上角，不能跟随码角点；否则码靠近画面右侧时文字会被裁掉。

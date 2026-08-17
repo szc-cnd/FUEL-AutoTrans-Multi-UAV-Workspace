@@ -37,3 +37,36 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/landing_request"] == "$(arg mission_landing_request_topic)"
     assert params["topics/landing_trigger"] == "$(arg trigger_topic)"
     assert params["topics/marker_world"] == "$(arg landing_marker_world_topic)"
+    assert params["topics/target_id"] == "$(arg target_id_topic)"
+
+
+def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():
+    config = yaml.safe_load(
+        (PACKAGE / "config/front_aruco_hint.yaml").read_text()
+    )
+    assert config["marker"]["size_m"] == 0.60
+    assert config["marker"]["stable_frames"] == 5
+    assert config["depth_validation"]["required"] is True
+    assert config["frames"]["body"] == "UAV0/body"
+    assert config["frames"]["output_world"] == "world"
+    assert config["topics"]["hint_world"] == "/UAV0/landing/front_aruco_hint"
+    assert config["topics"]["hint_world"] != config["topics"].get("marker_world")
+
+
+def test_precision_launch_wires_optional_front_hint_without_final_marker_access():
+    root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
+    nodes = [
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "front_aruco_hint_node"
+    ]
+    assert len(nodes) == 1
+    params = {
+        param.attrib["name"]: param.attrib["value"]
+        for param in nodes[0].findall("param")
+    }
+    assert params["topics/image"] == "$(arg front_image_topic)"
+    assert params["topics/aligned_depth"] == "$(arg front_depth_topic)"
+    assert params["topics/odometry"] == "$(arg odometry_topic)"
+    assert params["topics/hint_world"] == "$(arg front_aruco_hint_topic)"
+    assert "topics/marker_world" not in params
+    assert "topics/landing_trigger" not in params

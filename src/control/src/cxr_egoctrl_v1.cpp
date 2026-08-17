@@ -16,7 +16,6 @@
 #include <sensor_msgs/Joy.h>
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/CommandLong.h>
-#include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/RCIn.h>
@@ -27,7 +26,9 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/String.h>
 #include <cmath>
+#include <string>
 
 // 100000000111 (二进制) -> 第11位是1(忽略角速度)，第10位是0(启用Yaw角度)
 #define VELOCITY2D_CONTROL 0b100000000111
@@ -40,6 +41,27 @@ double wrapAngle(double ang)
     while (ang > M_PI) ang -= 2.0 * M_PI;
     while (ang < -M_PI) ang += 2.0 * M_PI;
     return ang;
+}
+
+std::string firstToken(const std::string& text)
+{
+    const std::size_t end = text.find_first_of(" \t\r\n");
+    return text.substr(0, end);
+}
+
+bool isLandingSearchHighSpeedState(const std::string& state)
+{
+    return state == "FRONT_ARUCO_INITIAL_WAIT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_LEFT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RIGHT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RETURN" ||
+           state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
+           state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||
+           state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
+           state == "FRONT_HINT_REACHED_WAIT_DOWN_CAMERA" ||
+           state == "FRONT_HINT_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "FINAL_ARUCO_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "ARUCO_LOCKED_DIFF_APPROACH";
 }
 }
 
@@ -55,6 +77,7 @@ public:
     void safety_hold_cb(const std_msgs::Bool::ConstPtr& msg);
     void endpoint_hold_cb(const std_msgs::Bool::ConstPtr& msg);
     void landing_request_cb(const std_msgs::Bool::ConstPtr& msg);
+    void landing_search_state_cb(const std_msgs::String::ConstPtr& msg);
     void control(const ros::TimerEvent&);
 
     ros::NodeHandle nh;
@@ -107,10 +130,12 @@ public:
     double timeout_hold_x, timeout_hold_y, timeout_hold_yaw;
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
+    bool landing_search_speed_active;
     std::string odom_topic, setpoint_topic;
     // 2026-07-13: 控制输入、任务门控和 MAVROS 输出按车辆参数隔离，默认实例为 iris_0。
     std::string vehicle_ns, position_cmd_topic, safety_hold_topic, endpoint_hold_topic;
     std::string landing_request_topic, goal_topic, marker_topic, world_frame, drone_frame;
+    std::string landing_search_state_topic;
     double traj_cmd_timeout; // 规划轨迹超时保护
     double planner_enable_height; // FAST-LIO z 高度接管门限
     double offboard_takeoff_height; // 未收到规划轨迹时的 OFFBOARD 起飞/悬停高度
@@ -121,6 +146,8 @@ public:
     double vel_slew_rate_xy;
     double vel_slew_rate_z;
     double max_cmd_speed_xy;
+    double landing_search_max_cmd_speed_xy;
+    double landing_search_max_reverse_speed;
     double max_cmd_speed_z;
     double max_cmd_acc_xy;
     double max_cmd_acc_z;
@@ -132,11 +159,9 @@ public:
     ros::Time last_control_stamp;
 
     ros::Subscriber state_sub, twist_sub, target_sub, position_sub, mavros_pose_sub;
-    ros::Subscriber safety_hold_sub, endpoint_hold_sub, landing_request_sub;
+    ros::Subscriber safety_hold_sub, endpoint_hold_sub, landing_request_sub, landing_search_state_sub;
     ros::Publisher local_pos_pub, pubMarker;
-    ros::ServiceClient set_mode_client;
     ros::Timer timer;
-    ros::Time last_land_mode_request;
 };
 
 // ===============================================
@@ -158,6 +183,8 @@ Ctrl::Ctrl()
                            vehicle_ns + "/planning/endpoint_hold");
     pnh.param<std::string>("landing_request_topic", landing_request_topic,
                            vehicle_ns + "/mission/landing_request");
+    pnh.param<std::string>("landing_search_state_topic", landing_search_state_topic,
+                           std::string("/landing_diff_search_manager/state"));
     pnh.param<std::string>("goal_topic", goal_topic, vehicle_ns + "/move_base_simple/goal");
     pnh.param<std::string>("marker_topic", marker_topic, vehicle_ns + "/track_drone_point");
     pnh.param<std::string>("world_frame", world_frame, std::string("world"));
@@ -172,13 +199,14 @@ Ctrl::Ctrl()
     // position_sub = nh.subscribe("/UAV0/mavros/local_position/odom", 10, &Ctrl::position_cb, this); //真值
     target_sub = nh.subscribe(goal_topic, 10, &Ctrl::target_cb, this);
     twist_sub = nh.subscribe(position_cmd_topic, 10, &Ctrl::twist_cb, this);
-    // 2026-07-13: 规划失败立即刹停；终点二维码确认后由独立请求切换 PX4 AUTO.LAND。
+    // 规划失败立即刹停；平台确认后先锁点，再由精降节点接管。
     safety_hold_sub = nh.subscribe(safety_hold_topic, 5, &Ctrl::safety_hold_cb, this);
     endpoint_hold_sub =
         nh.subscribe(endpoint_hold_topic, 5, &Ctrl::endpoint_hold_cb, this);
     landing_request_sub =
         nh.subscribe(landing_request_topic, 2, &Ctrl::landing_request_cb, this);
-    set_mode_client = nh.serviceClient<mavros_msgs::SetMode>(vehicle_ns + "/mavros/set_mode");
+    landing_search_state_sub =
+        nh.subscribe(landing_search_state_topic, 5, &Ctrl::landing_search_state_cb, this);
 
     local_pos_pub = nh.advertise<mavros_msgs::PositionTarget>(setpoint_topic, 10);
     pubMarker = nh.advertise<visualization_msgs::Marker>(marker_topic, 5);
@@ -205,6 +233,7 @@ Ctrl::Ctrl()
     timeout_hold_x = timeout_hold_y = timeout_hold_yaw = 0.0;
     safety_hold_uses_mavros_frame = false;
     landing_requested = false;
+    landing_search_speed_active = false;
     have_odom = false;
     traj_cmd_timeout = 0.6;
     pnh.param("planner_enable_height", planner_enable_height, 0.5);
@@ -215,8 +244,10 @@ Ctrl::Ctrl()
     // 2026-07-27: 前后机水平加速度约束统一为1.0m/s^2；该斜率参数直接限制发送给PX4的速度指令变化率。
     pnh.param("vel_slew_rate_xy", vel_slew_rate_xy, 1.0);
     pnh.param("vel_slew_rate_z", vel_slew_rate_z, 1.0);
-    // 起飞以外的规划轨迹统一限速0.2m/s；起飞爬升由max_takeoff_speed_z独立控制。
+    // 通道与常规探索保持0.20m/s；出口后Diff搜索阶段由任务状态单独切至更高上限。
     pnh.param("max_cmd_speed_xy", max_cmd_speed_xy, 0.20);
+    pnh.param("landing_search_max_cmd_speed_xy", landing_search_max_cmd_speed_xy, 0.50);
+    pnh.param("landing_search_max_reverse_speed", landing_search_max_reverse_speed, 0.50);
     pnh.param("max_cmd_speed_z", max_cmd_speed_z, 0.20);
     // 2026-07-13: 加速度前馈同样限制到本次保守规划范围，避免柱边速度虽限幅但前馈仍瞬间推得过猛。
     pnh.param("max_cmd_acc_xy", max_cmd_acc_xy, 1.00);
@@ -231,7 +262,6 @@ Ctrl::Ctrl()
     last_traj_cmd_time = ros::Time(0);
     last_tf_stamp = ros::Time(0);
     last_control_stamp = ros::Time(0);
-    last_land_mode_request = ros::Time(0);
 }
 
 // ===============================================
@@ -462,13 +492,13 @@ void Ctrl::endpoint_hold_cb(const std_msgs::Bool::ConstPtr& msg)
 
 void Ctrl::landing_request_cb(const std_msgs::Bool::ConstPtr& msg)
 {
-    // 2026-07-16: true表示任务层已锁定最终落点；来源可以是二维码确认，也可以是当前启用的地图直降模式。
+    // true 表示 Diff 已到达平台上方，这里只锁存当前位置等待精降接管。
+    // 禁止在此直接请求 AUTO.LAND：此时高度约 2 m，必须保留下视校准和固定 XY 下降。
     if (!msg->data) return;
     landing_requested = true;
     safety_hold_active = true;
     receive = false;
-    // 2026-07-27: AUTO.LAND 服务暂未接受时仍需拥有有效锁点，不能绕过普通 safety_hold 回调后使用零值目标。
-    // 2026-07-28: 降落请求同样不得锁存已经与规划里程计分裂的 MAVROS 坐标。
+    // 交接等待期也不得锁存已经与规划里程计分裂的 MAVROS 坐标。
     safety_hold_uses_mavros_frame = have_mavros_pose && mavros_pose_consistent;
     if (safety_hold_uses_mavros_frame)
     {
@@ -485,7 +515,19 @@ void Ctrl::landing_request_cb(const std_msgs::Bool::ConstPtr& msg)
         safety_hold_yaw = current_yaw;
     }
     safety_hold_position_latched = safety_hold_uses_mavros_frame || have_odom;
-    ROS_ERROR("[mission_land] 收到最终落点确认后的降落请求，准备切换 AUTO.LAND");
+    ROS_WARN("[mission_land] Diff 已到平台上方，锁点等待下视精降接管");
+}
+
+void Ctrl::landing_search_state_cb(const std_msgs::String::ConstPtr& msg)
+{
+    const std::string state = firstToken(msg->data);
+    const bool next_active = isLandingSearchHighSpeedState(state);
+    if (next_active == landing_search_speed_active) return;
+
+    landing_search_speed_active = next_active;
+    ROS_WARN("[landing_search_speed] state=%s horizontal limit=%.2fm/s",
+             state.c_str(),
+             landing_search_speed_active ? landing_search_max_cmd_speed_xy : max_cmd_speed_xy);
 }
 
 // ===============================================
@@ -516,24 +558,6 @@ void Ctrl::control(const ros::TimerEvent&)
     double dt = last_control_stamp.isZero() ? 0.02 : (current_goal.header.stamp - last_control_stamp).toSec();
     if (dt <= 1e-4 || dt > 0.2) dt = 0.02;
     last_control_stamp = current_goal.header.stamp;
-
-    // 2026-07-13: 降落接管优先级最高；切换成功后停止发送 OFFBOARD 轨迹，交给 PX4 自动降落。
-    if (landing_requested)
-    {
-        if (current_state.mode != "AUTO.LAND" &&
-            (last_land_mode_request.isZero() ||
-             (ros::Time::now() - last_land_mode_request).toSec() > 1.0))
-        {
-            mavros_msgs::SetMode mode_cmd;
-            mode_cmd.request.custom_mode = "AUTO.LAND";
-            if (set_mode_client.call(mode_cmd) && mode_cmd.response.mode_sent)
-                ROS_ERROR("[mission_land] PX4 已接受 AUTO.LAND");
-            else
-                ROS_ERROR("[mission_land] PX4 暂未接受 AUTO.LAND，将继续零速度悬停并重试");
-            last_land_mode_request = ros::Time::now();
-        }
-        if (current_state.mode == "AUTO.LAND") return;
-    }
 
     // 2026-07-27: 规划碰撞或失败期间锁住进入 hold 时的位置，不能只发无位置恢复项的零速度。
     if (safety_hold_active)
@@ -708,7 +732,12 @@ void Ctrl::control(const ros::TimerEvent&)
     double Kv = 1.0; 
     // 2026-07-13: 使用参数化矢量限速，防止 Kp 位置误差把 0.5m/s 规划轨迹放大到数米每秒。
     double max_v = max_cmd_speed_z;
-    double max_v_xy = max_cmd_speed_xy;
+    const double max_v_xy = landing_search_speed_active && !landing_requested
+                                ? landing_search_max_cmd_speed_xy
+                                : max_cmd_speed_xy;
+    const double max_reverse = landing_search_speed_active && !landing_requested
+                                   ? landing_search_max_reverse_speed
+                                   : max_reverse_speed;
 
     double vx = Kv * ego_vel_x + Kp * (ego_pos_x - position_x);
     double vy = Kv * ego_vel_y + Kp * (ego_pos_y - position_y);
@@ -726,9 +755,9 @@ void Ctrl::control(const ros::TimerEvent&)
     // 2026-07-08: 将世界系速度投到机体系，限制“朝机尾方向”的后退速度，避免窄通道里因重规划抖动出现大幅倒飞。
     double body_vx =  cos(current_yaw) * vx + sin(current_yaw) * vy;
     double body_vy = -sin(current_yaw) * vx + cos(current_yaw) * vy;
-    if (body_vx < -max_reverse_speed)
+    if (body_vx < -max_reverse)
     {
-        body_vx = -max_reverse_speed;
+        body_vx = -max_reverse;
         vx = cos(current_yaw) * body_vx - sin(current_yaw) * body_vy;
         vy = sin(current_yaw) * body_vx + cos(current_yaw) * body_vy;
     }

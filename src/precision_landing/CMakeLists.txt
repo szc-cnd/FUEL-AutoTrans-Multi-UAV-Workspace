@@ -6,7 +6,7 @@ add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
 find_package(catkin REQUIRED COMPONENTS
   roscpp rospy std_msgs std_srvs sensor_msgs geometry_msgs nav_msgs mavros_msgs
   cv_bridge image_transport camera_info_manager rostest
-  tf2 tf2_geometry_msgs
+  tf2 tf2_ros tf2_geometry_msgs
 )
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d aruco)
@@ -16,7 +16,7 @@ catkin_package(
   INCLUDE_DIRS include
   CATKIN_DEPENDS roscpp std_msgs std_srvs sensor_msgs geometry_msgs nav_msgs mavros_msgs
                  cv_bridge image_transport camera_info_manager
-                 tf2 tf2_geometry_msgs
+                 tf2 tf2_ros tf2_geometry_msgs
   DEPENDS EIGEN3 OpenCV
 )
 
@@ -38,6 +38,10 @@ add_executable(landing_search_node src/landing_search_node.cpp)
 target_link_libraries(landing_search_node
   landing_search_core aruco_tracker ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
+add_executable(front_aruco_hint_node src/front_aruco_hint_node.cpp)
+target_link_libraries(front_aruco_hint_node
+  landing_search_core aruco_tracker ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+
 add_executable(precision_landing_node src/precision_landing_node.cpp)
 target_link_libraries(precision_landing_node
   landing_controller landing_state_machine aruco_tracker
@@ -52,7 +56,7 @@ target_link_libraries(landing_test_mission_node ${catkin_LIBRARIES})
 catkin_install_python(PROGRAMS test/test_precision_landing_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
-install(TARGETS precision_landing_node landing_search_node landing_setpoint_arbiter_node
+install(TARGETS precision_landing_node landing_search_node front_aruco_hint_node landing_setpoint_arbiter_node
         landing_test_mission_node landing_controller landing_state_machine aruco_tracker
         landing_search_core
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

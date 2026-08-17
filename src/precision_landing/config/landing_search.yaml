@@ -8,6 +8,8 @@ topics:
   landing_trigger: /UAV0/need_to_land
   filtered_target: /UAV0/landing/search/target_world
   locked_id: /UAV0/landing/search/locked_id
+  # 锁定平台 ID 必须交给精降节点，防止多平台同时可见时重新选择其他码。
+  target_id: /UAV0/landing/target_id
   status: /UAV0/landing/search/status
   debug_image: /UAV0/landing/search/debug_image
 

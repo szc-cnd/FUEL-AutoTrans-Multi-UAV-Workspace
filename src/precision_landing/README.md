@@ -13,12 +13,15 @@
 
 ## 出通道后的平台搜索与自动交接
 
-`precision_landing.launch` 默认同时启动 `landing_search_node`。完整链路为：
+`precision_landing.launch` 默认启动下视 `landing_search_node`；比赛统一入口还会启用
+前视 D435 粗定位节点。完整链路为：
 
 ```text
 SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
--> 稳定 ArUco 世界定位 -> APPROACH_LANDING
--> 规划到平台上方 -> /UAVx/mission/landing_request
+-> 出口原地前视：静看 1 s，缓慢扫描 -30° 到 +30° 并回正
+-> 未发现时升至 2 m 做 Diff 蛇形搜索（前视发现时优先飞向粗定位）
+-> 下视相机稳定确认平台 -> APPROACH_LANDING
+-> 规划到平台上方 2.00 m -> /UAVx/mission/landing_request
 -> /UAVx/need_to_land -> 精确降落
 ```
 
@@ -26,8 +29,19 @@ SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
 误检提前结束任务。它将相机测量通过
 [`config/landing_search.yaml`](config/landing_search.yaml) 中的下视相机手眼外参和同步
 FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界系八帧稳定过滤。稳定结果
-发布到 `/UAVx/mission/detection/final_aruco`，由任务规划器检查平台上方安全柱并生成
-高于平台 `0.65 m` 的接近目标。
+发布到 `/UAVx/mission/detection/final_aruco`。Diff 搜索管理器生成高于平台 `2.00 m`
+的接近目标，到达后才申请交接给降落代码。
+
+前视节点读取 D435 彩色图、对齐深度、`body_camera_03.yaml` 静态外参以及与图像同步的
+FAST-LIO 里程计，经多帧稳定后只发布
+`/UAVx/landing/front_aruco_hint`。该话题是有搜索边界约束的粗略提示，不能发布
+`final_aruco`、`landing_request` 或 `/need_to_land`。Diff 到达粗定位上方后等待下视相机
+确认；若两秒内没有确认，则废弃本次前视提示并回到最近的蛇形搜索航点。同一提示不会
+反复吸引无人机。
+
+通道内及常规 FUEL 探索的水平速度上限保持 `0.20 m/s`。进入门外搜索后，降落专用
+Diff 与简单控制器按搜索状态同时切换为 `0.50 m/s`，Diff 加速度上限为
+`0.60 m/s²`；发布降落请求后不再使用搜索阶段高速，由视觉精降节点独立控制下降。
 
 规划器到达后，搜索节点仍会复核目标和里程计新鲜度、水平误差以及接近高度；只有全部
 通过才发布 `/UAVx/need_to_land=true`。该触发是锁存的，之后由
@@ -37,13 +51,16 @@ FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界�
 ```bash
 rostopic echo /UAV0/landing/search/status
 rostopic echo /UAV0/landing/search/target_world
+rostopic echo /UAV0/landing/front/status
+rostopic echo /UAV0/landing/front_aruco_hint
 rostopic echo /UAV0/mission/task_status
 rostopic echo /UAV0/landing/control_owner
 ```
 
-搜索阶段使用的是“下视相机到 FAST-LIO IMU 原点”手眼外参；最终视觉降落仍使用
-`precision_landing.yaml` 中“下视相机到实际降落中心”的平面偏移。两者用途不同，不能
-用同一个平移参数互相覆盖。
+搜索节点和最终精降节点都使用“下视相机到 FAST-LIO 机体原点”的同一组
+Park 手眼标定结果。`landing_search.yaml` 以四元数存储，`precision_landing.yaml`
+以旋转矩阵存储；两者的平移均为
+`[0.073831, -0.039020, -0.133468] m`，不再使用旧的 `[0.07, 0, 0]` 粗测偏移。
 
 This package controls a PX4 vehicle through MAVROS only after a rising
 `/need_to_land` trigger, valid camera calibration, fresh vehicle data, and an
@@ -94,18 +111,14 @@ descent.
    `K[5]`, and `K[8]`, plus finite distortion values. A visible image without
    this message is not a calibrated input and must not be used for descent.
 
-4. Verify the body transform. The default rotation maps camera coordinates to
-   body coordinates so a marker moved toward the image top is a positive
-   forward body error. If command directions are wrong, stop testing, then
-   correct the mounting transform by reversing/rotating
-   `camera_to_body.rotation` (and update `translation_m` for the measured
-   camera offset). The shipped rotation is for an ordinary downward optical
-   camera whose image top points aircraft-forward:
-   `[[0,-1,0],[-1,0,0],[0,0,-1]]`. It maps image-right to aircraft-right
-   (negative body-FLU Y), image-top to aircraft-forward (positive body-FLU X),
-   and camera-positive Z to body-down. The controller uses the resulting
-   positive downward distance as marker height. The rotation must remain a
-   proper right-handed 3×3 matrix.
+4. Verify the body transform. The shipped rotation and translation are the
+   2026-08-15 Park hand-eye result from
+   `/home/asus/handeye_calibration/body_down_camera_park_03_stable.yaml`, not
+   an idealized axis mapping. It maps image-right to aircraft-right, image-top
+   to aircraft-forward, and camera-positive Z to body-down while preserving
+   the measured small mounting-angle errors. If command directions are wrong,
+   stop testing and re-check the mounted camera and calibration; do not replace
+   the calibrated matrix with an ideal matrix merely to change a sign.
 
 The matrix is only a documented default, not proof of the physical
 installation. Verify the real mounting, cable orientation, and both command
@@ -189,17 +202,18 @@ custom_mode: 'POSCTL'"
 ## Real-vehicle landing-only test
 
 `landing_test.launch` starts the precision-landing node plus a dedicated
-takeoff/handoff node. It does not start MAVROS or the downward camera. This
-launch is intentionally configured for a real-vehicle automatic start:
-once MAVROS, local pose, the setpoint plugin, and `precision_landing_node` are
-all ready, a 5 s warning countdown begins and the vehicle takes off.
+takeoff/handoff node. It does not start MAVROS or the downward camera. Its
+default is fail-safe: `allow_arming=false` and `auto_start=false`, so merely
+launching it cannot arm or take off. A real-vehicle automatic test requires
+the operator to explicitly enable both arguments after completing all checks.
 
 Use an open test area, remove all unrelated setpoint publishers, confirm an RC
 mode-takeover path, place the 0.60 m marker below the takeoff point, then start
 the already-configured MAVROS and `/usb_cam` camera before running:
 
 ```bash
-roslaunch precision_landing landing_test.launch
+roslaunch precision_landing landing_test.launch \
+  allow_arming:=true auto_start:=true
 ```
 
 Watch the test controller and landing controller in separate terminals:
@@ -210,9 +224,10 @@ rostopic echo /landing/state
 rostopic echo /mavros/state
 ```
 
-No separate start service call is required. After the 5 s countdown the test
-node captures the current local XY/yaw, streams a position setpoint for 2 s,
-requests `OFFBOARD`, arms, climbs 2.50 m relative to the starting local Z, and
+With both explicit gates enabled, no separate start service call is required.
+After the 5 s countdown the test node captures the current local XY/yaw,
+streams a position setpoint for 2 s, requests `OFFBOARD`, arms, climbs to the
+configured `2.05 m` relative height, and
 holds for 2 s. It then publishes `/need_to_land=true` while continuing the
 hold setpoint. Once `precision_landing_node` reaches `ACQUIRE` and begins
 publishing its own setpoints, the test node stops its position setpoints and

@@ -26,6 +26,7 @@ struct TargetObservation {
   bool valid{false};
   int id{-1};
   Eigen::Vector3d position_camera{Eigen::Vector3d::Zero()};
+  Eigen::Vector2d image_center_px{Eigen::Vector2d::Zero()};
   double reprojection_error_px{0.0};
   double stamp_sec{0.0};
 };

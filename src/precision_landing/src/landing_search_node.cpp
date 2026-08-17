@@ -153,6 +153,7 @@ private:
     std::string debug_image_topic{"/UAV0/landing/search/debug_image"};
     std::string status_topic{"/UAV0/landing/search/status"};
     std::string locked_id_topic{"/UAV0/landing/search/locked_id"};
+    std::string target_id_topic{"/UAV0/landing/target_id"};
     std::string filtered_target_topic{"/UAV0/landing/search/target_world"};
     private_node_.param("topics/image", image_topic, image_topic);
     private_node_.param("topics/camera_info", camera_info_topic,
@@ -170,6 +171,7 @@ private:
                         debug_image_topic);
     private_node_.param("topics/status", status_topic, status_topic);
     private_node_.param("topics/locked_id", locked_id_topic, locked_id_topic);
+    private_node_.param("topics/target_id", target_id_topic, target_id_topic);
     private_node_.param("topics/filtered_target", filtered_target_topic,
                         filtered_target_topic);
 
@@ -196,6 +198,8 @@ private:
         node_.advertise<std_msgs::String>(status_topic, 1, true);
     locked_id_publisher_ =
         node_.advertise<std_msgs::Int32>(locked_id_topic, 1, true);
+    target_id_publisher_ =
+        node_.advertise<std_msgs::Int32>(target_id_topic, 1, true);
     debug_image_publisher_ = image_transport_.advertise(debug_image_topic, 1);
   }
 
@@ -359,6 +363,7 @@ private:
     target.pose.orientation.w = 1.0;
     marker_world_publisher_.publish(target);
     filtered_target_publisher_.publish(target);
+    publishTargetId(observation.id);
     last_stable_target_ = target;
     last_stable_target_receive_time_ = ros::Time::now();
     stable_target_received_ = true;
@@ -437,6 +442,12 @@ private:
     locked_id_publisher_.publish(message);
   }
 
+  void publishTargetId(int marker_id) {
+    std_msgs::Int32 message;
+    message.data = marker_id;
+    target_id_publisher_.publish(message);
+  }
+
   void publishStatus(const std::string &status) {
     if (status == last_status_) {
       return;
@@ -479,6 +490,7 @@ private:
   ros::Publisher landing_trigger_publisher_;
   ros::Publisher status_publisher_;
   ros::Publisher locked_id_publisher_;
+  ros::Publisher target_id_publisher_;
   image_transport::Publisher debug_image_publisher_;
   ros::Timer request_timer_;
 

@@ -152,7 +152,8 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         return False
 
     def publish_vehicle_context(
-        self, armed, mode, yaw_rad=0.0, header_offset_sec=0.0
+        self, armed, mode, yaw_rad=0.0, header_offset_sec=0.0,
+        pose_z=2.0,
     ):
         deadline = rospy.Time.now() + rospy.Duration(0.2)
         rate = rospy.Rate(30)
@@ -169,9 +170,22 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             pose = PoseStamped()
             pose.header.stamp = now + rospy.Duration(header_offset_sec)
             pose.header.frame_id = "map"
-            pose.pose.position.z = 2.0
+            pose.pose.position.z = pose_z
             pose.pose.orientation.x = 0.0
             pose.pose.orientation.y = 0.0
+            pose.pose.orientation.z = math.sin(yaw_rad * 0.5)
+            pose.pose.orientation.w = math.cos(yaw_rad * 0.5)
+            self.pose_pub.publish(pose)
+            rate.sleep()
+
+    def publish_local_pose(self, pose_z, yaw_rad=0.0, duration_sec=0.10):
+        deadline = rospy.Time.now() + rospy.Duration(duration_sec)
+        rate = rospy.Rate(30)
+        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+            pose = PoseStamped()
+            pose.header.stamp = rospy.Time.now()
+            pose.header.frame_id = "map"
+            pose.pose.position.z = pose_z
             pose.pose.orientation.z = math.sin(yaw_rad * 0.5)
             pose.pose.orientation.w = math.cos(yaw_rad * 0.5)
             self.pose_pub.publish(pose)
@@ -331,6 +345,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             rotated_setpoint.yaw, 0.0, delta=1.0e-3
         )
         self.publish_centered_marker(marker_id=37, frames=6)
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", yaw_rad=math.pi / 2.0, pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(
                 lambda: any(
@@ -393,6 +410,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             msg="held yaw was captured more than once for one mission",
         )
         self.publish_centered_marker(marker_id=37, frames=8)
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", yaw_rad=1.0, pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(
                 lambda: any(
@@ -437,6 +457,10 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             any(marker_id == 37 for marker_id in self._locked_id_snapshot())
         )
 
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", pose_z=0.2
+        )
+
         self.assertTrue(
             self.wait_for(
                 lambda: any(
@@ -470,11 +494,11 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(
                 lambda: any(
-                    state.startswith("DESCEND_FINAL")
+                    state.startswith("FIXED_XY_DESCENT")
                     for state in self._state_snapshot()
                 )
             ),
-            "node did not reach final descent for stale-input regression",
+            "node did not reach fixed-XY descent for stale-input regression",
         )
         self.assertEqual(self._mode_request_count(), 0)
 
@@ -525,11 +549,11 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(
                 lambda: any(
-                    state.startswith("DESCEND_FINAL")
+                    state.startswith("FIXED_XY_DESCENT")
                     for state in self._state_snapshot()
                 )
             ),
-            "node did not reach final descent for expiry regression",
+            "node did not reach fixed-XY descent for expiry regression",
         )
         self.assertEqual(self._mode_request_count(), 0)
 
@@ -539,6 +563,7 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         while time.monotonic() - context_stopped_at < 1.55:
             rospy.sleep(0.01)
 
+        self.publish_local_pose(pose_z=0.2)
         self.publish_centered_marker(marker_id=37, frames=3)
         self.assertTrue(
             self.wait_for(
@@ -567,6 +592,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.publish_camera_info(valid=True)
         self.trigger_pub.publish(Bool(data=True))
         self.publish_centered_marker(marker_id=37, frames=12)
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(lambda: self._mode_request_count() >= 2, timeout=3.0),
             "two AUTO.LAND attempts did not start",
@@ -600,6 +628,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.publish_camera_info(valid=True)
         self.trigger_pub.publish(Bool(data=True))
         self.publish_centered_marker(marker_id=37, frames=12)
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(lambda: self._mode_request_count() > 0),
             "AUTO.LAND was not requested",
@@ -633,6 +664,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.publish_camera_info(valid=True)
         self.trigger_pub.publish(Bool(data=True))
         self.publish_centered_marker(marker_id=37, frames=12)
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(
                 lambda: any(
@@ -652,7 +686,7 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             "manual takeover did not cancel pending AUTO.LAND",
         )
 
-    def test_falling_trigger_keeps_tracker_mutating_for_active_mission(self):
+    def test_falling_trigger_keeps_fixed_descent_active(self):
         self.publish_vehicle_context(armed=True, mode="OFFBOARD")
         self.publish_camera_info(valid=True)
         self.trigger_pub.publish(Bool(data=True))
@@ -662,11 +696,11 @@ class PrecisionLandingNodeTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(
                 lambda: any(
-                    state.startswith("DESCEND_FINAL")
+                    state.startswith("FIXED_XY_DESCENT")
                     for state in self._state_snapshot()
                 )
             ),
-            "node did not reach active visual descent",
+            "node did not reach active fixed-XY descent",
         )
 
         self.trigger_pub.publish(Bool(data=False))
@@ -694,11 +728,8 @@ class PrecisionLandingNodeTest(unittest.TestCase):
             "falling trigger froze jump history and caused false target loss",
         )
         self.assertTrue(
-            any(
-                abs(msg.velocity.x) > 0.05 or abs(msg.velocity.y) > 0.05
-                for msg in self._setpoint_snapshot()
-            ),
-            "active mission stopped consuming updated target poses",
+            any(msg.velocity.z < 0.0 for msg in self._setpoint_snapshot()),
+            "falling trigger interrupted fixed-XY descent",
         )
 
         for center_x in (480, 440, 400, 360, 320):
@@ -716,6 +747,9 @@ class PrecisionLandingNodeTest(unittest.TestCase):
                 frames=3,
                 marker_size_px=marker_size_px,
             )
+        self.publish_vehicle_context(
+            armed=True, mode="OFFBOARD", pose_z=0.2
+        )
         self.assertTrue(
             self.wait_for(
                 lambda: any(
@@ -748,7 +782,7 @@ if __name__ == "__main__":
         "test_authorization_expires_before_delayed_call": 7,
         "test_auto_land_calls_start_at_most_2hz": 8,
         "test_auto_land_request_does_not_block_control_loop": 9,
-        "test_falling_trigger_keeps_tracker_mutating_for_active_mission": 10,
+        "test_falling_trigger_keeps_fixed_descent_active": 10,
         "test_manual_mode_change_stops_stream": 11,
     }
 

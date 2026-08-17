@@ -16,7 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   visualization_msgs
   quadrotor_msgs
   tf
-  # 2026-07-13: 终点二维码确认后由控制器调用 PX4 AUTO.LAND 服务。
+  # 使用 MAVROS 状态和位置目标消息；AUTO.LAND 由精降节点请求。
   mavros_msgs
 )
 
@@ -61,3 +61,7 @@ install(TARGETS cxr_egoctrl_v1 leader_safe_path_follower
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 install(DIRECTORY launch/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch)
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test/test_landing_search_speed_limit.py)
+endif()

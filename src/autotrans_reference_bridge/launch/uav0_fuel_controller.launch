@@ -26,6 +26,10 @@
     <param name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
     <param name="goal_topic" value="/UAV0/move_base_simple/goal"/>
     <param name="planner_enable_height" value="0.5"/>
+    <param name="landing_search_state_topic" value="/landing_diff_search_manager/state"/>
+    <param name="max_cmd_speed_xy" value="0.20"/>
+    <param name="landing_search_max_cmd_speed_xy" value="0.50"/>
+    <param name="landing_search_max_reverse_speed" value="0.50"/>
   </node>
 
   <!-- autotrans：FUEL B-spline -> AutoTrans PolynomialTraj；不启动原控制器。 -->
