@@ -37,6 +37,11 @@ ufomap_temporal_match_distance: 0.05  # 认为同一点的最大跨帧距离，�
 ufomap_temporal_search_radius: 0.35  # 运动候选搜索上一帧点的最大半径，单位m
 ufomap_temporal_cluster_radius: 0.35  # 跨帧运动候选需要相互支持的空间半径，单位m
 ufomap_temporal_min_cluster_points: 4  # 跨帧运动候选在支持半径内至少需要的点数
+ufomap_temporal_default_dt: 0.1  # 点云时间戳异常时用于速度计算的回退帧间隔，单位s
+ufomap_temporal_max_dt: 0.5  # 超过该帧间隔时不直接用于速度计算，单位s
+ufomap_temporal_recheck_min_speed: 0.2  # 历史占据点达到该世界速度后才允许复检，单位m/s
+ufomap_temporal_recheck_max_ego_alignment_cosine: 0.8  # 与无人机平移近似同向或反向的视角流拒绝门限
+ufomap_temporal_recheck_min_velocity_coherence: 0.65  # 局部复检点速度方向一致性门限，1表示完全同向
 ufomap_insert_only_valid: false  # 仅对有效射线区段执行插入，即ufomap_max_range范围内点的射线段
 ufomap_insert_hit_depth: 0  # 命中点更新深度，0 表示沿用 UFOMap 默认值
 ufomap_insert_miss_depth: 0  # free / miss （失配）更新深度

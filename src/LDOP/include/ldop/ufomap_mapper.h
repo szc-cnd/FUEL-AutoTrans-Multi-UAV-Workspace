@@ -49,6 +49,11 @@ struct UfomapMapperConfig {
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};
   int temporal_min_cluster_points{4};
+  double temporal_default_dt{0.1};
+  double temporal_max_dt{0.5};
+  double temporal_recheck_min_speed{0.2};
+  double temporal_recheck_max_ego_alignment_cosine{0.8};
+  double temporal_recheck_min_velocity_coherence{0.65};
   int insert_hit_depth{0};
   int insert_miss_depth{0};
   int ray_casting_depth{0};
@@ -84,6 +89,11 @@ struct UfomapMapperParams {
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};
   int temporal_min_cluster_points{4};
+  double temporal_default_dt{0.1};
+  double temporal_max_dt{0.5};
+  double temporal_recheck_min_speed{0.2};
+  double temporal_recheck_max_ego_alignment_cosine{0.8};
+  double temporal_recheck_min_velocity_coherence{0.65};
   double resolution{0.2};             // 大于0.0，叶子体素尺寸
   int depth_levels{16};               // [2, 20]，由UFOMAP自身限制范围，八叉树层级规模    
   double min_range{0.5};              // 大于等于0.0，积分和查询的最小范围 
@@ -283,8 +293,12 @@ class UfomapMapper {
       const ufo::Point& sensor_origin) const;
   void updateGroundPlane(const UfomapPointCloud& points, const ufo::Point& sensor_origin);
   UfomapPointCloud filterGroundPoints(const UfomapPointCloud& points) const;
-  std::vector<std::size_t> detectTemporalMotion(const UfomapPointCloud& points);
-  void updatePreviousFrameSnapshot(const UfomapPointCloud& points);
+  std::vector<std::size_t> detectTemporalMotion(const UfomapPointCloud& points,
+                                                const ufo::Point& sensor_origin,
+                                                const ros::Time& stamp);
+  void updatePreviousFrameSnapshot(const UfomapPointCloud& points,
+                                   const ufo::Point& sensor_origin,
+                                   const ros::Time& stamp);
   UfomapClassificationResult classifyPoints(const std_msgs::Header& header,
                                             const UfomapPointCloud& points) const;
 
@@ -305,6 +319,8 @@ class UfomapMapper {
   std::vector<GroundPlaneModel> ground_plane_samples_;
   bool ground_plane_locked_{false};
   std::vector<ufo::Point> previous_frame_points_;
+  std::optional<ufo::Point> previous_sensor_origin_;
+  ros::Time previous_frame_stamp_;
 };
 
 }  // namespace ldopcore

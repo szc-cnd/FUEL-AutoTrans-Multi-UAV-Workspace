@@ -168,16 +168,30 @@ TEST(UfomapMapperTest, RechecksOccupiedVoxelWhenPointKeepsMoving) {
       makeOdom(makePoint(0.0, 0.0, 0.0)));
 
   const auto second = mapper->processInputCloud(
-      makeCloud({makePoint(2.2, 0.0, 0.0)}),
-      makeOdom(makePoint(0.0, 0.0, 0.0)));
+      makeCloud({makePoint(2.0, 0.2, 0.0)}),
+      makeOdom(makePoint(0.2, 0.0, 0.0)));
   EXPECT_GT(second.runtime_stats.temporal_motion_point_count, 0U);
   EXPECT_GT(second.classification.dynamic_point_count, 0U);
 
   const auto second_without_recheck = mapper_without_recheck->processInputCloud(
-      makeCloud({makePoint(2.2, 0.0, 0.0)}),
-      makeOdom(makePoint(0.0, 0.0, 0.0)));
+      makeCloud({makePoint(2.0, 0.2, 0.0)}),
+      makeOdom(makePoint(0.2, 0.0, 0.0)));
   EXPECT_EQ(second_without_recheck.runtime_stats.temporal_motion_point_count, 0U);
   EXPECT_EQ(second_without_recheck.classification.dynamic_point_count, 0U);
+}
+
+TEST(UfomapMapperTest, RejectsOccupiedRecheckCausedBySensorTranslation) {
+  auto mapper = makeMapper("ufomap_mapper_ego_motion_rejection", true);
+
+  mapper->processInputCloud(
+      makeCloud({makePoint(2.0, 0.0, 0.0)}),
+      makeOdom(makePoint(0.0, 0.0, 0.0)));
+  const auto result = mapper->processInputCloud(
+      makeCloud({makePoint(2.2, 0.0, 0.0)}),
+      makeOdom(makePoint(0.2, 0.0, 0.0)));
+
+  EXPECT_EQ(result.runtime_stats.temporal_motion_point_count, 0U);
+  EXPECT_EQ(result.classification.dynamic_point_count, 0U);
 }
 
 }  // namespace
