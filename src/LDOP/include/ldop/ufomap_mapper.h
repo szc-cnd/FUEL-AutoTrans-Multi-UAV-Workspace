@@ -51,7 +51,7 @@ struct UfomapMapperConfig {
   int temporal_min_cluster_points{4};
   double temporal_default_dt{0.1};
   double temporal_max_dt{0.5};
-  double temporal_recheck_min_speed{0.2};
+  double temporal_recheck_min_speed{0.1};
   double temporal_recheck_max_ego_alignment_cosine{0.8};
   double temporal_recheck_min_velocity_coherence{0.65};
   int insert_hit_depth{0};
@@ -91,7 +91,7 @@ struct UfomapMapperParams {
   int temporal_min_cluster_points{4};
   double temporal_default_dt{0.1};
   double temporal_max_dt{0.5};
-  double temporal_recheck_min_speed{0.2};
+  double temporal_recheck_min_speed{0.1};
   double temporal_recheck_max_ego_alignment_cosine{0.8};
   double temporal_recheck_min_velocity_coherence{0.65};
   double resolution{0.2};             // 大于0.0，叶子体素尺寸
