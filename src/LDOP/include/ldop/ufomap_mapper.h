@@ -44,6 +44,7 @@ struct UfomapMapperConfig {
   double ground_estimation_max_slope{0.35};
   int warmup_frames{30};
   bool temporal_motion_enabled{true};
+  bool temporal_recheck_occupied_enabled{false};
   double temporal_match_distance{0.10};
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};
@@ -78,6 +79,7 @@ struct UfomapMapperParams {
   double ground_estimation_max_slope{0.35};
   int warmup_frames{30};
   bool temporal_motion_enabled{true};
+  bool temporal_recheck_occupied_enabled{false};
   double temporal_match_distance{0.10};
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};

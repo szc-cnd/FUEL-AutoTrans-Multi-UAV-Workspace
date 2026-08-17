@@ -54,7 +54,8 @@ nav_msgs::Odometry makeOdom(const geometry_msgs::Point& position) {
   return odom;
 }
 
-std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace) {
+std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
+                                         const bool recheck_occupied = false) {
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~" + test_namespace);
 
@@ -76,6 +77,9 @@ std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace) {
   pnh.setParam("ufomap_parallel", false);
   pnh.setParam("ufomap_propagate", true);
   pnh.setParam("ufomap_down_sampling_method", "none");
+  pnh.setParam("ufomap_warmup_frames", 0);
+  pnh.setParam("ufomap_temporal_min_cluster_points", 1);
+  pnh.setParam("ufomap_temporal_recheck_occupied_enabled", recheck_occupied);
   pnh.setParam("static_map_visualization_max_z", 5.0);
 
   return std::make_unique<UfomapMapper>(nh, pnh, false);
@@ -149,6 +153,31 @@ TEST(UfomapMapperTest, NearestOccupiedQueryReturnsClosestOccupiedNodeInRadius) {
       ufo::Point(-2.0F, 0.0F, 0.0F), 0.5, 0U, 1U);
 
   EXPECT_FALSE(outside_radius.has_value());
+}
+
+TEST(UfomapMapperTest, RechecksOccupiedVoxelWhenPointKeepsMoving) {
+  auto mapper = makeMapper("ufomap_mapper_recheck", true);
+  auto mapper_without_recheck = makeMapper("ufomap_mapper_without_recheck", false);
+
+  const auto first = mapper->processInputCloud(
+      makeCloud({makePoint(2.0, 0.0, 0.0)}),
+      makeOdom(makePoint(0.0, 0.0, 0.0)));
+  EXPECT_EQ(first.runtime_stats.temporal_motion_point_count, 0U);
+  mapper_without_recheck->processInputCloud(
+      makeCloud({makePoint(2.0, 0.0, 0.0)}),
+      makeOdom(makePoint(0.0, 0.0, 0.0)));
+
+  const auto second = mapper->processInputCloud(
+      makeCloud({makePoint(2.2, 0.0, 0.0)}),
+      makeOdom(makePoint(0.0, 0.0, 0.0)));
+  EXPECT_GT(second.runtime_stats.temporal_motion_point_count, 0U);
+  EXPECT_GT(second.classification.dynamic_point_count, 0U);
+
+  const auto second_without_recheck = mapper_without_recheck->processInputCloud(
+      makeCloud({makePoint(2.2, 0.0, 0.0)}),
+      makeOdom(makePoint(0.0, 0.0, 0.0)));
+  EXPECT_EQ(second_without_recheck.runtime_stats.temporal_motion_point_count, 0U);
+  EXPECT_EQ(second_without_recheck.classification.dynamic_point_count, 0U);
 }
 
 }  // namespace

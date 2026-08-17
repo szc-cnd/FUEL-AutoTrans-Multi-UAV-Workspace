@@ -32,6 +32,7 @@ ufomap_ground_estimation_inlier_threshold: 0.04  # 平面拟合内点残差阈�
 ufomap_ground_estimation_max_slope: 0.35  # 地面平面最大允许坡度，约19度
 ufomap_warmup_frames: 30  # 预热帧数；预热期间不向跟踪器输出动态目标
 ufomap_temporal_motion_enabled: true  # 启用上一帧与当前帧的局部运动候选检测
+ufomap_temporal_recheck_occupied_enabled: true  # 对已写入UFOMap但仍持续变化的占据点重新做动态复检
 ufomap_temporal_match_distance: 0.05  # 认为同一点的最大跨帧距离，单位m；更容易捕获缓慢摆动目标
 ufomap_temporal_search_radius: 0.35  # 运动候选搜索上一帧点的最大半径，单位m
 ufomap_temporal_cluster_radius: 0.35  # 跨帧运动候选需要相互支持的空间半径，单位m

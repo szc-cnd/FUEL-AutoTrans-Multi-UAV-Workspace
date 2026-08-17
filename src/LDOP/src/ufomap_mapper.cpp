@@ -319,6 +319,7 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
       ? params.ground_estimation_max_slope : defaults.ground_estimation_max_slope;
   config.warmup_frames = std::max(0, params.warmup_frames);
   config.temporal_motion_enabled = params.temporal_motion_enabled;
+  config.temporal_recheck_occupied_enabled = params.temporal_recheck_occupied_enabled;
   config.temporal_match_distance = params.temporal_match_distance > 0.0
       ? params.temporal_match_distance : defaults.temporal_match_distance;
   const double minimum_search_radius = config.temporal_match_distance * 1.5;
@@ -445,7 +446,9 @@ UfomapMapper::UfomapMapper(ros::NodeHandle& nh,
                   << " (keep points above estimated ground plane)"
                   << ", warmup frames: " << config_.warmup_frames
                   << ", temporal motion: "
-                  << (config_.temporal_motion_enabled ? "on" : "off"));
+                  << (config_.temporal_motion_enabled ? "on" : "off")
+                  << ", occupied recheck: "
+                  << (config_.temporal_recheck_occupied_enabled ? "on" : "off"));
 }
 
 UfomapMapper::~UfomapMapper() = default;
@@ -477,6 +480,9 @@ void UfomapMapper::loadParameters() {
   pnh_.param("ufomap_warmup_frames", params_.warmup_frames, defaults.warmup_frames);
   pnh_.param("ufomap_temporal_motion_enabled", params_.temporal_motion_enabled,
              defaults.temporal_motion_enabled);
+  pnh_.param("ufomap_temporal_recheck_occupied_enabled",
+             params_.temporal_recheck_occupied_enabled,
+             defaults.temporal_recheck_occupied_enabled);
   pnh_.param("ufomap_temporal_match_distance", params_.temporal_match_distance,
              defaults.temporal_match_distance);
   pnh_.param("ufomap_temporal_search_radius", params_.temporal_search_radius,
@@ -862,6 +868,7 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
 
   std::vector<std::size_t> raw_motion_indices;
   raw_motion_indices.reserve(points.size() / 10U + 1U);
+  std::size_t rechecked_occupied_count = 0U;
   std::shared_lock<std::shared_mutex> map_lock(map_mutex_);
   const auto& runtime = runtimeLocked();
   for (std::size_t index = 0U; index < points.size(); ++index) {
@@ -870,6 +877,13 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
     if (hasNearbyPreviousPoint(current_point, match_distance_sq)) {
       continue;
     }
+    const bool has_previous_search_neighbor =
+        hasNearbyPreviousPoint(current_point, search_radius_sq);
+    if (!has_previous_search_neighbor) {
+      continue;
+    }
+
+    bool occupied_history = false;
     const auto code = runtime.map.toCodeChecked(current_point);
     if (code.has_value()) {
       if (runtime.map.seenFree(current_point)) {
@@ -877,14 +891,16 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
       }
       if (runtime.map.exists(*code)) {
         const auto node = runtime.map(*code);
-        if (runtime.map.hits(node) > 0) {
-          continue;
-        }
+        occupied_history = runtime.map.hits(node) > 0;
       }
     }
-    if (hasNearbyPreviousPoint(current_point, search_radius_sq)) {
-      raw_motion_indices.push_back(index);
+    if (occupied_history && !config_.temporal_recheck_occupied_enabled) {
+      continue;
     }
+    if (occupied_history) {
+      ++rechecked_occupied_count;
+    }
+    raw_motion_indices.push_back(index);
   }
 
   if (raw_motion_indices.empty()) {
@@ -949,6 +965,8 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
   ROS_INFO_STREAM_THROTTLE(
       1.0, "Ufomap temporal candidates: raw=" << raw_motion_indices.size()
                                                << ", clustered=" << motion_indices.size()
+                                               << ", rechecked_occupied="
+                                               << rechecked_occupied_count
                                                << ", radius=" << cluster_radius
                                                << ", min_points="
                                                << config_.temporal_min_cluster_points);
