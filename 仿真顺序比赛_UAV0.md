@@ -52,6 +52,180 @@ bash shfiles/start_uav0_first_seven_terminator.sh stop
 各 ROS 节点仍写入默认的 `~/.ros/log/`，七分屏
 自身的启动错误记录在 `/tmp/uav0_first_seven_terminator_<用户ID>.log`。
 
+## 不使用 Terminator：七个终端逐屏手动启动
+
+如果不使用七分屏脚本，可以按下面顺序新开七个终端。每个终端都先加载 ROS 和
+`match_ws` 环境；后一个终端应在前一个终端的关键话题正常后再启动。以下命令与
+`start_uav0_first_seven_terminator.sh` 当前实际调用保持一致。
+
+### 手动终端 1：MAVROS
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+sh shfiles/run.sh
+```
+
+看到 `/UAV0/mavros/state` 中 `connected: True` 后再启动 MID360：
+
+```bash
+rostopic echo -n 1 /UAV0/mavros/state
+```
+
+### 手动终端 2：MID360
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch livox_ros_driver2 msg_MID360.launch \
+  vehicle_ns:=UAV0 \
+  msg_frame_id:=UAV0/livox_frame \
+  publish_freq:=30.0
+```
+
+确认两个传感器话题都有频率：
+
+```bash
+rostopic hz /UAV0/livox/lidar
+rostopic hz /UAV0/livox/imu
+```
+
+### 手动终端 3：FAST-LIO
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch fast_lio mapping_mid360.launch \
+  vehicle_ns:=UAV0 \
+  odom_topic:=/UAV0/fast_lio/Odometry \
+  rviz:=false
+```
+
+启动后确认里程计和注册点云持续发布：
+
+```bash
+rostopic hz /UAV0/fast_lio/Odometry
+rostopic hz /UAV0/fast_lio/cloud_registered
+```
+
+### 手动终端 4：FAST-LIO 位姿回传 PX4
+
+```bash
+cd ~/match_ws/src/cxr_ego_ctrl/src
+source /opt/ros/noetic/setup.bash
+source ~/match_ws/devel/setup.bash
+
+python3 laser_mid360.py iris 0 fastlio off \
+  _odom_topic:=/UAV0/fast_lio/Odometry
+```
+
+检查回传话题：
+
+```bash
+rostopic hz /UAV0/mavros/vision_pose/pose
+```
+
+### 手动终端 5：D435、目标检测、下视相机和精降节点
+
+下面命令默认启用热成像。没有接入热成像相机时，将 `thermal=true` 改为
+`thermal=false`。下视相机存在时自动启动下视搜索和精降；没有找到下视相机时只启动
+D435、通道内检测、相机 TF 和目标上报，不让整个终端退出。
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+thermal=true
+mission_id="onboard_test_$(date +%Y%m%d)"
+down_camera=/dev/video0
+enable_down_camera=false
+enable_precision_landing=false
+
+detected_down_camera=$(find /dev/v4l/by-id -maxdepth 1 -type l \
+  -name 'usb-Generic_USB_Camera_*-video-index0' 2>/dev/null | sort | head -n 1)
+
+if [ -n "${detected_down_camera}" ]; then
+  down_camera="${detected_down_camera}"
+  enable_down_camera=true
+  enable_precision_landing=true
+else
+  echo "[跳过] 未发现下视相机，暂不启动下视搜索和精降"
+fi
+
+echo "[参数] down_camera_enabled=${enable_down_camera}, precision_landing=${enable_precision_landing}, device=${down_camera}"
+
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:="${thermal}" \
+  enable_thermal_d435_fusion:="${thermal}" \
+  realsense_color_width:=1280 \
+  realsense_color_height:=720 \
+  realsense_depth_width:=1280 \
+  realsense_depth_height:=720 \
+  realsense_enable_pointcloud:=true \
+  enable_camera_body_tf:=true \
+  enable_camera_body_odom_tf:=false \
+  enable_target_reporting:=true \
+  target_reporting_mission_id:="${mission_id}" \
+  enable_down_camera:="${enable_down_camera}" \
+  enable_precision_landing:="${enable_precision_landing}" \
+  enable_front_aruco_hint:=true \
+  landing_vehicle_ns:=UAV0 \
+  down_camera_device:="${down_camera}"
+```
+
+若要测试完整搜索降落，必须确认终端输出中
+`down_camera_enabled=true`、`precision_landing=true`，并检查：
+
+```bash
+rosnode list | grep -E 'front_aruco_hint|landing_search|precision_landing|landing_setpoint'
+```
+
+### 手动终端 6：FUEL、Diff、搜索管理器和 RViz
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_exploration.launch" \
+  odom_topic:=/UAV0/fast_lio/Odometry
+```
+
+这个终端同时启动 FUEL、出口任务状态机、Diff、规划命令仲裁器、平台搜索管理器、
+LDOP 前机接口和统一 RViz。确认：
+
+```bash
+rostopic echo /planner_command_arbiter/owner
+rostopic echo /landing_diff_search_manager/state
+```
+
+### 手动终端 7：简单控制器
+
+等待 `/UAV0/planning/pos_cmd` 出现后启动：
+
+```bash
+cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+rostopic echo -n 1 /UAV0/planning/pos_cmd
+
+roslaunch exploration_control simple_controller.launch \
+  vehicle_ns:=UAV0 \
+  node_name:=UAV0_controller
+```
+
+该控制器只向 `/UAV0/control/position_setpoint` 发布内部设定点；降落仲裁器负责唯一
+转发到 MAVROS。启动控制器不会自动解锁、切换 `OFFBOARD` 或起飞。
+
 ## 1. 启动 UAV0 MAVROS
 
 终端 1：
