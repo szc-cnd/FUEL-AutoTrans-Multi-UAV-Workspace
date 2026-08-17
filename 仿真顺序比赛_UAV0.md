@@ -68,12 +68,6 @@ source devel/setup.bash
 sh shfiles/run.sh
 ```
 
-看到 `/UAV0/mavros/state` 中 `connected: True` 后再启动 MID360：
-
-```bash
-rostopic echo -n 1 /UAV0/mavros/state
-```
-
 ### 手动终端 2：MID360
 
 ```bash
@@ -85,13 +79,6 @@ roslaunch livox_ros_driver2 msg_MID360.launch \
   vehicle_ns:=UAV0 \
   msg_frame_id:=UAV0/livox_frame \
   publish_freq:=30.0
-```
-
-确认两个传感器话题都有频率：
-
-```bash
-rostopic hz /UAV0/livox/lidar
-rostopic hz /UAV0/livox/imu
 ```
 
 ### 手动终端 3：FAST-LIO
@@ -107,13 +94,6 @@ roslaunch fast_lio mapping_mid360.launch \
   rviz:=false
 ```
 
-启动后确认里程计和注册点云持续发布：
-
-```bash
-rostopic hz /UAV0/fast_lio/Odometry
-rostopic hz /UAV0/fast_lio/cloud_registered
-```
-
 ### 手动终端 4：FAST-LIO 位姿回传 PX4
 
 ```bash
@@ -123,12 +103,6 @@ source ~/match_ws/devel/setup.bash
 
 python3 laser_mid360.py iris 0 fastlio off \
   _odom_topic:=/UAV0/fast_lio/Odometry
-```
-
-检查回传话题：
-
-```bash
-rostopic hz /UAV0/mavros/vision_pose/pose
 ```
 
 ### 手动终端 5：D435、目标检测、下视相机和精降节点
@@ -172,32 +146,90 @@ roslaunch "$(rospack find diff_planner)/launch/exp/run_swarm_indoor1_fuel_explor
   odom_topic:=/UAV0/fast_lio/Odometry
 ```
 
-这个终端同时启动 FUEL、出口任务状态机、Diff、规划命令仲裁器、平台搜索管理器、
-LDOP 前机接口和统一 RViz。确认：
-
-```bash
-rostopic echo /planner_command_arbiter/owner
-rostopic echo /landing_diff_search_manager/state
-```
-
 ### 手动终端 7：简单控制器
-
-等待 `/UAV0/planning/pos_cmd` 出现后启动：
 
 ```bash
 cd ~/match_ws
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
 
-rostopic echo -n 1 /UAV0/planning/pos_cmd
-
 roslaunch exploration_control simple_controller.launch \
   vehicle_ns:=UAV0 \
   node_name:=UAV0_controller
 ```
 
-该控制器只向 `/UAV0/control/position_setpoint` 发布内部设定点；降落仲裁器负责唯一
-转发到 MAVROS。启动控制器不会自动解锁、切换 `OFFBOARD` 或起飞。
+## 七个终端启动后的查询指令
+
+以下查询命令统一放在这里。查询时另外打开一个终端，并先执行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/match_ws/devel/setup.bash
+```
+
+### 1. 查询 MAVROS 是否连接飞控
+
+```bash
+rostopic echo -n 1 /UAV0/mavros/state
+```
+
+用于确认 MAVROS 和飞控之间的连接状态。输出中的 `connected` 应为 `True`。
+
+### 2. 查询 MID360 点云和 IMU 是否持续发布
+
+```bash
+rostopic hz /UAV0/livox/lidar
+rostopic hz /UAV0/livox/imu
+```
+
+分别执行这两条命令；看到稳定频率后按 `Ctrl+C` 退出，再执行下一条。
+
+### 3. 查询 FAST-LIO 里程计和注册点云
+
+```bash
+rostopic hz /UAV0/fast_lio/Odometry
+rostopic hz /UAV0/fast_lio/cloud_registered
+```
+
+第一条确认 FAST-LIO 位姿持续更新，第二条确认用于 RViz 显示和规划的注册点云正常。
+
+### 4. 查询 FAST-LIO 位姿是否回传给 PX4
+
+```bash
+rostopic hz /UAV0/mavros/vision_pose/pose
+```
+
+用于确认 `laser_mid360.py` 正在把 FAST-LIO 位姿持续发送给飞控。
+
+### 5. 查询相机、识别和精降节点是否启动
+
+```bash
+rostopic hz /UAV0/down_camera/image_raw
+rosnode list | grep -E 'front_aruco_hint|landing_search|precision_landing|landing_setpoint'
+```
+
+第一条确认下视相机有画面；第二条检查前视 ArUco 提示、下视搜索、精确降落和降落
+设定点仲裁相关节点是否存在。
+
+### 6. 查询当前由 FUEL 还是 Diff 控制，并查看搜索状态
+
+```bash
+rostopic echo -n 1 /planner_command_arbiter/owner
+rostopic echo -n 1 /landing_diff_search_manager/state
+```
+
+第一条显示当前规划命令所有者；第二条显示平台搜索管理器当前所处的状态。
+
+### 7. 查询控制器的输入和输出
+
+```bash
+rostopic echo -n 1 /UAV0/planning/pos_cmd
+rostopic hz /UAV0/control/position_setpoint
+```
+
+终端 7 应在第一条能够收到规划命令后启动。第二条用于确认简单控制器持续生成内部
+位置设定点。降落仲裁器负责将设定点唯一转发到 MAVROS；启动控制器本身不会自动
+解锁、切换 `OFFBOARD` 或起飞。
 
 ## 1. 启动 UAV0 MAVROS
 
