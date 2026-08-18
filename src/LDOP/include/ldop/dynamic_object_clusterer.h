@@ -13,7 +13,8 @@
 namespace ldopcore {
 
 struct DynamicObjectClustererConfig {
-  std::size_t min_points{5U};
+  std::size_t min_points{8U};
+  std::size_t detector_min_points{4U};
   double max_extent{3.0};
   int connectivity{6};
   double vertical_merge_max_z_gap{0.4};
@@ -21,7 +22,8 @@ struct DynamicObjectClustererConfig {
 };
 
 struct DynamicObjectClustererParams {
-  int min_points{5};           //大于0
+  int min_points{8};           //大于0
+  int detector_min_points{4};  //大于0，通道检测器点使用的独立阈值
   double max_extent{3.0};      //大于0
   int connectivity{6};         // 只能6/18/26三选一
   double vertical_merge_max_z_gap{0.4};             //大于0 ，上下碎片合并允许的竖向空隙，单位米；只用于当前帧内的检测后处理。

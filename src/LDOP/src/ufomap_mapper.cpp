@@ -4,11 +4,13 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <random>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -99,33 +101,34 @@ double medianValue(std::vector<double> values) {
   return (*lower_middle + *middle) * 0.5;
 }
 
-sensor_msgs::PointCloud2 buildCloudFromPoints(const std_msgs::Header& header,
-                                              const ufo::PointCloud& points) {
-  sensor_msgs::PointCloud2 cloud;
-  cloud.header = header;
-
-  sensor_msgs::PointCloud2Modifier modifier(cloud);
-  modifier.setPointCloud2FieldsByString(1, "xyz");
-  modifier.resize(points.size());
-
-  sensor_msgs::PointCloud2Iterator<float> iter_x(cloud, "x");
-  sensor_msgs::PointCloud2Iterator<float> iter_y(cloud, "y");
-  sensor_msgs::PointCloud2Iterator<float> iter_z(cloud, "z");
-  for (const auto& point : points) {
-    *iter_x = point.x;
-    *iter_y = point.y;
-    *iter_z = point.z;
-    ++iter_x;
-    ++iter_y;
-    ++iter_z;
-  }
-
-  cloud.is_dense = true;
-  return cloud;
+double pointDistanceSquared(const ufo::Point& lhs, const ufo::Point& rhs) {
+  const double dx = static_cast<double>(lhs.x) - rhs.x;
+  const double dy = static_cast<double>(lhs.y) - rhs.y;
+  const double dz = static_cast<double>(lhs.z) - rhs.z;
+  return dx * dx + dy * dy + dz * dz;
 }
 
-sensor_msgs::PointCloud2 buildCloudFromPointVector(const std_msgs::Header& header,
-                                                   const std::vector<ufo::Point>& points) {
+ufo::Point pointPlusScaled(const ufo::Point& point,
+                           const ufo::Point& velocity,
+                           const double scale) {
+  return ufo::Point(static_cast<float>(static_cast<double>(point.x) +
+                                       static_cast<double>(velocity.x) * scale),
+                    static_cast<float>(static_cast<double>(point.y) +
+                                       static_cast<double>(velocity.y) * scale),
+                    static_cast<float>(static_cast<double>(point.z) +
+                                       static_cast<double>(velocity.z) * scale));
+}
+
+double dotHorizontal(const ufo::Point& point, const double axis_x, const double axis_y) {
+  return static_cast<double>(point.x) * axis_x + static_cast<double>(point.y) * axis_y;
+}
+
+double wrappedAngleDifference(const double lhs, const double rhs) {
+  return std::atan2(std::sin(lhs - rhs), std::cos(lhs - rhs));
+}
+
+sensor_msgs::PointCloud2 buildCloudFromPoints(const std_msgs::Header& header,
+                                              const ufo::PointCloud& points) {
   sensor_msgs::PointCloud2 cloud;
   cloud.header = header;
 
@@ -328,6 +331,52 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.temporal_cluster_radius = params.temporal_cluster_radius > 0.0
       ? params.temporal_cluster_radius : defaults.temporal_cluster_radius;
   config.temporal_min_cluster_points = std::max(1, params.temporal_min_cluster_points);
+  config.corridor_dynamic_enabled = params.corridor_dynamic_enabled;
+  config.corridor_width = params.corridor_width > 0.0
+      ? params.corridor_width : defaults.corridor_width;
+  config.corridor_wall_clearance = std::clamp(
+      params.corridor_wall_clearance, 0.0, 0.45 * config.corridor_width);
+  config.corridor_roi_min_forward = std::isfinite(params.corridor_roi_min_forward)
+      ? params.corridor_roi_min_forward : defaults.corridor_roi_min_forward;
+  config.corridor_roi_max_forward =
+      std::isfinite(params.corridor_roi_max_forward) &&
+              params.corridor_roi_max_forward > config.corridor_roi_min_forward
+          ? params.corridor_roi_max_forward
+          : defaults.corridor_roi_max_forward;
+  if (config.corridor_roi_max_forward <= config.corridor_roi_min_forward) {
+    config.corridor_roi_min_forward = defaults.corridor_roi_min_forward;
+    config.corridor_roi_max_forward = defaults.corridor_roi_max_forward;
+  }
+  config.corridor_roi_min_z = params.corridor_roi_min_z;
+  config.corridor_roi_max_z = params.corridor_roi_max_z > params.corridor_roi_min_z
+      ? params.corridor_roi_max_z : defaults.corridor_roi_max_z;
+  config.corridor_detection_voxel = params.corridor_detection_voxel > 0.0
+      ? params.corridor_detection_voxel : defaults.corridor_detection_voxel;
+  config.corridor_history_frames = std::max(2, params.corridor_history_frames);
+  config.corridor_min_confirm_hits = std::clamp(
+      params.corridor_min_confirm_hits, 2, config.corridor_history_frames);
+  config.corridor_min_lateral_speed = std::max(0.0, params.corridor_min_lateral_speed);
+  config.corridor_min_lateral_span = std::max(0.0, params.corridor_min_lateral_span);
+  config.corridor_max_forward_speed = std::max(0.0, params.corridor_max_forward_speed);
+  config.corridor_max_vertical_speed = std::max(0.0, params.corridor_max_vertical_speed);
+  config.corridor_association_gate = params.corridor_association_gate > 0.0
+      ? params.corridor_association_gate : defaults.corridor_association_gate;
+  config.corridor_track_timeout = params.corridor_track_timeout > 0.0
+      ? params.corridor_track_timeout : defaults.corridor_track_timeout;
+  config.corridor_min_cluster_points = std::max(2, params.corridor_min_cluster_points);
+  config.corridor_max_cluster_extent = params.corridor_max_cluster_extent > 0.0
+      ? params.corridor_max_cluster_extent : defaults.corridor_max_cluster_extent;
+  config.corridor_max_candidates = std::max(1, params.corridor_max_candidates);
+  config.corridor_reject_candidate_count = std::max(
+      config.corridor_max_candidates, params.corridor_reject_candidate_count);
+  config.corridor_min_wall_points = std::max(2, params.corridor_min_wall_points);
+  config.corridor_wall_search_forward = params.corridor_wall_search_forward > 0.0
+      ? params.corridor_wall_search_forward : defaults.corridor_wall_search_forward;
+  config.corridor_wall_filter_alpha = std::clamp(
+      params.corridor_wall_filter_alpha, 0.01, 1.0);
+  config.corridor_reactivation_displacement = std::max(
+      0.0, params.corridor_reactivation_displacement);
+  config.corridor_turn_reset_yaw = std::max(0.0, params.corridor_turn_reset_yaw);
   config.num_threads = std::max(0, params.num_threads);
   config.only_valid = params.only_valid;
   config.inflate_unknown = std::max(0, params.inflate_unknown);
@@ -485,6 +534,55 @@ void UfomapMapper::loadParameters() {
              defaults.temporal_cluster_radius);
   pnh_.param("ufomap_temporal_min_cluster_points", params_.temporal_min_cluster_points,
              defaults.temporal_min_cluster_points);
+  pnh_.param("corridor_dynamic_enabled", params_.corridor_dynamic_enabled,
+             defaults.corridor_dynamic_enabled);
+  pnh_.param("corridor_width", params_.corridor_width, defaults.corridor_width);
+  pnh_.param("corridor_wall_clearance", params_.corridor_wall_clearance,
+             defaults.corridor_wall_clearance);
+  pnh_.param("corridor_roi_min_forward", params_.corridor_roi_min_forward,
+             defaults.corridor_roi_min_forward);
+  pnh_.param("corridor_roi_max_forward", params_.corridor_roi_max_forward,
+             defaults.corridor_roi_max_forward);
+  pnh_.param("corridor_roi_min_z", params_.corridor_roi_min_z,
+             defaults.corridor_roi_min_z);
+  pnh_.param("corridor_roi_max_z", params_.corridor_roi_max_z,
+             defaults.corridor_roi_max_z);
+  pnh_.param("corridor_detection_voxel", params_.corridor_detection_voxel,
+             defaults.corridor_detection_voxel);
+  pnh_.param("corridor_history_frames", params_.corridor_history_frames,
+             defaults.corridor_history_frames);
+  pnh_.param("corridor_min_confirm_hits", params_.corridor_min_confirm_hits,
+             defaults.corridor_min_confirm_hits);
+  pnh_.param("corridor_min_lateral_speed", params_.corridor_min_lateral_speed,
+             defaults.corridor_min_lateral_speed);
+  pnh_.param("corridor_min_lateral_span", params_.corridor_min_lateral_span,
+             defaults.corridor_min_lateral_span);
+  pnh_.param("corridor_max_forward_speed", params_.corridor_max_forward_speed,
+             defaults.corridor_max_forward_speed);
+  pnh_.param("corridor_max_vertical_speed", params_.corridor_max_vertical_speed,
+             defaults.corridor_max_vertical_speed);
+  pnh_.param("corridor_association_gate", params_.corridor_association_gate,
+             defaults.corridor_association_gate);
+  pnh_.param("corridor_track_timeout", params_.corridor_track_timeout,
+             defaults.corridor_track_timeout);
+  pnh_.param("corridor_min_cluster_points", params_.corridor_min_cluster_points,
+             defaults.corridor_min_cluster_points);
+  pnh_.param("corridor_max_cluster_extent", params_.corridor_max_cluster_extent,
+             defaults.corridor_max_cluster_extent);
+  pnh_.param("corridor_max_candidates", params_.corridor_max_candidates,
+             defaults.corridor_max_candidates);
+  pnh_.param("corridor_reject_candidate_count", params_.corridor_reject_candidate_count,
+             defaults.corridor_reject_candidate_count);
+  pnh_.param("corridor_min_wall_points", params_.corridor_min_wall_points,
+             defaults.corridor_min_wall_points);
+  pnh_.param("corridor_wall_search_forward", params_.corridor_wall_search_forward,
+             defaults.corridor_wall_search_forward);
+  pnh_.param("corridor_wall_filter_alpha", params_.corridor_wall_filter_alpha,
+             defaults.corridor_wall_filter_alpha);
+  pnh_.param("corridor_reactivation_displacement", params_.corridor_reactivation_displacement,
+             defaults.corridor_reactivation_displacement);
+  pnh_.param("corridor_turn_reset_yaw", params_.corridor_turn_reset_yaw,
+             defaults.corridor_turn_reset_yaw);
   pnh_.param("ufomap_insert_hit_depth", params_.insert_hit_depth, defaults.insert_hit_depth);
   pnh_.param("ufomap_insert_miss_depth", params_.insert_miss_depth, defaults.insert_miss_depth);
   pnh_.param("ufomap_ray_casting_depth", params_.ray_casting_depth, defaults.ray_casting_depth);
@@ -512,6 +610,7 @@ void UfomapMapper::configureUfomap() {
   ground_plane_samples_.clear();
   ground_plane_locked_ = false;
   previous_frame_points_.clear();
+  resetCorridorTracks();
   runtime_ = std::make_unique<UfomapRuntime>(static_cast<ufo::node_size_t>(config_.resolution),
                                              static_cast<ufo::depth_t>(config_.depth_levels));
 
@@ -785,25 +884,40 @@ void UfomapMapper::updateGroundPlane(const UfomapPointCloud& points,
 }
 
 UfomapMapper::UfomapPointCloud UfomapMapper::filterGroundPoints(
-    const UfomapPointCloud& points) const {
+    const UfomapPointCloud& points,
+    std::vector<std::size_t>* retained_source_indices) const {
+  if (retained_source_indices != nullptr) {
+    retained_source_indices->clear();
+    retained_source_indices->reserve(points.size());
+  }
   if (!config_.ground_filter_enabled || !ground_plane_.has_value()) {
+    if (retained_source_indices != nullptr) {
+      for (std::size_t index = 0U; index < points.size(); ++index) {
+        retained_source_indices->push_back(index);
+      }
+    }
     return points;
   }
 
   UfomapPointCloud filtered_points;
   filtered_points.reserve(points.size());
-  for (const auto& point : points) {
+  for (std::size_t index = 0U; index < points.size(); ++index) {
+    const auto& point = points[index];
     // 只删除拟合地面及以下的点；地面以上的点全部保留，不使用对称高度带。
     const double ground_height = ground_plane_->heightAt(point.x, point.y);
     if (static_cast<double>(point.z) > ground_height) {
       filtered_points.push_back(point);
+      if (retained_source_indices != nullptr) {
+        retained_source_indices->push_back(index);
+      }
     }
   }
   return filtered_points;
 }
 
 std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
-    const UfomapPointCloud& points) {
+    const UfomapPointCloud& points,
+    const std::vector<bool>* corridor_handled_indices) {
   std::vector<std::size_t> motion_indices;
   if (!config_.temporal_motion_enabled || points.empty() ||
       previous_frame_points_.empty()) {
@@ -865,6 +979,13 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
   std::shared_lock<std::shared_mutex> map_lock(map_mutex_);
   const auto& runtime = runtimeLocked();
   for (std::size_t index = 0U; index < points.size(); ++index) {
+    // 通道候选层已经负责 ROI 内的跨帧关联；不能再让通用 seenFree/hits
+    // 复检把同一批点按另一套规则重新分类。
+    if (corridor_handled_indices != nullptr &&
+        index < corridor_handled_indices->size() &&
+        (*corridor_handled_indices)[index]) {
+      continue;
+    }
     const auto& point = points[index];
     const ufo::Point current_point(point.x, point.y, point.z);
     if (hasNearbyPreviousPoint(current_point, match_distance_sq)) {
@@ -955,6 +1076,584 @@ std::vector<std::size_t> UfomapMapper::detectTemporalMotion(
   return motion_indices;
 }
 
+void UfomapMapper::resetCorridorTracks() {
+  corridor_tracks_.clear();
+  next_corridor_track_id_ = 1U;
+  // 传感器刚转入通道时可能先看到球、随后才看到两侧墙。启用通道检测时先用
+  // 配置宽度建立名义边界，后续双侧墙观测只负责校正它。
+  corridor_wall_valid_ = config_.corridor_dynamic_enabled;
+  corridor_wall_measured_ = false;
+  corridor_left_wall_ = -0.5 * config_.corridor_width;
+  corridor_right_wall_ = 0.5 * config_.corridor_width;
+  corridor_forward_x_ = 1.0;
+  corridor_forward_y_ = 0.0;
+  corridor_last_yaw_valid_ = false;
+  corridor_last_yaw_ = 0.0;
+}
+
+UfomapVoxelCode UfomapMapper::makeDetectorVoxelCode(const ufo::Point& point) const {
+  // 动态聚类需要一个与 UFOMap 分辨率无关的 key。加偏置是为了让负世界坐标
+  // 在 UFOMap 使用的无符号 key_t 中仍保持相邻关系。
+  constexpr std::int64_t kKeyOffset = (static_cast<std::int64_t>(1) << 29);
+  const double resolution = std::max(0.02, config_.corridor_detection_voxel);
+  const auto toKey = [resolution](const double value) {
+    const std::int64_t key = static_cast<std::int64_t>(std::floor(value / resolution)) +
+                             kKeyOffset;
+    return static_cast<ufo::key_t>(std::max<std::int64_t>(0, key));
+  };
+
+  UfomapVoxelCode code;
+  code.key_x = toKey(point.x);
+  code.key_y = toKey(point.y);
+  code.key_z = toKey(point.z);
+  code.depth = 0;
+  code.raw_code = 0;
+  return code;
+}
+
+UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
+    const UfomapPointCloud& points,
+    const ufo::Point& sensor_origin,
+    const nav_msgs::Odometry& odom_msg,
+    const ros::Time& stamp) {
+  CorridorCandidateResult result;
+  result.handled_indices.assign(points.size(), false);
+  result.dynamic_indices.assign(points.size(), false);
+  result.holdout_indices.assign(points.size(), false);
+  if (!config_.corridor_dynamic_enabled || points.empty()) {
+    return result;
+  }
+
+  const auto& orientation = odom_msg.pose.pose.orientation;
+  const double quaternion_norm = std::sqrt(
+      orientation.x * orientation.x + orientation.y * orientation.y +
+      orientation.z * orientation.z + orientation.w * orientation.w);
+  double yaw = std::atan2(2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+                          1.0 - 2.0 * (orientation.y * orientation.y +
+                                       orientation.z * orientation.z));
+  if (!std::isfinite(yaw) || quaternion_norm < 1e-6) {
+    yaw = std::atan2(corridor_forward_y_, corridor_forward_x_);
+  }
+
+  if (corridor_last_yaw_valid_ && config_.corridor_turn_reset_yaw > 0.0 &&
+      std::abs(wrappedAngleDifference(yaw, corridor_last_yaw_)) >=
+          config_.corridor_turn_reset_yaw) {
+    // 转弯后的新视野不应继续拿转弯前的点级历史做关联；已经确认的 ID
+    // 保留给 tracker，未确认候选重新从当前帧建立。
+    corridor_tracks_.erase(
+        std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
+                       [](const CorridorTrack& track) { return !track.confirmed; }),
+        corridor_tracks_.end());
+    corridor_left_wall_ = -0.5 * config_.corridor_width;
+    corridor_right_wall_ = 0.5 * config_.corridor_width;
+    corridor_wall_valid_ = true;
+    corridor_wall_measured_ = false;
+  }
+  corridor_last_yaw_ = yaw;
+  corridor_last_yaw_valid_ = true;
+  corridor_forward_x_ = std::cos(yaw);
+  corridor_forward_y_ = std::sin(yaw);
+  const double lateral_x = -corridor_forward_y_;
+  const double lateral_y = corridor_forward_x_;
+
+  std::vector<double> left_wall_samples;
+  std::vector<double> right_wall_samples;
+  left_wall_samples.reserve(points.size() / 20U + 1U);
+  right_wall_samples.reserve(points.size() / 20U + 1U);
+  const double wall_search_limit = std::max(config_.corridor_width * 1.5, 1.0);
+  for (const auto& point : points) {
+    const double dx = static_cast<double>(point.x) - sensor_origin.x;
+    const double dy = static_cast<double>(point.y) - sensor_origin.y;
+    const double longitudinal = dx * corridor_forward_x_ + dy * corridor_forward_y_;
+    const double lateral = dx * lateral_x + dy * lateral_y;
+    if (std::abs(longitudinal) > config_.corridor_wall_search_forward ||
+        point.z < config_.corridor_roi_min_z - 0.4 ||
+        point.z > config_.corridor_roi_max_z + 0.4) {
+      continue;
+    }
+    if (lateral < -0.2 && lateral > -wall_search_limit) {
+      left_wall_samples.push_back(lateral);
+    } else if (lateral > 0.2 && lateral < wall_search_limit) {
+      right_wall_samples.push_back(lateral);
+    }
+  }
+
+  if (left_wall_samples.size() >= static_cast<std::size_t>(config_.corridor_min_wall_points) &&
+      right_wall_samples.size() >= static_cast<std::size_t>(config_.corridor_min_wall_points)) {
+    const double measured_left = medianValue(std::move(left_wall_samples));
+    const double measured_right = medianValue(std::move(right_wall_samples));
+    const double measured_width = measured_right - measured_left;
+    if (std::isfinite(measured_left) && std::isfinite(measured_right) &&
+        measured_width >= 0.7 * config_.corridor_width &&
+        measured_width <= 1.6 * config_.corridor_width) {
+      const double alpha = corridor_wall_measured_ ? config_.corridor_wall_filter_alpha : 1.0;
+      corridor_left_wall_ = alpha * measured_left + (1.0 - alpha) * corridor_left_wall_;
+      corridor_right_wall_ = alpha * measured_right + (1.0 - alpha) * corridor_right_wall_;
+      corridor_wall_valid_ = true;
+      corridor_wall_measured_ = true;
+    }
+  }
+
+  // 单帧看不全两侧墙时继续沿用上次墙模型；首次进入通道则使用名义宽度。
+  result.wall_valid = corridor_wall_valid_;
+  if (!corridor_wall_valid_) {
+    for (auto& track : corridor_tracks_) {
+      ++track.missed_frames;
+    }
+    corridor_tracks_.erase(
+        std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
+                       [&](const CorridorTrack& track) {
+                         return (stamp - track.last_seen).toSec() >
+                                config_.corridor_track_timeout;
+                       }),
+        corridor_tracks_.end());
+    return result;
+  }
+
+  // 先标记通道内部和墙边点为“由通道层接管”。这样通道墙面的 seenFree
+  // 不会绕过墙面过滤重新进入通用动态分类。
+  std::unordered_map<TemporalGridKey, std::vector<std::size_t>, TemporalGridKeyHash>
+      candidate_buckets;
+  const double detection_voxel = std::max(0.02, config_.corridor_detection_voxel);
+  for (std::size_t index = 0U; index < points.size(); ++index) {
+    const auto& point = points[index];
+    const double dx = static_cast<double>(point.x) - sensor_origin.x;
+    const double dy = static_cast<double>(point.y) - sensor_origin.y;
+    const double longitudinal = dx * corridor_forward_x_ + dy * corridor_forward_y_;
+    const double lateral = dx * lateral_x + dy * lateral_y;
+    if (longitudinal < config_.corridor_roi_min_forward ||
+        longitudinal > config_.corridor_roi_max_forward ||
+        point.z < config_.corridor_roi_min_z || point.z > config_.corridor_roi_max_z ||
+        lateral < corridor_left_wall_ - config_.corridor_wall_clearance ||
+        lateral > corridor_right_wall_ + config_.corridor_wall_clearance) {
+      continue;
+    }
+    result.handled_indices[index] = true;
+    if (lateral <= corridor_left_wall_ + config_.corridor_wall_clearance ||
+        lateral >= corridor_right_wall_ - config_.corridor_wall_clearance) {
+      continue;
+    }
+    candidate_buckets[makeTemporalGridKey(point, detection_voxel)].push_back(index);
+  }
+
+  std::size_t published_track_count = 0U;
+  const auto markConfirmedTrackPrediction = [&](const CorridorTrack& track) {
+    if (!track.confirmed || track.released_static) {
+      return;
+    }
+    if (published_track_count >= static_cast<std::size_t>(config_.corridor_max_candidates)) {
+      return;
+    }
+    const double track_age = (stamp - track.last_seen).toSec();
+    if (!std::isfinite(track_age) || track_age < 0.0 ||
+        track_age > config_.corridor_track_timeout) {
+      return;
+    }
+
+    ufo::Point predicted = pointPlusScaled(
+        track.center, track.velocity,
+        std::clamp(track_age, 0.0, config_.corridor_track_timeout));
+    const double predicted_dx = static_cast<double>(predicted.x) - sensor_origin.x;
+    const double predicted_dy = static_cast<double>(predicted.y) - sensor_origin.y;
+    const double predicted_forward = predicted_dx * corridor_forward_x_ +
+                                     predicted_dy * corridor_forward_y_;
+    double predicted_lateral = predicted_dx * lateral_x + predicted_dy * lateral_y;
+    if (predicted_forward < config_.corridor_roi_min_forward ||
+        predicted_forward > config_.corridor_roi_max_forward ||
+        predicted.z < config_.corridor_roi_min_z ||
+        predicted.z > config_.corridor_roi_max_z) {
+      return;
+    }
+
+    // CV 在摆动端点会短时指向墙外；将保活中心限制在通道内部，避免轨迹因
+    // 一两帧遮挡立即消失，也不会把墙面本身标成动态点。
+    const double minimum_lateral = corridor_left_wall_ + config_.corridor_wall_clearance;
+    const double maximum_lateral = corridor_right_wall_ - config_.corridor_wall_clearance;
+    const double clamped_lateral = std::clamp(
+        predicted_lateral, minimum_lateral, maximum_lateral);
+    predicted.x += static_cast<float>((clamped_lateral - predicted_lateral) * lateral_x);
+    predicted.y += static_cast<float>((clamped_lateral - predicted_lateral) * lateral_y);
+
+    const double half_diagonal = 0.5 * std::hypot(
+        std::hypot(static_cast<double>(track.size.x), static_cast<double>(track.size.y)),
+        static_cast<double>(track.size.z));
+    const double mask_radius = std::min(
+        config_.corridor_association_gate,
+        std::max(2.0 * detection_voxel, half_diagonal + detection_voxel));
+    const double mask_radius_sq = mask_radius * mask_radius;
+    bool published = false;
+    for (std::size_t index = 0U; index < points.size(); ++index) {
+      if (!result.handled_indices[index] || result.dynamic_indices[index]) {
+        continue;
+      }
+      const auto& point = points[index];
+      const double dx = static_cast<double>(point.x) - sensor_origin.x;
+      const double dy = static_cast<double>(point.y) - sensor_origin.y;
+      const double lateral = dx * lateral_x + dy * lateral_y;
+      if (lateral <= minimum_lateral || lateral >= maximum_lateral ||
+          pointDistanceSquared(point, predicted) > mask_radius_sq) {
+        continue;
+      }
+      result.dynamic_indices[index] = true;
+      published = true;
+      ++result.candidate_point_count;
+      ++result.confirmed_point_count;
+    }
+    if (published) {
+      ++published_track_count;
+    }
+  };
+
+  struct CorridorCluster {
+    std::vector<std::size_t> indices;
+    ufo::Point center{};
+    ufo::Point size{};
+  };
+  std::vector<CorridorCluster> clusters;
+  std::unordered_set<TemporalGridKey, TemporalGridKeyHash> visited;
+  const std::array<std::array<int, 3>, 26> offsets = [] {
+    std::array<std::array<int, 3>, 26> values{};
+    std::size_t cursor = 0U;
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          if (dx == 0 && dy == 0 && dz == 0) {
+            continue;
+          }
+          values[cursor++] = {dx, dy, dz};
+        }
+      }
+    }
+    return values;
+  }();
+
+  for (const auto& bucket : candidate_buckets) {
+    if (visited.count(bucket.first) != 0U) {
+      continue;
+    }
+    std::queue<TemporalGridKey> queue;
+    queue.push(bucket.first);
+    visited.insert(bucket.first);
+    CorridorCluster cluster;
+    while (!queue.empty()) {
+      const TemporalGridKey key = queue.front();
+      queue.pop();
+      const auto found = candidate_buckets.find(key);
+      if (found == candidate_buckets.end()) {
+        continue;
+      }
+      cluster.indices.insert(cluster.indices.end(), found->second.begin(), found->second.end());
+      for (const auto& offset : offsets) {
+        const TemporalGridKey neighbor{key.x + offset[0], key.y + offset[1], key.z + offset[2]};
+        if (candidate_buckets.count(neighbor) != 0U && visited.insert(neighbor).second) {
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    if (cluster.indices.size() < static_cast<std::size_t>(config_.corridor_min_cluster_points)) {
+      continue;
+    }
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double min_z = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    double max_z = -std::numeric_limits<double>::infinity();
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    for (const std::size_t index : cluster.indices) {
+      const auto& point = points[index];
+      min_x = std::min(min_x, static_cast<double>(point.x));
+      min_y = std::min(min_y, static_cast<double>(point.y));
+      min_z = std::min(min_z, static_cast<double>(point.z));
+      max_x = std::max(max_x, static_cast<double>(point.x));
+      max_y = std::max(max_y, static_cast<double>(point.y));
+      max_z = std::max(max_z, static_cast<double>(point.z));
+      sum_x += point.x;
+      sum_y += point.y;
+      sum_z += point.z;
+    }
+    const double extent = std::hypot(std::hypot(max_x - min_x, max_y - min_y), max_z - min_z);
+    if (config_.corridor_max_cluster_extent > 0.0 &&
+        extent > config_.corridor_max_cluster_extent) {
+      continue;
+    }
+    const double count = static_cast<double>(cluster.indices.size());
+    cluster.center = ufo::Point(static_cast<float>(sum_x / count),
+                                static_cast<float>(sum_y / count),
+                                static_cast<float>(sum_z / count));
+    cluster.size = ufo::Point(static_cast<float>(std::max(max_x - min_x, detection_voxel)),
+                              static_cast<float>(std::max(max_y - min_y, detection_voxel)),
+                              static_cast<float>(std::max(max_z - min_z, detection_voxel)));
+    clusters.push_back(std::move(cluster));
+  }
+
+  std::sort(clusters.begin(), clusters.end(), [](const CorridorCluster& lhs,
+                                                 const CorridorCluster& rhs) {
+    return lhs.indices.size() > rhs.indices.size();
+  });
+
+  const auto ageTracks = [&]() {
+    for (auto& track : corridor_tracks_) {
+      markConfirmedTrackPrediction(track);
+      ++track.missed_frames;
+    }
+    corridor_tracks_.erase(
+        std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
+                       [&](const CorridorTrack& track) {
+                         return (stamp - track.last_seen).toSec() >
+                                config_.corridor_track_timeout;
+                       }),
+        corridor_tracks_.end());
+  };
+
+  if (clusters.empty() ||
+      clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
+    if (clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
+      // 候选爆炸时不把任何紧凑簇发布给下游，也不让它们在这一帧污染静态图。
+      // 已确认轨迹仍由 ageTracks() 通过受限 CV 预测保活。
+      for (const auto& cluster : clusters) {
+        for (const std::size_t index : cluster.indices) {
+          result.holdout_indices[index] = true;
+        }
+      }
+    }
+    ageTracks();
+    if (clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
+      ROS_WARN_STREAM_THROTTLE(
+          1.0, "Corridor dynamic candidates rejected: count=" << clusters.size()
+                                                               << ", limit="
+                                                               << config_.corridor_reject_candidate_count);
+    }
+    return result;
+  }
+  std::vector<bool> matched_tracks(corridor_tracks_.size(), false);
+  for (const auto& cluster : clusters) {
+    // 每个紧凑候选在完成运动确认前都暂缓写入 UFOMap。只有 released_static
+    // 的稳定内部簇会在下面清除 holdout；这样候选排序/截断不会把真正的球
+    // 静默地写死成静态占据。
+    for (const std::size_t index : cluster.indices) {
+      result.holdout_indices[index] = true;
+    }
+    int best_track = -1;
+    double best_distance = config_.corridor_association_gate;
+    for (std::size_t track_index = 0U; track_index < corridor_tracks_.size(); ++track_index) {
+      if (matched_tracks[track_index]) {
+        continue;
+      }
+      const auto& track = corridor_tracks_[track_index];
+      const double dt = std::clamp((stamp - track.last_seen).toSec(), 0.0, 0.5);
+      const ufo::Point predicted = pointPlusScaled(track.center, track.velocity, dt);
+      const double distance = std::sqrt(pointDistanceSquared(predicted, cluster.center));
+      if (distance < best_distance) {
+        best_distance = distance;
+        best_track = static_cast<int>(track_index);
+      }
+    }
+
+    CorridorTrack* track = nullptr;
+    if (best_track < 0) {
+      CorridorTrack new_track;
+      new_track.id = next_corridor_track_id_++;
+      new_track.center = cluster.center;
+      new_track.size = cluster.size;
+      new_track.hits = 1U;
+      new_track.last_seen = stamp;
+      new_track.history.push_back({stamp, cluster.center});
+      corridor_tracks_.push_back(std::move(new_track));
+      matched_tracks.push_back(true);
+      track = &corridor_tracks_.back();
+    } else {
+      matched_tracks[static_cast<std::size_t>(best_track)] = true;
+      track = &corridor_tracks_[static_cast<std::size_t>(best_track)];
+      const ufo::Point previous_center = track->center;
+      const double dt = (stamp - track->last_seen).toSec();
+      track->size = cluster.size;
+      track->missed_frames = 0U;
+      track->last_seen = stamp;
+      const double displacement = std::sqrt(
+          pointDistanceSquared(previous_center, cluster.center));
+      const bool reactivating = track->released_static &&
+          displacement >= config_.corridor_reactivation_displacement;
+      const bool stale_unconfirmed = !track->confirmed && !track->released_static &&
+          dt > 0.25;
+      if (stale_unconfirmed) {
+        // 未确认候选跨越较长空帧后重新出现，不能把两段无关噪声拼成一条
+        // 运动轨迹；从当前观测重新开始命中和方向计数。
+        track->hits = 0U;
+        track->history.clear();
+        track->lateral_direction_history.clear();
+        track->velocity = ufo::Point(0.0F, 0.0F, 0.0F);
+      }
+      if (reactivating) {
+        // 静态释放后的再次运动必须从当前观测重新积累证据，不能让旧历史速度
+        // 直接把目标重新确认成动态。
+        track->center = cluster.center;
+        track->velocity = ufo::Point(0.0F, 0.0F, 0.0F);
+        track->hits = 1U;
+        track->confirmed = false;
+        track->released_static = false;
+        track->history.clear();
+        track->history.push_back({stamp, cluster.center});
+        track->lateral_direction_history.clear();
+      } else if (track->released_static) {
+        // 保留静态锚点，使低速目标的小幅逐帧位移可以累计到重新激活阈值。
+        ++track->hits;
+      } else {
+        track->center = cluster.center;
+        ++track->hits;
+      }
+
+      if (!reactivating && !track->released_static && dt > 1e-3 && dt < 1.0) {
+        track->history.push_back({stamp, cluster.center});
+        while (track->history.size() >
+               static_cast<std::size_t>(config_.corridor_history_frames)) {
+          track->history.pop_front();
+        }
+        std::vector<double> vx;
+        std::vector<double> vy;
+        std::vector<double> vz;
+        for (std::size_t sample_index = 1U; sample_index < track->history.size(); ++sample_index) {
+          const auto& previous = track->history[sample_index - 1U];
+          const auto& current = track->history[sample_index];
+          const double sample_dt = (current.stamp - previous.stamp).toSec();
+          if (sample_dt <= 1e-3 || sample_dt > 1.0) {
+            continue;
+          }
+          vx.push_back((static_cast<double>(current.center.x) - previous.center.x) / sample_dt);
+          vy.push_back((static_cast<double>(current.center.y) - previous.center.y) / sample_dt);
+          vz.push_back((static_cast<double>(current.center.z) - previous.center.z) / sample_dt);
+        }
+        if (!vx.empty()) {
+          track->velocity = ufo::Point(static_cast<float>(medianValue(std::move(vx))),
+                                       static_cast<float>(medianValue(std::move(vy))),
+                                       static_cast<float>(medianValue(std::move(vz))));
+        }
+
+        const ufo::Point frame_velocity(
+            static_cast<float>((static_cast<double>(cluster.center.x) - previous_center.x) / dt),
+            static_cast<float>((static_cast<double>(cluster.center.y) - previous_center.y) / dt),
+            static_cast<float>((static_cast<double>(cluster.center.z) - previous_center.z) / dt));
+        const double frame_lateral_velocity = dotHorizontal(
+            frame_velocity, lateral_x, lateral_y);
+        int direction = 0;
+        if (frame_lateral_velocity >= config_.corridor_min_lateral_speed) {
+          direction = 1;
+        } else if (frame_lateral_velocity <= -config_.corridor_min_lateral_speed) {
+          direction = -1;
+        }
+        track->lateral_direction_history.push_back(direction);
+        while (track->lateral_direction_history.size() >
+               static_cast<std::size_t>(config_.corridor_history_frames)) {
+          track->lateral_direction_history.pop_front();
+        }
+      }
+    }
+
+    const double lateral_velocity = dotHorizontal(track->velocity, lateral_x, lateral_y);
+    const double forward_velocity = dotHorizontal(track->velocity,
+                                                  corridor_forward_x_, corridor_forward_y_);
+    const double vertical_velocity = static_cast<double>(track->velocity.z);
+    const std::size_t positive_evidence = static_cast<std::size_t>(std::count(
+        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), 1));
+    const std::size_t negative_evidence = static_cast<std::size_t>(std::count(
+        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), -1));
+    const int latest_direction = track->lateral_direction_history.empty()
+        ? 0 : track->lateral_direction_history.back();
+    std::size_t consecutive_direction = 0U;
+    if (latest_direction != 0) {
+      for (auto it = track->lateral_direction_history.rbegin();
+           it != track->lateral_direction_history.rend() && *it == latest_direction; ++it) {
+        ++consecutive_direction;
+      }
+    }
+    const std::size_t dominant_evidence = std::max(positive_evidence, negative_evidence);
+    const std::size_t contrary_evidence = std::min(positive_evidence, negative_evidence);
+    const bool recent_direction_consistent = consecutive_direction >= 2U &&
+        dominant_evidence >= 2U && dominant_evidence > contrary_evidence;
+    double lateral_span = 0.0;
+    if (track->history.size() >= 2U) {
+      const ufo::Point& first = track->history.front().center;
+      const ufo::Point& last = track->history.back().center;
+      lateral_span = std::abs(dotHorizontal(
+          ufo::Point(last.x - first.x, last.y - first.y, last.z - first.z),
+          lateral_x, lateral_y));
+    }
+    if (!track->confirmed && !track->released_static &&
+        track->hits >= static_cast<std::size_t>(config_.corridor_min_confirm_hits) &&
+        recent_direction_consistent &&
+        lateral_span >= config_.corridor_min_lateral_span &&
+        std::abs(lateral_velocity) >= config_.corridor_min_lateral_speed &&
+        std::abs(forward_velocity) <= config_.corridor_max_forward_speed &&
+        std::abs(vertical_velocity) <= config_.corridor_max_vertical_speed) {
+      track->confirmed = true;
+      ROS_INFO_STREAM("Corridor dynamic track confirmed: id=" << track->id
+                      << ", hits=" << track->hits
+                      << ", lateral_speed=" << lateral_velocity
+                      << ", lateral_span=" << lateral_span
+                      << ", center=(" << track->center.x << "," << track->center.y
+                      << "," << track->center.z << ")"
+                      << ", size=(" << track->size.x << "," << track->size.y
+                      << "," << track->size.z << ")");
+    }
+
+    if (!track->confirmed && !track->released_static &&
+        track->hits >= static_cast<std::size_t>(config_.corridor_history_frames) &&
+        dominant_evidence == 0U) {
+      // 长时间稳定的内部点簇释放给静态地图；之后若发生明显横向位移，
+      // 仍可由本层重新激活，而不依赖 UFOMap 的历史 hits。
+      track->released_static = true;
+      track->velocity = ufo::Point(0.0F, 0.0F, 0.0F);
+      track->history.clear();
+      track->history.push_back({stamp, track->center});
+      track->lateral_direction_history.clear();
+    }
+
+    if (!track->released_static) {
+      result.candidate_point_count += cluster.indices.size();
+      if (track->confirmed &&
+          published_track_count < static_cast<std::size_t>(config_.corridor_max_candidates)) {
+        for (const std::size_t index : cluster.indices) {
+          result.dynamic_indices[index] = true;
+          result.holdout_indices[index] = false;
+        }
+        result.confirmed_point_count += cluster.indices.size();
+        ++published_track_count;
+      }
+    } else {
+      // 连续多帧稳定且没有运动证据的簇才重新允许写入静态图。
+      for (const std::size_t index : cluster.indices) {
+        result.holdout_indices[index] = false;
+      }
+    }
+  }
+
+  for (std::size_t track_index = 0U; track_index < matched_tracks.size(); ++track_index) {
+    if (!matched_tracks[track_index]) {
+      markConfirmedTrackPrediction(corridor_tracks_[track_index]);
+      ++corridor_tracks_[track_index].missed_frames;
+    }
+  }
+  corridor_tracks_.erase(
+      std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
+                     [&](const CorridorTrack& track) {
+                       return (stamp - track.last_seen).toSec() > config_.corridor_track_timeout;
+                     }),
+      corridor_tracks_.end());
+
+  if (verbose_) {
+    ROS_INFO_STREAM_THROTTLE(
+        1.0, "Corridor detector: wall=" << (result.wall_valid ? "valid" : "invalid")
+                                         << ", clusters=" << clusters.size()
+                                         << ", candidate_points=" << result.candidate_point_count
+                                         << ", confirmed_points=" << result.confirmed_point_count
+                                         << ", tracks=" << corridor_tracks_.size());
+  }
+  return result;
+}
+
 void UfomapMapper::updatePreviousFrameSnapshot(const UfomapPointCloud& points) {
   previous_frame_points_.clear();
   previous_frame_points_.reserve(points.size());
@@ -1005,21 +1704,58 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   }
 
   updateGroundPlane(*range_filtered_points, sensor_origin);
-  const ufo::PointCloud ground_filtered_points = filterGroundPoints(*range_filtered_points);
+  std::vector<std::size_t> output_source_indices;
+  const ufo::PointCloud ground_filtered_points = filterGroundPoints(
+      *range_filtered_points, &output_source_indices);
   const ufo::PointCloud* output_points = &ground_filtered_points;
+  // 通道层必须看到地面滤波之前的原始回波，否则地面估计偏高时会先把摆球
+  // 删除。静态 UFOMap 仍只接收 ground_filtered_points，避免把全量地面写入地图。
+  const CorridorCandidateResult corridor_candidates = detectCorridorCandidates(
+      *range_filtered_points, sensor_origin, odom_msg, cloud_msg.header.stamp);
+
+  // filterGroundPoints() 保序返回原始点子集，因此可以按原始索引精确复制掩码，
+  // 不做空间邻域膨胀，避免把球附近的墙点或静态点误标为动态/暂存。
+  std::vector<bool> corridor_handled_output(output_points->size(), false);
+  std::vector<bool> corridor_dynamic_output(output_points->size(), false);
+  std::vector<bool> corridor_holdout_output(output_points->size(), false);
+  std::vector<bool> corridor_dynamic_raw_kept(range_filtered_points->size(), false);
+  for (std::size_t output_index = 0U;
+       output_index < output_source_indices.size(); ++output_index) {
+    const std::size_t source_index = output_source_indices[output_index];
+    if (source_index >= corridor_candidates.handled_indices.size()) {
+      continue;
+    }
+    corridor_handled_output[output_index] =
+        corridor_candidates.handled_indices[source_index];
+    corridor_dynamic_output[output_index] =
+        corridor_candidates.dynamic_indices[source_index];
+    corridor_holdout_output[output_index] =
+        corridor_candidates.holdout_indices[source_index];
+    corridor_dynamic_raw_kept[source_index] = corridor_dynamic_output[output_index];
+  }
   const std::vector<std::size_t> temporal_motion_indices =
-      detectTemporalMotion(*output_points);
+      detectTemporalMotion(*output_points, &corridor_handled_output);
   updatePreviousFrameSnapshot(*output_points);
 
   result.classification = classifyPoints(cloud_msg.header, *output_points);
+  const bool warmup_ready =
+      processed_frame_count_ > static_cast<std::uint64_t>(config_.warmup_frames);
   std::vector<bool> dynamic_mask(output_points->size(), false);
-  for (const std::size_t index : result.classification.dynamic_indices) {
-    if (index < dynamic_mask.size()) {
-      dynamic_mask[index] = true;
+  if (warmup_ready) {
+    for (const std::size_t index : result.classification.dynamic_indices) {
+      if (index < dynamic_mask.size() &&
+          (index >= corridor_handled_output.size() || !corridor_handled_output[index])) {
+        dynamic_mask[index] = true;
+      }
+    }
+    for (const std::size_t index : temporal_motion_indices) {
+      if (index < dynamic_mask.size()) {
+        dynamic_mask[index] = true;
+      }
     }
   }
-  for (const std::size_t index : temporal_motion_indices) {
-    if (index < dynamic_mask.size()) {
+  for (std::size_t index = 0U; index < corridor_dynamic_output.size(); ++index) {
+    if (corridor_dynamic_output[index]) {
       dynamic_mask[index] = true;
     }
   }
@@ -1046,7 +1782,14 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
       for (std::size_t index = 0U; index < output_points->size(); ++index) {
         const auto& point = (*output_points)[index];
         const ufo::Point point_value(point.x, point.y, point.z);
+        const bool corridor_holdout = index < corridor_holdout_output.size() &&
+                                      corridor_holdout_output[index];
         if (!dynamic_mask[index]) {
+          // 临时候选既不是当前帧已确认动态，也不是可写入/可显示的静态点。
+          // 将它从静态输出中省略，避免 RViz 看起来像“已经静态化”。
+          if (corridor_holdout) {
+            continue;
+          }
           static_cloud_points.push_back(point);
           classification.static_points.push_back(point_value);
           continue;
@@ -1055,20 +1798,44 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
         dynamic_cloud_points.push_back(point);
         classification.dynamic_points.push_back(point_value);
         classification.dynamic_indices.push_back(index);
-        const auto code = runtime.map.toCodeChecked(point);
-        if (!code.has_value()) {
-          continue;
-        }
-        const ufo::Key key = *code;
         UfomapDynamicClusterPoint cluster_point;
         cluster_point.point = point;
-        cluster_point.voxel_code.raw_code = code->raw();
-        cluster_point.voxel_code.key_x = key.x();
-        cluster_point.voxel_code.key_y = key.y();
-        cluster_point.voxel_code.key_z = key.z();
-        cluster_point.voxel_code.depth = key.depth();
+        if (index < corridor_dynamic_output.size() && corridor_dynamic_output[index]) {
+          cluster_point.use_detector_voxel = true;
+          cluster_point.detector_voxel_code = makeDetectorVoxelCode(point);
+        } else {
+          const auto code = runtime.map.toCodeChecked(point);
+          if (!code.has_value()) {
+            continue;
+          }
+          const ufo::Key key = *code;
+          cluster_point.voxel_code.raw_code = code->raw();
+          cluster_point.voxel_code.key_x = key.x();
+          cluster_point.voxel_code.key_y = key.y();
+          cluster_point.voxel_code.key_z = key.z();
+          cluster_point.voxel_code.depth = key.depth();
+        }
         classification.dynamic_cluster_points.push_back(cluster_point);
       }
+    }
+
+    // 地面滤波可能已经移除了摆球回波；确认后的 raw-only 点仍直接进入动态
+    // 输出，但不回写 UFOMap。按原始索引去重，保留同一体素内的全部真实回波。
+    for (std::size_t source_index = 0U;
+         source_index < corridor_candidates.dynamic_indices.size(); ++source_index) {
+      if (!corridor_candidates.dynamic_indices[source_index] ||
+          corridor_dynamic_raw_kept[source_index]) {
+        continue;
+      }
+      const auto& source_point = (*range_filtered_points)[source_index];
+      const ufo::Point point(source_point.x, source_point.y, source_point.z);
+      dynamic_cloud_points.push_back(source_point);
+      classification.dynamic_points.push_back(point);
+      UfomapDynamicClusterPoint cluster_point;
+      cluster_point.point = point;
+      cluster_point.use_detector_voxel = true;
+      cluster_point.detector_voxel_code = makeDetectorVoxelCode(point);
+      classification.dynamic_cluster_points.push_back(cluster_point);
     }
 
     classification.input_point_count = output_points->size();
@@ -1080,16 +1847,6 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   };
 
   rebuildClassificationOutputs();
-  const bool warmup_ready =
-      processed_frame_count_ > static_cast<std::uint64_t>(config_.warmup_frames);
-  if (!warmup_ready) {
-    result.classification.dynamic_points.clear();
-    result.classification.dynamic_indices.clear();
-    result.classification.dynamic_cluster_points.clear();
-    result.classification.dynamic_point_count = 0U;
-    result.classification.dynamic_cloud_msg =
-        buildCloudFromPointVector(cloud_msg.header, std::vector<ufo::Point>{});
-  }
   const auto classify_current_end = std::chrono::steady_clock::now();
   result.timing.classify_current_frame_ms =
       elapsedMs(classify_current_start, classify_current_end);
@@ -1105,7 +1862,9 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   UfomapPointCloud integration_points;
   integration_points.reserve(output_points->size());
   for (std::size_t index = 0U; index < output_points->size(); ++index) {
-    if (!dynamic_mask[index]) {
+    const bool corridor_holdout = index < corridor_holdout_output.size() &&
+                                  corridor_holdout_output[index];
+    if (!dynamic_mask[index] && !corridor_holdout) {
       integration_points.push_back((*output_points)[index]);
     }
   }
@@ -1143,6 +1902,11 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
                                                  : 0.0;
   result.runtime_stats.warmup_ready = warmup_ready;
   result.runtime_stats.temporal_motion_point_count = temporal_motion_indices.size();
+  result.runtime_stats.corridor_candidate_point_count =
+      corridor_candidates.candidate_point_count;
+  result.runtime_stats.corridor_confirmed_point_count =
+      corridor_candidates.confirmed_point_count;
+  result.runtime_stats.corridor_wall_valid = corridor_candidates.wall_valid;
 
   const double static_map_visualization_max_z = config_.static_map_visualization_max_z;
   StaticMapVisualizationSnapshot static_map_snapshot;
@@ -1180,6 +1944,10 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
                                               : std::string("unknown"))
                                       << ", temporalMotionPoints="
                                       << temporal_motion_indices.size()
+                                      << ", corridorCandidatePoints="
+                                      << corridor_candidates.candidate_point_count
+                                      << ", corridorConfirmedPoints="
+                                      << corridor_candidates.confirmed_point_count
                                       << ", warmupReady=" << (warmup_ready ? "true" : "false"));
   }
   return result;

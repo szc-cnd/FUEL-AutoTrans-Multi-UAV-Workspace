@@ -23,10 +23,14 @@ struct ClusterKey {
   ufo::key_t y{0};
   ufo::key_t z{0};
   ufo::depth_t depth{0};
+  // UFOMap key 与独立检测网格可能数值相同，但二者不在同一坐标网格中。
+  // 将网格来源纳入 key，避免一帧混合输入时跨网格误连通。
+  bool detector_grid{false};
 
-  // 八叉树键相等需同时比较坐标和层级；同坐标不同 depth 代表不同体素。
+  // 键相等需同时比较网格来源、坐标和层级；同坐标不同 depth 或网格也代表不同体素。
   bool operator==(const ClusterKey& other) const {
-    return x == other.x && y == other.y && z == other.z && depth == other.depth;
+    return x == other.x && y == other.y && z == other.z && depth == other.depth &&
+           detector_grid == other.detector_grid;
   }
 };
  
@@ -37,6 +41,8 @@ struct ClusterKeyHash {
     seed ^= static_cast<std::size_t>(key.y) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
     seed ^= static_cast<std::size_t>(key.z) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
     seed ^= static_cast<std::size_t>(key.depth) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+    seed ^= static_cast<std::size_t>(key.detector_grid) + 0x9e3779b9U +
+            (seed << 6U) + (seed >> 2U);
     return seed;
   }
 };
@@ -45,6 +51,12 @@ struct VoxelBucket {
   ClusterKey key;
   std::vector<std::size_t> point_indices;
 };
+
+// 普通动态点沿用 UFOMap 分类阶段生成的 key；通道候选可以显式提供独立
+// 检测网格 key。选择逻辑集中在这里，避免后续聚类步骤误用两套网格。
+const UfomapVoxelCode& clusterVoxelCode(const UfomapDynamicClusterPoint& point) {
+  return point.use_detector_voxel ? point.detector_voxel_code : point.voxel_code;
+}
 
 struct Fragment {
   // 当前帧一个初始 cluster 的原始统计量。min/max 表示真实 AABB 边界，
@@ -258,6 +270,9 @@ DynamicObjectClustererConfig buildClustererConfig(const DynamicObjectClustererPa
   // 正数契约做默认值兜底，避免把负点数等非法值带入后续无符号类型或几何阈值。
   const int min_points = params.min_points > 0 ? params.min_points : defaults.min_points;
   config.min_points = static_cast<std::size_t>(min_points);
+  const int detector_min_points = params.detector_min_points > 0
+      ? params.detector_min_points : defaults.detector_min_points;
+  config.detector_min_points = static_cast<std::size_t>(detector_min_points);
   config.max_extent = params.max_extent > 0.0 ? params.max_extent : defaults.max_extent;
   config.vertical_merge_max_z_gap = params.vertical_merge_max_z_gap > 0.0
       ? params.vertical_merge_max_z_gap : defaults.vertical_merge_max_z_gap;
@@ -278,6 +293,7 @@ DynamicObjectClusterer::DynamicObjectClusterer(ros::NodeHandle& pnh, const bool 
 
   ROS_INFO_STREAM("Dynamic object clusterer is ready. connectivity: " << config_.connectivity
                   << ", min points: " << config_.min_points
+                  << ", detector min points: " << config_.detector_min_points
                   << ", max extent: " << config_.max_extent
                   << ", vertical merge z gap: " << config_.vertical_merge_max_z_gap
                   << ", vertical merge overlap ratio: "
@@ -288,6 +304,8 @@ void DynamicObjectClusterer::loadParameters() {
   // 默认值只从参数快照结构体取，避免读参处和结构体初值各维护一份数字。
   const DynamicObjectClustererParams defaults;
   pnh_.param("dynamic_cluster_min_points", params_.min_points, defaults.min_points);
+  pnh_.param("dynamic_cluster_detector_min_points", params_.detector_min_points,
+             defaults.detector_min_points);
   pnh_.param("dynamic_cluster_max_extent", params_.max_extent, defaults.max_extent);
   pnh_.param("dynamic_cluster_connectivity", params_.connectivity, defaults.connectivity);
   pnh_.param("dynamic_cluster_vertical_merge_max_z_gap", params_.vertical_merge_max_z_gap, defaults.vertical_merge_max_z_gap);
@@ -347,8 +365,10 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
   bucket_by_key.reserve(dynamic_points.size());
 
   for (std::size_t index = 0; index < dynamic_points.size(); ++index) {
-    const auto& code = dynamic_points[index].voxel_code;
-    const ClusterKey key{code.key_x, code.key_y, code.key_z, code.depth};
+    const auto& point = dynamic_points[index];
+    const auto& code = clusterVoxelCode(point);
+    const ClusterKey key{code.key_x, code.key_y, code.key_z, code.depth,
+                         point.use_detector_voxel};
     const auto [it, inserted] = bucket_by_key.emplace(key, buckets.size());
     if (inserted) {
       VoxelBucket bucket;
@@ -369,8 +389,9 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
             [&buckets](const std::size_t lhs, const std::size_t rhs) {
               const auto& a = buckets[lhs].key;
               const auto& b = buckets[rhs].key;
-              // 字典序比较：先比 depth，若相等再比 x，再比 y，最后比 z。
-              return std::tie(a.depth, a.x, a.y, a.z) < std::tie(b.depth, b.x, b.y, b.z);
+              // 字典序比较：先比网格来源，再比 depth、x、y、z。
+              return std::tie(a.detector_grid, a.depth, a.x, a.y, a.z) <
+                     std::tie(b.detector_grid, b.depth, b.x, b.y, b.z);
             });
 
   // 3) 在 UFOMap key 空间做 BFS 连通域，每个连通块对应一个候选目标。
@@ -383,6 +404,7 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
       continue;
     }
 
+    const bool detector_cluster = buckets[start_bucket].key.detector_grid;
     std::vector<std::size_t> cluster_points;
     std::queue<std::size_t> queue;
     queue.push(start_bucket);
@@ -415,7 +437,9 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
     }
 
     // 点数不足的连通块视为噪声。
-    if (cluster_points.size() < config_.min_points) {
+    const std::size_t min_points = detector_cluster
+        ? config_.detector_min_points : config_.min_points;
+    if (cluster_points.size() < min_points) {
       continue;
     }
 

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -48,6 +49,33 @@ struct UfomapMapperConfig {
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};
   int temporal_min_cluster_points{4};
+  // 通道动态候选层。它独立于 UFOMap 的静态占据分辨率和历史证据。
+  bool corridor_dynamic_enabled{false};
+  double corridor_width{1.5};
+  double corridor_wall_clearance{0.1};
+  // 相对传感器的通道纵向 ROI；只在该有限窗口内生成/接管候选。
+  double corridor_roi_min_forward{-0.5};
+  double corridor_roi_max_forward{3.0};
+  double corridor_roi_min_z{0.15};
+  double corridor_roi_max_z{1.5};
+  double corridor_detection_voxel{0.1};
+  int corridor_history_frames{5};
+  int corridor_min_confirm_hits{3};
+  double corridor_min_lateral_speed{0.1};
+  double corridor_min_lateral_span{0.15};
+  double corridor_max_forward_speed{0.8};
+  double corridor_max_vertical_speed{0.8};
+  double corridor_association_gate{0.45};
+  double corridor_track_timeout{0.4};
+  int corridor_min_cluster_points{4};
+  double corridor_max_cluster_extent{0.6};
+  int corridor_max_candidates{1};
+  int corridor_reject_candidate_count{3};
+  int corridor_min_wall_points{12};
+  double corridor_wall_search_forward{2.5};
+  double corridor_wall_filter_alpha{0.2};
+  double corridor_reactivation_displacement{0.04};
+  double corridor_turn_reset_yaw{0.35};
   int insert_hit_depth{0};
   int insert_miss_depth{0};
   int ray_casting_depth{0};
@@ -82,6 +110,31 @@ struct UfomapMapperParams {
   double temporal_search_radius{0.60};
   double temporal_cluster_radius{0.35};
   int temporal_min_cluster_points{4};
+  bool corridor_dynamic_enabled{false};
+  double corridor_width{1.5};
+  double corridor_wall_clearance{0.1};
+  double corridor_roi_min_forward{-0.5};
+  double corridor_roi_max_forward{3.0};
+  double corridor_roi_min_z{0.15};
+  double corridor_roi_max_z{1.5};
+  double corridor_detection_voxel{0.1};
+  int corridor_history_frames{5};
+  int corridor_min_confirm_hits{3};
+  double corridor_min_lateral_speed{0.1};
+  double corridor_min_lateral_span{0.15};
+  double corridor_max_forward_speed{0.8};
+  double corridor_max_vertical_speed{0.8};
+  double corridor_association_gate{0.45};
+  double corridor_track_timeout{0.4};
+  int corridor_min_cluster_points{4};
+  double corridor_max_cluster_extent{0.6};
+  int corridor_max_candidates{1};
+  int corridor_reject_candidate_count{3};
+  int corridor_min_wall_points{12};
+  double corridor_wall_search_forward{2.5};
+  double corridor_wall_filter_alpha{0.2};
+  double corridor_reactivation_displacement{0.04};
+  double corridor_turn_reset_yaw{0.35};
   double resolution{0.2};             // 大于0.0，叶子体素尺寸
   int depth_levels{16};               // [2, 20]，由UFOMAP自身限制范围，八叉树层级规模    
   double min_range{0.5};              // 大于等于0.0，积分和查询的最小范围 
@@ -115,6 +168,9 @@ struct UfomapRuntimeStats {
   double ground_plane_slope_y{0.0};
   bool warmup_ready{false};
   std::size_t temporal_motion_point_count{0};
+  std::size_t corridor_candidate_point_count{0};
+  std::size_t corridor_confirmed_point_count{0};
+  bool corridor_wall_valid{false};
 };
 
 struct UfomapTimingStats {
@@ -140,6 +196,9 @@ struct UfomapDynamicClusterPoint {
   // 原始动态点用于聚类后计算 AABB，避免体素中心放大目标框。
   ufo::Point point{};
   UfomapVoxelCode voxel_code;
+  // 通道候选使用独立 0.1m 检测网格；普通 LDOP 点仍使用 UFOMap key。
+  UfomapVoxelCode detector_voxel_code;
+  bool use_detector_voxel{false};
 };
 
 struct UfomapClassificationResult {
@@ -280,8 +339,49 @@ class UfomapMapper {
       const UfomapPointCloud& points,
       const ufo::Point& sensor_origin) const;
   void updateGroundPlane(const UfomapPointCloud& points, const ufo::Point& sensor_origin);
-  UfomapPointCloud filterGroundPoints(const UfomapPointCloud& points) const;
-  std::vector<std::size_t> detectTemporalMotion(const UfomapPointCloud& points);
+  UfomapPointCloud filterGroundPoints(
+      const UfomapPointCloud& points,
+      std::vector<std::size_t>* retained_source_indices = nullptr) const;
+  std::vector<std::size_t> detectTemporalMotion(
+      const UfomapPointCloud& points,
+      const std::vector<bool>* corridor_handled_indices = nullptr);
+  struct CorridorCandidateResult {
+    std::vector<bool> handled_indices;
+    std::vector<bool> dynamic_indices;
+    // 候选过多时不发布为动态，但也不应立即写入静态地图。
+    std::vector<bool> holdout_indices;
+    std::size_t candidate_point_count{0U};
+    std::size_t confirmed_point_count{0U};
+    bool wall_valid{false};
+  };
+
+  struct CorridorTrackSample {
+    ros::Time stamp;
+    ufo::Point center{};
+  };
+
+  struct CorridorTrack {
+    std::uint32_t id{0U};
+    ufo::Point center{};
+    ufo::Point velocity{};
+    ufo::Point size{0.2F, 0.2F, 0.2F};
+    std::deque<CorridorTrackSample> history;
+    std::size_t hits{0U};
+    std::size_t missed_frames{0U};
+    // 最近窗口内的方向证据；0 表示该帧速度低于阈值。
+    std::deque<int> lateral_direction_history;
+    bool confirmed{false};
+    bool released_static{false};
+    ros::Time last_seen;
+  };
+
+  CorridorCandidateResult detectCorridorCandidates(
+      const UfomapPointCloud& points,
+      const ufo::Point& sensor_origin,
+      const nav_msgs::Odometry& odom_msg,
+      const ros::Time& stamp);
+  void resetCorridorTracks();
+  UfomapVoxelCode makeDetectorVoxelCode(const ufo::Point& point) const;
   void updatePreviousFrameSnapshot(const UfomapPointCloud& points);
   UfomapClassificationResult classifyPoints(const std_msgs::Header& header,
                                             const UfomapPointCloud& points) const;
@@ -303,6 +403,16 @@ class UfomapMapper {
   std::vector<GroundPlaneModel> ground_plane_samples_;
   bool ground_plane_locked_{false};
   std::vector<ufo::Point> previous_frame_points_;
+  std::vector<CorridorTrack> corridor_tracks_;
+  std::uint32_t next_corridor_track_id_{1U};
+  bool corridor_wall_valid_{false};
+  bool corridor_wall_measured_{false};
+  double corridor_left_wall_{-0.75};
+  double corridor_right_wall_{0.75};
+  double corridor_forward_x_{1.0};
+  double corridor_forward_y_{0.0};
+  bool corridor_last_yaw_valid_{false};
+  double corridor_last_yaw_{0.0};
 };
 
 }  // namespace ldopcore

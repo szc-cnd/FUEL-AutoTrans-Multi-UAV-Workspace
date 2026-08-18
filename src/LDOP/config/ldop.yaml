@@ -36,6 +36,34 @@ ufomap_temporal_match_distance: 0.05  # 认为同一点的最大跨帧距离，�
 ufomap_temporal_search_radius: 0.35  # 运动候选搜索上一帧点的最大半径，单位m
 ufomap_temporal_cluster_radius: 0.35  # 跨帧运动候选需要相互支持的空间半径，单位m
 ufomap_temporal_min_cluster_points: 4  # 跨帧运动候选在支持半径内至少需要的点数
+
+# 通道内动态目标专用层：不改变 UFOMap 静态地图的0.2m分辨率。
+# 首次看到的紧凑点簇先进入临时观察状态，确认运动或稳定释放后再决定是否写入地图。
+corridor_dynamic_enabled: true
+corridor_width: 1.5
+corridor_wall_clearance: 0.10  # 墙面采样过滤带；不是把物理通道改窄
+corridor_roi_min_forward: -0.50  # 相对传感器的通道前向起点，单位m
+corridor_roi_max_forward: 3.00   # 只在有限前向窗口内接管/检测点云，单位m
+corridor_roi_min_z: 0.15
+corridor_roi_max_z: 1.50
+corridor_detection_voxel: 0.10  # 动态检测独立网格，与Diff规划分辨率一致
+corridor_history_frames: 5
+corridor_min_confirm_hits: 3
+corridor_min_lateral_speed: 0.10
+corridor_min_lateral_span: 0.15  # 确认前最近窗口内至少累计的横向位移，单位m
+corridor_max_forward_speed: 0.80
+corridor_max_vertical_speed: 0.80
+corridor_association_gate: 0.45
+corridor_track_timeout: 0.40
+corridor_min_cluster_points: 4
+corridor_max_cluster_extent: 0.60
+corridor_max_candidates: 1
+corridor_reject_candidate_count: 3
+corridor_min_wall_points: 12
+corridor_wall_search_forward: 2.5
+corridor_wall_filter_alpha: 0.20
+corridor_reactivation_displacement: 0.04
+corridor_turn_reset_yaw: 0.35
 ufomap_insert_only_valid: false  # 仅对有效射线区段执行插入，即ufomap_max_range范围内点的射线段
 ufomap_insert_hit_depth: 0  # 命中点更新深度，0 表示沿用 UFOMap 默认值
 ufomap_insert_miss_depth: 0  # free / miss （失配）更新深度
@@ -48,7 +76,8 @@ ufomap_num_threads: 8  # 并行积分的线程数，0 表示沿用 UFOMap 默认
 ufomap_propagate: true  # 是否在每帧插入后立即传播修改（更新整个树的结构、节点状态等）
 
 # 当前帧动态点聚类参数
-dynamic_cluster_min_points: 8   #cluster 中原始动态点数量小于该值时丢弃
+dynamic_cluster_min_points: 8   # 通用动态聚类阈值；通道检测器使用独立阈值
+dynamic_cluster_detector_min_points: 4  # 通道检测器的稀疏球点簇阈值
 dynamic_cluster_max_extent: 3.0  #cluster 原始点 AABB 对角线长度大于该值时丢弃，用于过滤大片误分割或粘连结果。
 dynamic_cluster_connectivity: 26  #cluster 连通性，6 18 26
 dynamic_cluster_vertical_merge_max_z_gap: 0.6  # 当前帧上下碎片合并允许的最大竖向空隙，单位 m；用于修复远处目标被竖向切成多个 cluster。
@@ -61,7 +90,7 @@ tracking_max_publish_missed_frames: 8  # 对外最多保留预测目标8帧，�
 tracking_min_hits_to_publish: 3  # 轨迹至少命中3次后才对外发布，抑制固定杆短暂误检
 tracking_motion_min_displacement: 0.04  # 连续匹配中心位移达到该值才计入真实运动证据，单位m
 tracking_motion_min_evidence_frames: 2  # 对外发布前至少需要的真实运动证据帧数
-tracking_motion_confirmation_speed: 0.12  # 滤波速度达到该值后锁定为动态轨迹，单位m/s
+tracking_motion_confirmation_speed: 0.10  # 滤波速度达到该值后锁定为动态轨迹，单位m/s
 tracking_association_gate_confidence: 0.7  # 马氏距离卡方门限置信度（3 自由度）
 tracking_coasting_gate_relax_factor: 1.5  # 漏检轨迹重关联时的门限放宽倍数
 tracking_box_size_smoothing_alpha: 0.5  # 目标尺寸指数平滑系数
