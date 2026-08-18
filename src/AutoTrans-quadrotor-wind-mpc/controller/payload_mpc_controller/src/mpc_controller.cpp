@@ -93,10 +93,15 @@ namespace PayloadMPC
         control_inputs = hover_input_.leftCols(kSamples);
         ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 输出含非有限值，切换到悬停安全输入。");
       }
-      else if (mpc_failure_active_)
+      else
       {
-        ROS_INFO("[OUTPUT] NMPC 恢复正常。");
-        mpc_failure_active_ = false;
+        last_valid_control_input_ = control_inputs.col(0);
+        last_valid_control_time_ = ros::Time::now();
+        if (mpc_failure_active_)
+        {
+          ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+          mpc_failure_active_ = false;
+        }
       }
     }
 
@@ -168,17 +173,33 @@ namespace PayloadMPC
     const bool reference_ok = mpc_wrapper_.setTrajectory(reference_states_, reference_inputs_);
 
     solve_from_scratch_ = false;
-    last_mpc_solve_success_ = limits_ok && reference_ok;
+    // 重置只完成求解器准备，不代表本周期已经得到有效 MPC 解。
+    last_mpc_solve_success_ = false;
     mpc_failure_active_ = false;
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);
     ROS_WARN("[NMPC恢复] 已基于当前状态完整重置 ACADO 求解器。");
-    return last_mpc_solve_success_;
+    return limits_ok && reference_ok;
   }
 
   void MpcController::waitForPreparation()
   {
     if (preparation_thread_.joinable())
       preparation_thread_.join();
+  }
+
+  bool MpcController::hasRecentValidControl(const ros::Time &now, double max_age) const
+  {
+    if (max_age < 0.0 || last_valid_control_time_.isZero() ||
+        !last_valid_control_input_.allFinite())
+      return false;
+    const double age = (now - last_valid_control_time_).toSec();
+    return age >= 0.0 && age <= max_age;
+  }
+
+  void MpcController::clearLastValidControl()
+  {
+    last_valid_control_time_ = ros::Time(0);
+    last_valid_control_input_.setZero();
   }
   // drone pos
   void MpcController::setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw)

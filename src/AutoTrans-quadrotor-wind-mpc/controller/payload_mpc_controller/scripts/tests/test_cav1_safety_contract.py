@@ -89,12 +89,33 @@ def test_trajectory_order_uses_stamp_and_id_is_diagnostic_only():
     assert "trajectory_id 重新计数" in input_cpp
 
 
-def test_recovery_timeout_stops_planner_and_requests_px4_land():
+def test_recovery_timeout_keeps_retrying_without_px4_land():
     fsm = (SRC / "mpc_fsm.cpp").read_text(encoding="utf-8")
     node = (SRC / "mpc_controller_node.cpp").read_text(encoding="utf-8")
     assert "planning_stop_pub_.publish(stop_msg);" in fsm
     assert "request_px4_auto_land();" in fsm
+    assert 'beginDirectAutoLand(now_time, "AUTO_LAND 状态下 NMPC 求解失败")' not in fsm
+    assert "beginMpcRecovery(now_time);" in fsm
+    assert 'beginDirectAutoLand(now, "NMPC 安全恢复超时")' not in fsm
+    assert "不因求解失败自动降落" in fsm
+    assert "controller_.lastMpcSolveSuccessful() && (low_enough || timeout)" in fsm
+    recovery = fsm.split("void MPCFSM::processMpcRecovery", 1)[1]
+    recovery = recovery.split("void MPCFSM::beginDirectAutoLand", 1)[0]
+    timeout_handling = recovery.split("const double elapsed", 1)[1]
+    assert "beginDirectAutoLand" not in timeout_handling
+    assert "elapsed <= params_.safety_.mpc_recovery_timeout" not in recovery
     assert 'advertise<std_msgs::Empty>("/planning_stop_trigger"' in node
+
+
+def test_short_mpc_hold_uses_only_recent_valid_solver_output():
+    header = (INCLUDE / "mpc_controller.h").read_text(encoding="utf-8")
+    controller = (SRC / "mpc_controller.cpp").read_text(encoding="utf-8")
+    fsm = (SRC / "mpc_fsm.cpp").read_text(encoding="utf-8")
+    assert "hasRecentValidControl" in header
+    assert "last_valid_control_time_ = ros::Time::now();" in controller
+    assert "kLastValidMpcHoldSeconds = 0.2" in fsm
+    assert "controller_.lastValidControlInput()" in fsm
+    assert "controller_.clearLastValidControl();" in fsm
 
 
 def test_dynamic_yaw_is_continuous_across_replans_and_advances_once_per_cycle():

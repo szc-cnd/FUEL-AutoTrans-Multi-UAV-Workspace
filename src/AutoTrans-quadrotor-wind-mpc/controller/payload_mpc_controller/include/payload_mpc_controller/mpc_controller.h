@@ -77,6 +77,12 @@ namespace PayloadMPC
     void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
       {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
     bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
+    bool hasRecentValidControl(const ros::Time &now, double max_age) const;
+    const Eigen::Matrix<real_t, kInputSize, 1> &lastValidControlInput() const
+    {
+      return last_valid_control_input_;
+    }
+    void clearLastValidControl();
     // Join the asynchronous preparation step and rebuild the complete ACADO
     // workspace around the measured state and a fixed hover reference.
     bool resetForHover(
@@ -147,6 +153,10 @@ namespace PayloadMPC
     bool last_mpc_solve_success_{true};
     // 仅用于记录一次“求解失败 -> 有效输出恢复”的诊断边沿，不参与 NMPC 控制计算。
     bool mpc_failure_active_{false};
+    // 仅缓存最近一次通过有限值检查的 MPC 首个控制输入，用于短时故障保持。
+    Eigen::Matrix<real_t, kInputSize, 1> last_valid_control_input_{
+        Eigen::Matrix<real_t, kInputSize, 1>::Zero()};
+    ros::Time last_valid_control_time_{0};
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;

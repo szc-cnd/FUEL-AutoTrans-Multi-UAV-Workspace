@@ -151,7 +151,7 @@ namespace PayloadMPC
 
 		struct Safety
 		{
-			// NMPC 首次失败后允许固定点恢复求解的最长时间，单位 s。
+			// NMPC 首次失败后允许固定点恢复求解的告警阈值，单位 s；超时继续重试，不自动降落。
 			double mpc_recovery_timeout{0.5};
 			// 获得该次数的完整成功求解后，才请求规划器从里程计重新规划。
 			int mpc_recovery_success_cycles{1};

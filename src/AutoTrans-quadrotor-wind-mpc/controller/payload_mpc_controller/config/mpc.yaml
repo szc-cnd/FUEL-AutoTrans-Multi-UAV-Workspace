@@ -168,11 +168,11 @@ land:
     timeout: 8.0
 
 safety:
-    # NMPC 首次失败后，在锁存位置尝试恢复求解的最长时间，单位 s。
+    # NMPC 首次失败后，在锁存位置尝试恢复求解的告警阈值，单位 s；超时继续重试，不自动降落。
     mpc_recovery_timeout: 1.0
     # 一次完整成功且输出有限的求解后，请求 Diff 从最新里程计重新规划。
     mpc_recovery_success_cycles: 1
-    # 恢复超时后请求 PX4 AUTO.LAND 的重试周期，单位 s。
+    # 人工或正常降落流程请求 PX4 AUTO.LAND 时的服务重试周期，单位 s。
     auto_land_retry_period: 1.0
 
 thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化推力。

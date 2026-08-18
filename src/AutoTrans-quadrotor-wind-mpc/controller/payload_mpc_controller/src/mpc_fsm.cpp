@@ -12,6 +12,9 @@ using namespace uav_utils;
 namespace PayloadMPC
 {
 
+	// MPC 短时失败时最多重复最近一次有效控制输入的时间，单位 s。
+	constexpr double kLastValidMpcHoldSeconds = 0.2;
+
 	MPCFSM::MPCFSM(const ros::NodeHandle &nh, MpcParams &params, MpcController &controller) : nh_(nh),
 																							  params_(params),
 																							  controller_(controller)
@@ -481,7 +484,7 @@ namespace PayloadMPC
 									odom_data.p(2) <= params_.land_.switch_odom_z;
 			const bool timeout = params_.land_.timeout > 0.0 &&
 								 (now_time - land_start_time_).toSec() > params_.land_.timeout;
-			if (low_enough || timeout)
+			if (controller_.lastMpcSolveSuccessful() && (low_enough || timeout))
 			{
 				const bool retry_allowed = !auto_land_request_sent_ ||
 					last_auto_land_request_time_.isZero() ||
@@ -505,13 +508,15 @@ namespace PayloadMPC
 			fsm_state == AUTO_TAKEOFF || fsm_state == AUTO_LAND)
 		{
 			if (!mpc_result_handled && !controller_.lastMpcSolveSuccessful())
-			{
-				if (fsm_state == AUTO_LAND)
-					beginDirectAutoLand(now_time, "AUTO_LAND 状态下 NMPC 求解失败");
-				else
-					beginMpcRecovery(now_time);
-			}
-			publish_bodyrate_ctrl(mpc_predicted_inputs_.col(0), now_time);
+				beginMpcRecovery(now_time);
+
+			const bool use_last_valid_mpc = !direct_auto_land_active_ &&
+				!controller_.lastMpcSolveSuccessful() &&
+				controller_.hasRecentValidControl(now_time, kLastValidMpcHoldSeconds);
+			if (use_last_valid_mpc)
+				publish_bodyrate_ctrl(controller_.lastValidControlInput(), now_time);
+			else
+				publish_bodyrate_ctrl(mpc_predicted_inputs_.col(0), now_time);
 			if (!direct_auto_land_active_)
 				publishPrediction(controller_.reference_states_, mpc_predicted_states_, now_time, controller_.getTimeStep());
 		}
@@ -959,6 +964,7 @@ namespace PayloadMPC
 		last_auto_land_request_time_ = ros::Time(0);
 		clearForceObserverState();
 		controller_.clearThrustCommandHistory();
+		controller_.clearLastValidControl();
 	}
 
 	void MPCFSM::beginMpcRecovery(const ros::Time &now)
@@ -968,7 +974,7 @@ namespace PayloadMPC
 
 		if (!odom_state_valid() || !est_state_.allFinite())
 		{
-			beginDirectAutoLand(now, "NMPC 求解失败且无法锁存有效里程计位置");
+			enter_odom_failsafe("NMPC 求解失败且无法锁存有效里程计位置");
 			return;
 		}
 
@@ -991,8 +997,7 @@ namespace PayloadMPC
 
 		if (!controller_.resetForHover(est_state_, hover_pose_, hover_yaw_))
 		{
-			mpc_recovery_active_ = false;
-			beginDirectAutoLand(now, "NMPC 求解器完整重置失败");
+			ROS_ERROR_THROTTLE(5.0, "[安全] NMPC 求解器重置未完成，继续锁存悬停位置并重试。");
 			return;
 		}
 
@@ -1019,7 +1024,7 @@ namespace PayloadMPC
 
 		const double elapsed = std::max((now - mpc_recovery_start_time_).toSec(), 0.0);
 		if (mpc_recovery_success_count_ >= params_.safety_.mpc_recovery_success_cycles &&
-			elapsed <= params_.safety_.mpc_recovery_timeout)
+			 controller_.lastMpcSolveSuccessful())
 		{
 			mpc_recovery_active_ = false;
 			exec_traj_state_ = HOVER;
@@ -1034,7 +1039,9 @@ namespace PayloadMPC
 
 		if (elapsed >= params_.safety_.mpc_recovery_timeout)
 		{
-			beginDirectAutoLand(now, "NMPC 安全恢复超时");
+			ROS_WARN_THROTTLE(5.0,
+				"[安全] NMPC 恢复已超过 %.2f s，继续锁存悬停并后台重试，不因求解失败自动降落。",
+				params_.safety_.mpc_recovery_timeout);
 		}
 	}
 
