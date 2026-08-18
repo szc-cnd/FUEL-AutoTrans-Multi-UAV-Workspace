@@ -13,6 +13,9 @@
     <arg name="enable_occupied_recovery" default="true"/>
     <arg name="enable_swing_obstacle_guard" default="true"/>
     <arg name="enable_swing_harmonic_prediction" default="true"/>
+    <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
+    <arg name="record_dynamic_debug" default="true"/>
+    <arg name="dynamic_bag_prefix" default="/home/oem/bags/corridor_debug"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
@@ -173,5 +176,24 @@
         <remap from="/diff_planner_node/a_star_list"
                to="/drone_$(arg drone_id)_diff_planner_node/a_star_list"/>
     </node>
+
+    <!--
+      只录动态障碍诊断所需话题，-o 会自动追加时间戳，避免覆盖旧包。
+      roslaunch 退出时向该进程发送 SIGINT，保证生成完整 .bag 而非 .bag.active。
+    -->
+    <node if="$(arg record_dynamic_debug)" pkg="rosbag" type="record"
+          name="corridor_dynamic_debug_bag" output="log"
+          args="record -o $(arg dynamic_bag_prefix) --buffsize=1024
+                $(arg cloud_topic)
+                $(arg odom_topic)
+                /UAV1/ldop/dynamic_cloud
+                /UAV1/ldop/dynamic_objects
+                /UAV1/ldop/dynamic_object_predictions
+                /UAV1/corridor_dynamic_objects
+                /UAV1/corridor_dynamic_markers
+                /mavros/local_position/odom
+                /tf
+                /tf_static
+                /rosout"/>
 
 </launch>
