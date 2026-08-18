@@ -69,6 +69,28 @@ std::vector<double> eigenMatrixToRowMajorStdVector(const Eigen::MatrixXd& matrix
   return values;
 }
 
+// realtime-only 目标仍输出一条只含 t=0 的观测分支：这样 prediction 数组与
+// tracker 输入保持一一对应，同时明确不会把当前点外推到未来时刻。
+ldop::DynamicObjectPredictionBranch makeCurrentObservationBranch(
+    const TrackPredictionInput& input) {
+  ldop::DynamicObjectPredictionBranch branch;
+  branch.behavior_type = ldop::DynamicObjectPredictionBranch::BEHAVIOR_LONGITUDINAL;
+  branch.behavior_value = 0.0;
+  branch.probability = 1.0;
+
+  if (input.model_state.size() < 3) {
+    return branch;
+  }
+
+  ldop::DynamicObjectPredictionPoint point;
+  point.time_from_start = ros::Duration(0.0);
+  point.model_state = eigenVectorToStdVector(input.model_state);
+  point.model_covariance = eigenMatrixToRowMajorStdVector(input.model_covariance);
+  point.influence_weight = 1.0;
+  branch.points.push_back(std::move(point));
+  return branch;
+}
+
 // P4 只比较位置子空间，避免把不同运动模型的速度/加速度维度误当成统一观测。
 std::optional<Eigen::Matrix3d> positionCovarianceFromPoint(
     const ldop::DynamicObjectPredictionPoint& point) {
@@ -1111,6 +1133,11 @@ void applyInteractionResult(const PredictionInteractionResult& interaction_resul
     const auto& interactions =
         interaction_result.interactions_by_prediction[prediction_index];
     const auto& rollout_context = rollout_contexts[prediction_index];
+    // realtime-only 目标故意没有 modes；保留其 t=0 观测分支原样，避免交互
+    // 重标定再次把它变成隐式未来预测。
+    if (rollout_context.modes.empty()) {
+      continue;
+    }
     const std::size_t branch_count =
         std::min({prediction.branches.size(),
                   interactions.size(),
@@ -1453,6 +1480,15 @@ DynamicObjectPredictorFrameResult DynamicObjectPredictor::predict(
     prediction.motion_model_type = toRosMotionModelType(input.motion_model_type);
     prediction.matched_in_current_frame = input.matched_in_current_frame;
 
+    if (input.corridor_realtime_only) {
+      prediction.branches.push_back(makeCurrentObservationBranch(input));
+      result.predictions_msg.predictions.push_back(std::move(prediction));
+      // 保持 rollout_contexts 与 predictions_msg.predictions 的索引严格对齐。
+      rollout_contexts.push_back(BranchRolloutContext{});
+      ++result.realtime_only_object_count;
+      continue;
+    }
+
     // 通道往复模型只有在运动、端点周期和两侧墙均有证据时才覆盖通用 GMM。
     BranchRolloutContext rollout_context;
     rollout_context.input = &input;
@@ -1532,6 +1568,8 @@ DynamicObjectPredictorFrameResult DynamicObjectPredictor::predict(
                                        << result.predictions_msg.predictions.size()
                                        << ", corridorOscillationObjects="
                                        << result.corridor_oscillation_object_count
+                                       << ", realtimeOnlyObjects="
+                                       << result.realtime_only_object_count
                                        << ", feedbackUpdatedBranches="
                                        << feedback.feedback_updated_branch_count
                                        << ", feedbackMaxNis=" << feedback.max_nis
@@ -1774,6 +1812,11 @@ DynamicObjectPredictor::buildFeedbackHints(
   bool has_process_noise_scale = false;
 
   for (const auto& input : inputs) {
+    if (input.corridor_realtime_only) {
+      // 实时通道目标没有未来分支，不能用 t=0 观测去反向校准不存在的 rollout。
+      ++diagnostics.feedback_skipped_object_count;
+      continue;
+    }
     const auto state_iter = feedback_states_.find(input.id);
     if (state_iter == feedback_states_.end()) {
       continue;

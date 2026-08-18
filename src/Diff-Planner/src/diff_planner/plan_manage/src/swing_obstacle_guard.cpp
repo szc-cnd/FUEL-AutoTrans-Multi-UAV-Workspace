@@ -215,8 +215,21 @@ void SwingObstacleGuard::update(
 
   for (auto it = tracks_.begin(); it != tracks_.end();)
   {
-    if (observation_time - it->second.observation_time >
-        config_.observation_retention)
+    bool remove = observation_time - it->second.observation_time >
+                  config_.observation_retention;
+    if (config_.realtime_observation_only)
+    {
+      // LDOP tracker already owns the three-frame coast window.  An empty
+      // realtime message therefore means this ID is absent now; keeping a
+      // second guard-side cache would silently extend the coast period.
+      const bool seen_in_frame = std::any_of(
+          observations.begin(), observations.end(),
+          [&](const SwingObstacleObservation &observation) {
+            return observation.id == it->first;
+          });
+      remove = !seen_in_frame;
+    }
+    if (remove)
       it = tracks_.erase(it);
     else
       ++it;
@@ -351,14 +364,18 @@ bool SwingObstacleGuard::findCollision(
         continue;
 
       const double prediction_time = age + sample.time_from_now;
+      // realtime_observation_only 是显式的安全语义：关闭简谐预测不能再
+      // 回退到 reflectedCoordinate，否则静止/未知候选仍会被人为推向另一侧。
       const double predicted_lateral =
-          use_harmonic_prediction
-              ? harmonicCoordinate(lateral_coordinate, lateral_velocity,
-                                   prediction_time, harmonic_estimate.center,
-                                   harmonic_estimate.amplitude,
-                                   harmonic_estimate.half_period)
-              : reflectedCoordinate(lateral_coordinate, lateral_velocity,
-                                    prediction_time, half_width);
+          config_.realtime_observation_only
+              ? lateral_coordinate
+              : (use_harmonic_prediction
+                     ? harmonicCoordinate(lateral_coordinate, lateral_velocity,
+                                          prediction_time, harmonic_estimate.center,
+                                          harmonic_estimate.amplitude,
+                                          harmonic_estimate.half_period)
+                     : reflectedCoordinate(lateral_coordinate, lateral_velocity,
+                                           prediction_time, half_width));
       const Eigen::Vector3d predicted_position =
           origin + forward * longitudinal_coordinate + lateral * predicted_lateral +
           Eigen::Vector3d(0.0, 0.0, track.observation.position.z() - origin.z());

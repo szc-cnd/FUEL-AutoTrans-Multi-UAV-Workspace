@@ -108,17 +108,6 @@ double pointDistanceSquared(const ufo::Point& lhs, const ufo::Point& rhs) {
   return dx * dx + dy * dy + dz * dz;
 }
 
-ufo::Point pointPlusScaled(const ufo::Point& point,
-                           const ufo::Point& velocity,
-                           const double scale) {
-  return ufo::Point(static_cast<float>(static_cast<double>(point.x) +
-                                       static_cast<double>(velocity.x) * scale),
-                    static_cast<float>(static_cast<double>(point.y) +
-                                       static_cast<double>(velocity.y) * scale),
-                    static_cast<float>(static_cast<double>(point.z) +
-                                       static_cast<double>(velocity.z) * scale));
-}
-
 double dotHorizontal(const ufo::Point& point, const double axis_x, const double axis_y) {
   return static_cast<double>(point.x) * axis_x + static_cast<double>(point.y) * axis_y;
 }
@@ -355,8 +344,18 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.corridor_history_frames = std::max(2, params.corridor_history_frames);
   config.corridor_min_confirm_hits = std::clamp(
       params.corridor_min_confirm_hits, 2, config.corridor_history_frames);
+  config.corridor_min_publish_hits = std::clamp(
+      params.corridor_min_publish_hits, 1, config.corridor_history_frames);
   config.corridor_min_lateral_speed = std::max(0.0, params.corridor_min_lateral_speed);
   config.corridor_min_lateral_span = std::max(0.0, params.corridor_min_lateral_span);
+  config.corridor_publish_unknown_as_dynamic = params.corridor_publish_unknown_as_dynamic;
+  config.corridor_static_confirm_frames = std::clamp(
+      params.corridor_static_confirm_frames, 2, config.corridor_history_frames);
+  config.corridor_static_lateral_speed = std::max(
+      0.0, params.corridor_static_lateral_speed);
+  config.corridor_forward_alignment_cos = std::clamp(
+      params.corridor_forward_alignment_cos, 0.0, 1.0);
+  config.corridor_max_missed_frames = std::max(0, params.corridor_max_missed_frames);
   config.corridor_max_forward_speed = std::max(0.0, params.corridor_max_forward_speed);
   config.corridor_max_vertical_speed = std::max(0.0, params.corridor_max_vertical_speed);
   config.corridor_association_gate = params.corridor_association_gate > 0.0
@@ -553,10 +552,23 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_history_frames);
   pnh_.param("corridor_min_confirm_hits", params_.corridor_min_confirm_hits,
              defaults.corridor_min_confirm_hits);
+  pnh_.param("corridor_min_publish_hits", params_.corridor_min_publish_hits,
+             defaults.corridor_min_publish_hits);
   pnh_.param("corridor_min_lateral_speed", params_.corridor_min_lateral_speed,
              defaults.corridor_min_lateral_speed);
   pnh_.param("corridor_min_lateral_span", params_.corridor_min_lateral_span,
              defaults.corridor_min_lateral_span);
+  pnh_.param("corridor_publish_unknown_as_dynamic",
+             params_.corridor_publish_unknown_as_dynamic,
+             defaults.corridor_publish_unknown_as_dynamic);
+  pnh_.param("corridor_static_confirm_frames", params_.corridor_static_confirm_frames,
+             defaults.corridor_static_confirm_frames);
+  pnh_.param("corridor_static_lateral_speed", params_.corridor_static_lateral_speed,
+             defaults.corridor_static_lateral_speed);
+  pnh_.param("corridor_forward_alignment_cos", params_.corridor_forward_alignment_cos,
+             defaults.corridor_forward_alignment_cos);
+  pnh_.param("corridor_max_missed_frames", params_.corridor_max_missed_frames,
+             defaults.corridor_max_missed_frames);
   pnh_.param("corridor_max_forward_speed", params_.corridor_max_forward_speed,
              defaults.corridor_max_forward_speed);
   pnh_.param("corridor_max_vertical_speed", params_.corridor_max_vertical_speed,
@@ -1119,6 +1131,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
   CorridorCandidateResult result;
   result.handled_indices.assign(points.size(), false);
   result.dynamic_indices.assign(points.size(), false);
+  result.provisional_indices.assign(points.size(), false);
   result.holdout_indices.assign(points.size(), false);
   if (!config_.corridor_dynamic_enabled || points.empty()) {
     return result;
@@ -1138,12 +1151,22 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
   if (corridor_last_yaw_valid_ && config_.corridor_turn_reset_yaw > 0.0 &&
       std::abs(wrappedAngleDifference(yaw, corridor_last_yaw_)) >=
           config_.corridor_turn_reset_yaw) {
-    // 转弯后的新视野不应继续拿转弯前的点级历史做关联；已经确认的 ID
-    // 保留给 tracker，未确认候选重新从当前帧建立。
-    corridor_tracks_.erase(
-        std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
-                       [](const CorridorTrack& track) { return !track.confirmed; }),
-        corridor_tracks_.end());
+    // 转弯后只清除依赖旧横向轴的速度/方向证据，保留世界坐标中心和
+    // released_static 状态。这样墙面采样不会因转弯重新生成一串 provisional ID，
+    // 同时真正新出现的球仍会从当前帧建立新轨迹。
+    for (auto& track : corridor_tracks_) {
+      track.velocity = ufo::Point(0.0F, 0.0F, 0.0F);
+      track.history.clear();
+      track.history.push_back({stamp, track.center});
+      track.lateral_direction_history.clear();
+      track.static_evidence_frames = 0U;
+      track.lateral_evidence_frames = 0U;
+      track.reactivation_evidence_frames = 0U;
+      if (!track.released_static) {
+        track.confirmed = false;
+      }
+      track.missed_frames = 0U;
+    }
     corridor_left_wall_ = -0.5 * config_.corridor_width;
     corridor_right_wall_ = 0.5 * config_.corridor_width;
     corridor_wall_valid_ = true;
@@ -1184,8 +1207,11 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     const double measured_right = medianValue(std::move(right_wall_samples));
     const double measured_width = measured_right - measured_left;
     if (std::isfinite(measured_left) && std::isfinite(measured_right) &&
-        measured_width >= 0.7 * config_.corridor_width &&
-        measured_width <= 1.6 * config_.corridor_width) {
+        // 已知通道宽度约为1.5m；过宽的“左右边界”通常是背景点/人或球
+        // 被误当成一侧墙。拒绝这类测量并继续使用上一帧/名义墙模型，避免
+        // 把真正的内部球排到 ROI 外。
+        measured_width >= 0.85 * config_.corridor_width &&
+        measured_width <= 1.15 * config_.corridor_width) {
       const double alpha = corridor_wall_measured_ ? config_.corridor_wall_filter_alpha : 1.0;
       corridor_left_wall_ = alpha * measured_left + (1.0 - alpha) * corridor_left_wall_;
       corridor_right_wall_ = alpha * measured_right + (1.0 - alpha) * corridor_right_wall_;
@@ -1203,8 +1229,10 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     corridor_tracks_.erase(
         std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                        [&](const CorridorTrack& track) {
-                         return (stamp - track.last_seen).toSec() >
-                                config_.corridor_track_timeout;
+                         return track.missed_frames > static_cast<std::size_t>(
+                                    config_.corridor_max_missed_frames) ||
+                                (stamp - track.last_seen).toSec() >
+                                    config_.corridor_track_timeout;
                        }),
         corridor_tracks_.end());
     return result;
@@ -1233,76 +1261,13 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         lateral >= corridor_right_wall_ - config_.corridor_wall_clearance) {
       continue;
     }
+    // 即使本帧只有少量回波、尚未达到聚类点数，也先隔离出静态积分。
+    // 下一帧点数恢复后仍可建立同一候选，避免首见稀疏球点先污染历史占据。
+    result.holdout_indices[index] = true;
     candidate_buckets[makeTemporalGridKey(point, detection_voxel)].push_back(index);
   }
 
   std::size_t published_track_count = 0U;
-  const auto markConfirmedTrackPrediction = [&](const CorridorTrack& track) {
-    if (!track.confirmed || track.released_static) {
-      return;
-    }
-    if (published_track_count >= static_cast<std::size_t>(config_.corridor_max_candidates)) {
-      return;
-    }
-    const double track_age = (stamp - track.last_seen).toSec();
-    if (!std::isfinite(track_age) || track_age < 0.0 ||
-        track_age > config_.corridor_track_timeout) {
-      return;
-    }
-
-    ufo::Point predicted = pointPlusScaled(
-        track.center, track.velocity,
-        std::clamp(track_age, 0.0, config_.corridor_track_timeout));
-    const double predicted_dx = static_cast<double>(predicted.x) - sensor_origin.x;
-    const double predicted_dy = static_cast<double>(predicted.y) - sensor_origin.y;
-    const double predicted_forward = predicted_dx * corridor_forward_x_ +
-                                     predicted_dy * corridor_forward_y_;
-    double predicted_lateral = predicted_dx * lateral_x + predicted_dy * lateral_y;
-    if (predicted_forward < config_.corridor_roi_min_forward ||
-        predicted_forward > config_.corridor_roi_max_forward ||
-        predicted.z < config_.corridor_roi_min_z ||
-        predicted.z > config_.corridor_roi_max_z) {
-      return;
-    }
-
-    // CV 在摆动端点会短时指向墙外；将保活中心限制在通道内部，避免轨迹因
-    // 一两帧遮挡立即消失，也不会把墙面本身标成动态点。
-    const double minimum_lateral = corridor_left_wall_ + config_.corridor_wall_clearance;
-    const double maximum_lateral = corridor_right_wall_ - config_.corridor_wall_clearance;
-    const double clamped_lateral = std::clamp(
-        predicted_lateral, minimum_lateral, maximum_lateral);
-    predicted.x += static_cast<float>((clamped_lateral - predicted_lateral) * lateral_x);
-    predicted.y += static_cast<float>((clamped_lateral - predicted_lateral) * lateral_y);
-
-    const double half_diagonal = 0.5 * std::hypot(
-        std::hypot(static_cast<double>(track.size.x), static_cast<double>(track.size.y)),
-        static_cast<double>(track.size.z));
-    const double mask_radius = std::min(
-        config_.corridor_association_gate,
-        std::max(2.0 * detection_voxel, half_diagonal + detection_voxel));
-    const double mask_radius_sq = mask_radius * mask_radius;
-    bool published = false;
-    for (std::size_t index = 0U; index < points.size(); ++index) {
-      if (!result.handled_indices[index] || result.dynamic_indices[index]) {
-        continue;
-      }
-      const auto& point = points[index];
-      const double dx = static_cast<double>(point.x) - sensor_origin.x;
-      const double dy = static_cast<double>(point.y) - sensor_origin.y;
-      const double lateral = dx * lateral_x + dy * lateral_y;
-      if (lateral <= minimum_lateral || lateral >= maximum_lateral ||
-          pointDistanceSquared(point, predicted) > mask_radius_sq) {
-        continue;
-      }
-      result.dynamic_indices[index] = true;
-      published = true;
-      ++result.candidate_point_count;
-      ++result.confirmed_point_count;
-    }
-    if (published) {
-      ++published_track_count;
-    }
-  };
 
   struct CorridorCluster {
     std::vector<std::size_t> indices;
@@ -1351,7 +1316,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       }
     }
 
-    if (cluster.indices.size() < static_cast<std::size_t>(config_.corridor_min_cluster_points)) {
+    // 低回波簇也进入短时状态机；发布门槛仍在下面单独判断。这样首见
+    // 只有少量点的球不会既不发布又不写入地图。
+    if (cluster.indices.size() < 2U) {
       continue;
     }
     double min_x = std::numeric_limits<double>::infinity();
@@ -1390,64 +1357,85 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     clusters.push_back(std::move(cluster));
   }
 
-  std::sort(clusters.begin(), clusters.end(), [](const CorridorCluster& lhs,
-                                                 const CorridorCluster& rhs) {
+  const auto nearestTrackDistance = [&](const CorridorCluster& cluster) {
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const auto& track : corridor_tracks_) {
+      if (track.released_static) {
+        continue;
+      }
+      nearest = std::min(nearest,
+                         std::sqrt(pointDistanceSquared(track.center, cluster.center)));
+    }
+    return nearest;
+  };
+  std::stable_sort(clusters.begin(), clusters.end(), [&](const CorridorCluster& lhs,
+                                                         const CorridorCluster& rhs) {
+    const bool lhs_matches_history =
+        nearestTrackDistance(lhs) <= config_.corridor_association_gate;
+    const bool rhs_matches_history =
+        nearestTrackDistance(rhs) <= config_.corridor_association_gate;
+    if (lhs_matches_history != rhs_matches_history) {
+      return lhs_matches_history;
+    }
     return lhs.indices.size() > rhs.indices.size();
   });
 
   const auto ageTracks = [&]() {
     for (auto& track : corridor_tracks_) {
-      markConfirmedTrackPrediction(track);
       ++track.missed_frames;
     }
     corridor_tracks_.erase(
         std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                        [&](const CorridorTrack& track) {
-                         return (stamp - track.last_seen).toSec() >
-                                config_.corridor_track_timeout;
+                         return track.missed_frames > static_cast<std::size_t>(
+                                    config_.corridor_max_missed_frames) ||
+                                (stamp - track.last_seen).toSec() >
+                                    config_.corridor_track_timeout;
                        }),
         corridor_tracks_.end());
   };
 
-  if (clusters.empty() ||
-      clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
-    if (clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
-      // 候选爆炸时不把任何紧凑簇发布给下游，也不让它们在这一帧污染静态图。
-      // 已确认轨迹仍由 ageTracks() 通过受限 CV 预测保活。
-      for (const auto& cluster : clusters) {
-        for (const std::size_t index : cluster.indices) {
-          result.holdout_indices[index] = true;
-        }
-      }
+  // 所有紧凑未知簇先从静态积分中隔离。候选很多时不再“全部拒绝”，而是
+  // 优先处理能续上已有轨迹的簇，再处理点数较多的簇；其余簇保持 holdout。
+  for (const auto& cluster : clusters) {
+    for (const std::size_t index : cluster.indices) {
+      result.holdout_indices[index] = true;
     }
+  }
+  if (clusters.empty()) {
     ageTracks();
-    if (clusters.size() > static_cast<std::size_t>(config_.corridor_reject_candidate_count)) {
-      ROS_WARN_STREAM_THROTTLE(
-          1.0, "Corridor dynamic candidates rejected: count=" << clusters.size()
-                                                               << ", limit="
-                                                               << config_.corridor_reject_candidate_count);
-    }
     return result;
+  }
+  const std::size_t process_limit = static_cast<std::size_t>(
+      std::max(config_.corridor_max_candidates,
+               config_.corridor_reject_candidate_count));
+  if (clusters.size() > process_limit) {
+    ROS_WARN_STREAM_THROTTLE(
+        1.0, "Corridor dynamic candidates limited: count=" << clusters.size()
+                                                             << ", processed="
+                                                             << process_limit);
+    clusters.resize(process_limit);
   }
   std::vector<bool> matched_tracks(corridor_tracks_.size(), false);
   for (const auto& cluster : clusters) {
     // 每个紧凑候选在完成运动确认前都暂缓写入 UFOMap。只有 released_static
     // 的稳定内部簇会在下面清除 holdout；这样候选排序/截断不会把真正的球
     // 静默地写死成静态占据。
-    for (const std::size_t index : cluster.indices) {
-      result.holdout_indices[index] = true;
-    }
     int best_track = -1;
-    double best_distance = config_.corridor_association_gate;
+    double best_distance = std::numeric_limits<double>::infinity();
     for (std::size_t track_index = 0U; track_index < corridor_tracks_.size(); ++track_index) {
       if (matched_tracks[track_index]) {
         continue;
       }
       const auto& track = corridor_tracks_[track_index];
-      const double dt = std::clamp((stamp - track.last_seen).toSec(), 0.0, 0.5);
-      const ufo::Point predicted = pointPlusScaled(track.center, track.velocity, dt);
-      const double distance = std::sqrt(pointDistanceSquared(predicted, cluster.center));
-      if (distance < best_distance) {
+      const double relaxed_gate = config_.corridor_association_gate *
+          (1.0 + 0.20 * static_cast<double>(std::min<std::size_t>(
+              track.missed_frames,
+              static_cast<std::size_t>(config_.corridor_max_missed_frames))));
+      // 关联只比较最后一次真实中心。短时漏检通过放宽 gate 保持同一 ID，
+      // 不再使用速度外推猜测下一帧位置。
+      const double distance = std::sqrt(pointDistanceSquared(track.center, cluster.center));
+      if (distance <= relaxed_gate && distance < best_distance) {
         best_distance = distance;
         best_track = static_cast<int>(track_index);
       }
@@ -1460,6 +1448,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       new_track.center = cluster.center;
       new_track.size = cluster.size;
       new_track.hits = 1U;
+      new_track.static_evidence_frames = 0U;
       new_track.last_seen = stamp;
       new_track.history.push_back({stamp, cluster.center});
       corridor_tracks_.push_back(std::move(new_track));
@@ -1473,10 +1462,22 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       track->size = cluster.size;
       track->missed_frames = 0U;
       track->last_seen = stamp;
-      const double displacement = std::sqrt(
-          pointDistanceSquared(previous_center, cluster.center));
-      const bool reactivating = track->released_static &&
-          displacement >= config_.corridor_reactivation_displacement;
+      const ufo::Point center_delta(cluster.center.x - previous_center.x,
+                                    cluster.center.y - previous_center.y,
+                                    cluster.center.z - previous_center.z);
+      const double lateral_displacement = std::abs(
+          dotHorizontal(center_delta, lateral_x, lateral_y));
+      bool reactivating = false;
+      if (track->released_static) {
+        if (lateral_displacement >= config_.corridor_reactivation_displacement) {
+          ++track->reactivation_evidence_frames;
+        } else {
+          track->reactivation_evidence_frames = 0U;
+        }
+        // 单帧静态点云抖动不能重新激活轨迹；至少需要两次连续的
+        // 横向位移证据，才重新交给 planner。
+        reactivating = track->reactivation_evidence_frames >= 2U;
+      }
       const bool stale_unconfirmed = !track->confirmed && !track->released_static &&
           dt > 0.25;
       if (stale_unconfirmed) {
@@ -1486,6 +1487,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         track->history.clear();
         track->lateral_direction_history.clear();
         track->velocity = ufo::Point(0.0F, 0.0F, 0.0F);
+        track->static_evidence_frames = 0U;
+        track->lateral_evidence_frames = 0U;
+        track->reactivation_evidence_frames = 0U;
       }
       if (reactivating) {
         // 静态释放后的再次运动必须从当前观测重新积累证据，不能让旧历史速度
@@ -1498,8 +1502,18 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         track->history.clear();
         track->history.push_back({stamp, cluster.center});
         track->lateral_direction_history.clear();
+        track->static_evidence_frames = 0U;
+        track->lateral_evidence_frames = 0U;
+        track->reactivation_evidence_frames = 0U;
       } else if (track->released_static) {
-        // 保留静态锚点，使低速目标的小幅逐帧位移可以累计到重新激活阈值。
+        // 保留横向静态锚点，同时跟随前向/z 位置更新关联中心；否则前向
+        // 运动目标超过 gate 后会反复新建 provisional 轨迹。
+        const double anchor_lateral = dotHorizontal(track->center, lateral_x, lateral_y);
+        const double observed_lateral = dotHorizontal(cluster.center, lateral_x, lateral_y);
+        track->center = cluster.center;
+        const double lateral_correction = anchor_lateral - observed_lateral;
+        track->center.x += static_cast<float>(lateral_correction * lateral_x);
+        track->center.y += static_cast<float>(lateral_correction * lateral_y);
         ++track->hits;
       } else {
         track->center = cluster.center;
@@ -1538,10 +1552,20 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
             static_cast<float>((static_cast<double>(cluster.center.z) - previous_center.z) / dt));
         const double frame_lateral_velocity = dotHorizontal(
             frame_velocity, lateral_x, lateral_y);
+        const double frame_forward_velocity = dotHorizontal(
+            frame_velocity, corridor_forward_x_, corridor_forward_y_);
+        const double frame_horizontal_speed = std::hypot(
+            frame_lateral_velocity, frame_forward_velocity);
+        const bool frame_forward_aligned = frame_horizontal_speed >=
+                config_.corridor_static_lateral_speed &&
+            std::abs(frame_forward_velocity) / frame_horizontal_speed >=
+                config_.corridor_forward_alignment_cos;
         int direction = 0;
-        if (frame_lateral_velocity >= config_.corridor_min_lateral_speed) {
+        if (!frame_forward_aligned &&
+            frame_lateral_velocity >= config_.corridor_min_lateral_speed) {
           direction = 1;
-        } else if (frame_lateral_velocity <= -config_.corridor_min_lateral_speed) {
+        } else if (!frame_forward_aligned &&
+                   frame_lateral_velocity <= -config_.corridor_min_lateral_speed) {
           direction = -1;
         }
         track->lateral_direction_history.push_back(direction);
@@ -1556,36 +1580,69 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     const double forward_velocity = dotHorizontal(track->velocity,
                                                   corridor_forward_x_, corridor_forward_y_);
     const double vertical_velocity = static_cast<double>(track->velocity.z);
-    const std::size_t positive_evidence = static_cast<std::size_t>(std::count(
-        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), 1));
-    const std::size_t negative_evidence = static_cast<std::size_t>(std::count(
-        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), -1));
+    const double horizontal_speed = std::hypot(lateral_velocity, forward_velocity);
+    const bool forward_aligned = horizontal_speed >=
+            config_.corridor_static_lateral_speed &&
+        std::abs(forward_velocity) / horizontal_speed >=
+            config_.corridor_forward_alignment_cos;
+    const bool lateral_dominant =
+        std::abs(lateral_velocity) >= config_.corridor_min_lateral_speed &&
+        !forward_aligned &&
+        std::abs(vertical_velocity) <= config_.corridor_max_vertical_speed;
+    const bool stationary_or_forward =
+        std::abs(lateral_velocity) <= config_.corridor_static_lateral_speed ||
+        forward_aligned;
+    std::size_t consecutive_direction = 0U;
     const int latest_direction = track->lateral_direction_history.empty()
         ? 0 : track->lateral_direction_history.back();
-    std::size_t consecutive_direction = 0U;
     if (latest_direction != 0) {
       for (auto it = track->lateral_direction_history.rbegin();
            it != track->lateral_direction_history.rend() && *it == latest_direction; ++it) {
         ++consecutive_direction;
       }
     }
+    // 单次横向跳变不能作为真实摆动证据。只有最近两次方向连续时才累计
+    // lateral evidence；交替抖动/方向不连续则按静止证据处理，允许已误确认
+    // 的轨迹回退为静态。
+    const bool continuous_lateral_motion = lateral_dominant &&
+        consecutive_direction >= 2U;
+    if (!track->released_static) {
+      if (continuous_lateral_motion) {
+        ++track->lateral_evidence_frames;
+        track->static_evidence_frames = 0U;
+      } else if (stationary_or_forward || lateral_dominant) {
+        ++track->static_evidence_frames;
+        track->lateral_evidence_frames = 0U;
+      } else {
+        track->static_evidence_frames = 0U;
+        track->lateral_evidence_frames = 0U;
+      }
+    }
+    const std::size_t positive_evidence = static_cast<std::size_t>(std::count(
+        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), 1));
+    const std::size_t negative_evidence = static_cast<std::size_t>(std::count(
+        track->lateral_direction_history.begin(), track->lateral_direction_history.end(), -1));
     const std::size_t dominant_evidence = std::max(positive_evidence, negative_evidence);
     const std::size_t contrary_evidence = std::min(positive_evidence, negative_evidence);
-    const bool recent_direction_consistent = consecutive_direction >= 2U &&
-        dominant_evidence >= 2U && dominant_evidence > contrary_evidence;
+    const bool recent_direction_consistent = consecutive_direction >= 3U &&
+        dominant_evidence >= 3U && dominant_evidence > contrary_evidence;
     double lateral_span = 0.0;
     if (track->history.size() >= 2U) {
-      const ufo::Point& first = track->history.front().center;
-      const ufo::Point& last = track->history.back().center;
-      lateral_span = std::abs(dotHorizontal(
-          ufo::Point(last.x - first.x, last.y - first.y, last.z - first.z),
-          lateral_x, lateral_y));
+      double minimum_lateral = std::numeric_limits<double>::infinity();
+      double maximum_lateral = -std::numeric_limits<double>::infinity();
+      for (const auto& sample : track->history) {
+        const double sample_lateral = dotHorizontal(sample.center, lateral_x, lateral_y);
+        minimum_lateral = std::min(minimum_lateral, sample_lateral);
+        maximum_lateral = std::max(maximum_lateral, sample_lateral);
+      }
+      lateral_span = maximum_lateral - minimum_lateral;
     }
     if (!track->confirmed && !track->released_static &&
         track->hits >= static_cast<std::size_t>(config_.corridor_min_confirm_hits) &&
+        track->lateral_evidence_frames >= 2U &&
         recent_direction_consistent &&
         lateral_span >= config_.corridor_min_lateral_span &&
-        std::abs(lateral_velocity) >= config_.corridor_min_lateral_speed &&
+        continuous_lateral_motion &&
         std::abs(forward_velocity) <= config_.corridor_max_forward_speed &&
         std::abs(vertical_velocity) <= config_.corridor_max_vertical_speed) {
       track->confirmed = true;
@@ -1599,27 +1656,48 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
                       << "," << track->size.z << ")");
     }
 
-    if (!track->confirmed && !track->released_static &&
-        track->hits >= static_cast<std::size_t>(config_.corridor_history_frames) &&
-        dominant_evidence == 0U) {
-      // 长时间稳定的内部点簇释放给静态地图；之后若发生明显横向位移，
-      // 仍可由本层重新激活，而不依赖 UFOMap 的历史 hits。
+    const bool unresolved_too_long =
+        track->hits >= 2U * static_cast<std::size_t>(config_.corridor_history_frames) &&
+        !recent_direction_consistent;
+    if (!track->released_static &&
+        (track->static_evidence_frames >=
+             static_cast<std::size_t>(config_.corridor_static_confirm_frames) ||
+         (!track->confirmed && unresolved_too_long))) {
+      // 连续无横向速度，或速度近似沿无人机前后方向时，才把未知候选释放为
+      // 静态。之后只有足够大的横向位移才能重新激活。
       track->released_static = true;
+      track->confirmed = false;
       track->velocity = ufo::Point(0.0F, 0.0F, 0.0F);
       track->history.clear();
       track->history.push_back({stamp, track->center});
       track->lateral_direction_history.clear();
+      track->static_evidence_frames = 0U;
+      track->lateral_evidence_frames = 0U;
+      track->reactivation_evidence_frames = 0U;
+      ROS_INFO_STREAM("Corridor candidate released static: id=" << track->id
+                      << ", hits=" << track->hits
+                      << ", lateral_speed=" << lateral_velocity
+                      << ", forward_speed=" << forward_velocity);
     }
 
     if (!track->released_static) {
       result.candidate_point_count += cluster.indices.size();
-      if (track->confirmed &&
+      const bool has_publish_history =
+          track->hits >= static_cast<std::size_t>(config_.corridor_min_publish_hits);
+      const bool publish_current = cluster.indices.size() >=
+              static_cast<std::size_t>(config_.corridor_min_cluster_points) &&
+          (track->confirmed ||
+           (config_.corridor_publish_unknown_as_dynamic && has_publish_history));
+      if (publish_current &&
           published_track_count < static_cast<std::size_t>(config_.corridor_max_candidates)) {
         for (const std::size_t index : cluster.indices) {
           result.dynamic_indices[index] = true;
+          result.provisional_indices[index] = !track->confirmed;
           result.holdout_indices[index] = false;
         }
-        result.confirmed_point_count += cluster.indices.size();
+        if (track->confirmed) {
+          result.confirmed_point_count += cluster.indices.size();
+        }
         ++published_track_count;
       }
     } else {
@@ -1632,14 +1710,16 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
 
   for (std::size_t track_index = 0U; track_index < matched_tracks.size(); ++track_index) {
     if (!matched_tracks[track_index]) {
-      markConfirmedTrackPrediction(corridor_tracks_[track_index]);
       ++corridor_tracks_[track_index].missed_frames;
     }
   }
   corridor_tracks_.erase(
       std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                      [&](const CorridorTrack& track) {
-                       return (stamp - track.last_seen).toSec() > config_.corridor_track_timeout;
+                       return track.missed_frames > static_cast<std::size_t>(
+                                  config_.corridor_max_missed_frames) ||
+                              (stamp - track.last_seen).toSec() >
+                                  config_.corridor_track_timeout;
                      }),
       corridor_tracks_.end());
 
@@ -1717,6 +1797,7 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   // 不做空间邻域膨胀，避免把球附近的墙点或静态点误标为动态/暂存。
   std::vector<bool> corridor_handled_output(output_points->size(), false);
   std::vector<bool> corridor_dynamic_output(output_points->size(), false);
+  std::vector<bool> corridor_provisional_output(output_points->size(), false);
   std::vector<bool> corridor_holdout_output(output_points->size(), false);
   std::vector<bool> corridor_dynamic_raw_kept(range_filtered_points->size(), false);
   for (std::size_t output_index = 0U;
@@ -1729,6 +1810,8 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
         corridor_candidates.handled_indices[source_index];
     corridor_dynamic_output[output_index] =
         corridor_candidates.dynamic_indices[source_index];
+    corridor_provisional_output[output_index] =
+        corridor_candidates.provisional_indices[source_index];
     corridor_holdout_output[output_index] =
         corridor_candidates.holdout_indices[source_index];
     corridor_dynamic_raw_kept[source_index] = corridor_dynamic_output[output_index];
@@ -1803,6 +1886,9 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
         if (index < corridor_dynamic_output.size() && corridor_dynamic_output[index]) {
           cluster_point.use_detector_voxel = true;
           cluster_point.detector_voxel_code = makeDetectorVoxelCode(point);
+          cluster_point.realtime_only = true;
+          cluster_point.provisional = index < corridor_provisional_output.size() &&
+                                      corridor_provisional_output[index];
         } else {
           const auto code = runtime.map.toCodeChecked(point);
           if (!code.has_value()) {
@@ -1835,6 +1921,9 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
       cluster_point.point = point;
       cluster_point.use_detector_voxel = true;
       cluster_point.detector_voxel_code = makeDetectorVoxelCode(point);
+      cluster_point.realtime_only = true;
+      cluster_point.provisional = source_index < corridor_candidates.provisional_indices.size() &&
+                                  corridor_candidates.provisional_indices[source_index];
       classification.dynamic_cluster_points.push_back(cluster_point);
     }
 

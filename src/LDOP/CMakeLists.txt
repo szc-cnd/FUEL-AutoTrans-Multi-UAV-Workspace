@@ -166,6 +166,17 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 
+  catkin_add_gtest(test_dynamic_object_tracker
+    test/test_dynamic_object_tracker.cpp
+  )
+  if(TARGET test_dynamic_object_tracker)
+    target_link_libraries(test_dynamic_object_tracker
+      ldop_core
+      ${catkin_LIBRARIES}
+      gtest
+    )
+  endif()
+
   catkin_add_gtest(test_prediction_interaction_context
     test/test_prediction_interaction_context.cpp
   )

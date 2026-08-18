@@ -49,20 +49,26 @@ corridor_roi_max_z: 1.50
 corridor_detection_voxel: 0.10  # 动态检测独立网格，与Diff规划分辨率一致
 corridor_history_frames: 5
 corridor_min_confirm_hits: 3
+corridor_min_publish_hits: 2  # 未确认候选连续命中2帧后才送规划器，首帧仍只做静态图 holdout
 corridor_min_lateral_speed: 0.10
-corridor_min_lateral_span: 0.15  # 确认前最近窗口内至少累计的横向位移，单位m
+corridor_min_lateral_span: 0.12  # 确认前最近窗口内至少累计的横向位移，单位m
+corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇短时关联后按实时障碍输出，首帧不写死到静态图
+corridor_static_confirm_frames: 4  # 10Hz点云下连续约0.4s无横向运动后才释放为静态
+corridor_static_lateral_speed: 0.08  # 低于该横向速度视为静止证据
+corridor_forward_alignment_cos: 0.85  # 速度近似沿无人机前后方向时归为静态候选
+corridor_max_missed_frames: 3  # 同一障碍允许丢失约0.3s，仅保留最后真实位置
 corridor_max_forward_speed: 0.80
 corridor_max_vertical_speed: 0.80
-corridor_association_gate: 0.45
+corridor_association_gate: 0.25  # 10Hz下限制跨帧簇跳配，避免把不同静态碎片拼成高速运动
 corridor_track_timeout: 0.40
-corridor_min_cluster_points: 4
+corridor_min_cluster_points: 3
 corridor_max_cluster_extent: 0.60
 corridor_max_candidates: 1
-corridor_reject_candidate_count: 3
+corridor_reject_candidate_count: 12  # 候选状态机每帧最多处理的紧凑簇；发布仍由 corridor_max_candidates 限制
 corridor_min_wall_points: 12
 corridor_wall_search_forward: 2.5
 corridor_wall_filter_alpha: 0.20
-corridor_reactivation_displacement: 0.04
+corridor_reactivation_displacement: 0.08
 corridor_turn_reset_yaw: 0.35
 ufomap_insert_only_valid: false  # 仅对有效射线区段执行插入，即ufomap_max_range范围内点的射线段
 ufomap_insert_hit_depth: 0  # 命中点更新深度，0 表示沿用 UFOMap 默认值
@@ -77,7 +83,7 @@ ufomap_propagate: true  # 是否在每帧插入后立即传播修改（更新整
 
 # 当前帧动态点聚类参数
 dynamic_cluster_min_points: 8   # 通用动态聚类阈值；通道检测器使用独立阈值
-dynamic_cluster_detector_min_points: 4  # 通道检测器的稀疏球点簇阈值
+dynamic_cluster_detector_min_points: 3  # 通道检测器的稀疏球点簇阈值
 dynamic_cluster_max_extent: 3.0  #cluster 原始点 AABB 对角线长度大于该值时丢弃，用于过滤大片误分割或粘连结果。
 dynamic_cluster_connectivity: 26  #cluster 连通性，6 18 26
 dynamic_cluster_vertical_merge_max_z_gap: 0.6  # 当前帧上下碎片合并允许的最大竖向空隙，单位 m；用于修复远处目标被竖向切成多个 cluster。
@@ -88,6 +94,14 @@ tracking_history_size: 100  # 每条轨迹保留的历史样本数上限（位�
 tracking_max_missed_frames: 15  # 连续漏检超过该帧数后删除内部轨迹
 tracking_max_publish_missed_frames: 8  # 对外最多保留预测目标8帧，给球被短时遮挡后的原ID更多重关联时间
 tracking_min_hits_to_publish: 3  # 轨迹至少命中3次后才对外发布，抑制固定杆短暂误检
+tracking_publish_corridor_provisional: true  # 通道候选完成两帧关联后交给规划器，通道外仍使用原发布门槛
+tracking_corridor_provisional_min_hits: 2
+tracking_corridor_provisional_max_hits: 4  # 未确认候选最多输出约0.4s，静态噪声不会长期占用规划器
+tracking_corridor_realtime_max_publish_missed_frames: 3  # 丢失时最多原位保留约0.3s
+tracking_corridor_realtime_association_gate: 0.25  # 通道实时候选无漏帧时的最后观测距离门，单位m
+tracking_corridor_realtime_association_gate_max: 0.35  # 短时漏帧放宽后的最大距离门，单位m
+tracking_corridor_realtime_association_gate_missed_increment: 0.05  # 每个漏帧增加的距离门，单位m
+tracking_max_corridor_realtime_tracks: 1  # 当前通道最多向规划器输出一个 realtime 轨迹
 tracking_motion_min_displacement: 0.04  # 连续匹配中心位移达到该值才计入真实运动证据，单位m
 tracking_motion_min_evidence_frames: 2  # 对外发布前至少需要的真实运动证据帧数
 tracking_motion_confirmation_speed: 0.10  # 滤波速度达到该值后锁定为动态轨迹，单位m/s
@@ -114,7 +128,7 @@ prediction_history_quality_noise_scale: 1.5  # 短历史/漏检/不稳定轨迹�
 prediction_hypothesis_noise_scale: 1.3  # 假设性分支相对 keep 分支的未来噪声尺度
 
 # 窄通道内水平往复障碍物：轨迹、换向周期和两侧墙证据同时成立后，以端点速度为零的简谐模型替代CV外推。
-prediction_enable_corridor_oscillation: true  # 总开关；关闭后完全回到原通用预测路径
+prediction_enable_corridor_oscillation: false  # 通道目标只发布实时观测，不做简谐或CV未来外推
 prediction_corridor_oscillation_min_samples: 12  # 至少需要的有效匹配历史点数
 prediction_corridor_oscillation_max_history_samples: 80  # 用于识别摆动的最大历史点数
 prediction_corridor_oscillation_min_motion_span: 0.35  # 已观察到的最小左右运动范围，单位m

@@ -108,6 +108,30 @@ TEST(SwingObstacleGuard, LearnedHarmonicPredictionIsUsedForCollisionTiming)
   EXPECT_FALSE(reflected_guard.findCollision(trajectory, 3.0, nullptr));
 }
 
+TEST(SwingObstacleGuard, RealtimeModeKeepsCurrentLateralPosition)
+{
+  SwingObstacleGuard::Config config;
+  config.realtime_observation_only = true;
+  config.vehicle_radius = 0.0;
+  config.horizontal_margin = 0.0;
+  config.observation_retention = 0.5;
+  SwingObstacleGuard guard(config);
+
+  SwingObstacleObservation ball;
+  ball.id = 12;
+  ball.position = Eigen::Vector3d(0.5, -0.45, 0.6);
+  ball.velocity = Eigen::Vector3d(0.0, 0.4, 0.0);
+  ball.size = Eigen::Vector3d(0.1, 0.1, 0.1);
+  guard.update({ball}, 10.0);
+
+  const std::vector<SwingTrajectorySample> trajectory = {
+      {0.0, Eigen::Vector3d(0.0, 0.0, 0.6)},
+      {1.0, Eigen::Vector3d(0.5, 0.0, 0.6)}};
+  // The obstacle stays at y=-0.45 in realtime mode; a reflected trajectory
+  // would cross the vehicle near the far end of this sample path.
+  EXPECT_FALSE(guard.findCollision(trajectory, 10.0, nullptr));
+}
+
 TEST(SwingObstacleGuard, AllowsCompleteVehicleEnvelopeBelowBall)
 {
   SwingObstacleGuard guard;

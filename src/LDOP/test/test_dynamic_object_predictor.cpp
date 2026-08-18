@@ -201,6 +201,33 @@ TEST(DynamicObjectPredictorTest, GeneratesBaselineCvPredictionPoints) {
   EXPECT_EQ(branch.points[1].model_covariance.size(), 36U);
 }
 
+TEST(DynamicObjectPredictorTest, RealtimeOnlyKeepsIndexButDoesNotRollOut) {
+  DynamicObjectPredictorConfig config;
+  config.prediction_horizon = 1.0;
+  config.filter_config.default_dt = 0.1;
+  // Keep the default interaction path enabled: an empty rollout context must
+  // remain safe even when interaction diagnostics are built for this frame.
+  DynamicObjectPredictor predictor(config);
+
+  TrackPredictionInput input = makeCvInput();
+  input.corridor_realtime_only = true;
+  input.corridor_provisional = true;
+
+  std_msgs::Header header;
+  header.stamp = ros::Time(10.0);
+  header.frame_id = "map";
+  const auto result = predictor.predict(header, {input});
+
+  ASSERT_EQ(result.predictions_msg.predictions.size(), 1U);
+  EXPECT_EQ(result.realtime_only_object_count, 1U);
+  const auto& prediction = result.predictions_msg.predictions.front();
+  ASSERT_EQ(prediction.branches.size(), 1U);
+  ASSERT_EQ(prediction.branches.front().points.size(), 1U);
+  EXPECT_DOUBLE_EQ(prediction.branches.front().points.front().time_from_start.toSec(), 0.0);
+  EXPECT_NEAR(prediction.branches.front().points.front().model_state[0], 0.0, 1e-12);
+  EXPECT_DOUBLE_EQ(prediction.branches.front().probability, 1.0);
+}
+
 TEST(DynamicObjectPredictorTest, CorridorOscillationSwitchDisabledKeepsCvExtrapolation) {
   DynamicObjectPredictorConfig config;
   config.prediction_horizon = 1.0;

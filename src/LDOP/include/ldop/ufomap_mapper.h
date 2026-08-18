@@ -61,8 +61,17 @@ struct UfomapMapperConfig {
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
   int corridor_min_confirm_hits{3};
+  // 未确认候选至少连续命中该帧数后才进入 planner-facing dynamic_objects；
+  // 更早的点仍保持 holdout，避免首帧采样抖动直接触发规划。
+  int corridor_min_publish_hits{2};
   double corridor_min_lateral_speed{0.1};
   double corridor_min_lateral_span{0.15};
+  // 未知区域中的紧凑候选先按实时障碍输出；只有稳定静止后才释放到静态图。
+  bool corridor_publish_unknown_as_dynamic{true};
+  int corridor_static_confirm_frames{4};
+  double corridor_static_lateral_speed{0.08};
+  double corridor_forward_alignment_cos{0.85};
+  int corridor_max_missed_frames{3};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
@@ -120,8 +129,14 @@ struct UfomapMapperParams {
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
   int corridor_min_confirm_hits{3};
+  int corridor_min_publish_hits{2};
   double corridor_min_lateral_speed{0.1};
   double corridor_min_lateral_span{0.15};
+  bool corridor_publish_unknown_as_dynamic{true};
+  int corridor_static_confirm_frames{4};
+  double corridor_static_lateral_speed{0.08};
+  double corridor_forward_alignment_cos{0.85};
+  int corridor_max_missed_frames{3};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
@@ -199,6 +214,10 @@ struct UfomapDynamicClusterPoint {
   // 通道候选使用独立 0.1m 检测网格；普通 LDOP 点仍使用 UFOMap key。
   UfomapVoxelCode detector_voxel_code;
   bool use_detector_voxel{false};
+  // 通道层只做当前帧/短时保活，不应进入未来轨迹预测。
+  bool realtime_only{false};
+  // 未完成动静态确认的通道候选可单独标记为 provisional，供 tracker 提前发布。
+  bool provisional{false};
 };
 
 struct UfomapClassificationResult {
@@ -348,6 +367,7 @@ class UfomapMapper {
   struct CorridorCandidateResult {
     std::vector<bool> handled_indices;
     std::vector<bool> dynamic_indices;
+    std::vector<bool> provisional_indices;
     // 候选过多时不发布为动态，但也不应立即写入静态地图。
     std::vector<bool> holdout_indices;
     std::size_t candidate_point_count{0U};
@@ -368,6 +388,9 @@ class UfomapMapper {
     std::deque<CorridorTrackSample> history;
     std::size_t hits{0U};
     std::size_t missed_frames{0U};
+    std::size_t static_evidence_frames{0U};
+    std::size_t lateral_evidence_frames{0U};
+    std::size_t reactivation_evidence_frames{0U};
     // 最近窗口内的方向证据；0 表示该帧速度低于阈值。
     std::deque<int> lateral_direction_history;
     bool confirmed{false};

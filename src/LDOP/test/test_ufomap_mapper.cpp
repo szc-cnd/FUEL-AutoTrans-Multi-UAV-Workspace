@@ -103,14 +103,20 @@ std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
     pnh.setParam("corridor_history_frames", 5);
     pnh.setParam("corridor_min_confirm_hits", 3);
     pnh.setParam("corridor_min_lateral_speed", 0.10);
+    pnh.setParam("corridor_min_lateral_span", 0.12);
+    pnh.setParam("corridor_publish_unknown_as_dynamic", true);
+    pnh.setParam("corridor_static_confirm_frames", 4);
+    pnh.setParam("corridor_static_lateral_speed", 0.08);
+    pnh.setParam("corridor_forward_alignment_cos", 0.85);
+    pnh.setParam("corridor_max_missed_frames", 3);
     pnh.setParam("corridor_max_forward_speed", 0.80);
     pnh.setParam("corridor_max_vertical_speed", 0.80);
-    pnh.setParam("corridor_association_gate", 0.45);
+    pnh.setParam("corridor_association_gate", 0.25);
     pnh.setParam("corridor_track_timeout", 0.40);
-    pnh.setParam("corridor_min_cluster_points", 4);
+    pnh.setParam("corridor_min_cluster_points", 3);
     pnh.setParam("corridor_max_cluster_extent", 0.60);
     pnh.setParam("corridor_max_candidates", 1);
-    pnh.setParam("corridor_reject_candidate_count", 3);
+    pnh.setParam("corridor_reject_candidate_count", 12);
     pnh.setParam("corridor_min_wall_points", 4);
   }
 
@@ -241,15 +247,22 @@ TEST(UfomapMapperTest, NearestOccupiedQueryReturnsClosestOccupiedNodeInRadius) {
   EXPECT_FALSE(outside_radius.has_value());
 }
 
-TEST(UfomapMapperTest, CorridorFirstObservationIsHeldOutOfStaticMap) {
+TEST(UfomapMapperTest, CorridorFirstObservationIsHeldOutThenPublished) {
   auto mapper = makeMapper("ufomap_mapper_corridor_first_observation", true);
   const auto points = makeCorridorFrame(-0.25);
-  const auto result = mapper->processInputCloud(
+  const auto first = mapper->processInputCloud(
       makeCloud(points, 20.0), makeOdom(makePoint(0.0, 0.0, 0.0), 20.0));
 
-  EXPECT_GT(result.runtime_stats.corridor_candidate_point_count, 0U);
-  // 首帧只进入候选轨迹，不应在运动确认前发布给下游动态聚类器。
-  EXPECT_EQ(result.classification.dynamic_point_count, 0U);
+  EXPECT_GT(first.runtime_stats.corridor_candidate_point_count, 0U);
+  // 首帧只隔离出未知簇，避免静态采样抖动直接触发规划；下一帧仍关联到同一簇
+  // 后才作为 provisional 实时障碍输出。
+  EXPECT_EQ(first.classification.dynamic_point_count, 0U);
+  const auto result = mapper->processInputCloud(
+      makeCloud(points, 20.1), makeOdom(makePoint(0.0, 0.0, 0.0), 20.1));
+  EXPECT_GT(result.classification.dynamic_point_count, 0U);
+  ASSERT_FALSE(result.classification.dynamic_cluster_points.empty());
+  EXPECT_TRUE(result.classification.dynamic_cluster_points.front().realtime_only);
+  EXPECT_TRUE(result.classification.dynamic_cluster_points.front().provisional);
   const auto ball_node = mapper->queryNode(ufo::Point(0.57F, -0.23F, 0.62F));
   EXPECT_FALSE(ball_node.occupied);
 }
@@ -257,14 +270,37 @@ TEST(UfomapMapperTest, CorridorFirstObservationIsHeldOutOfStaticMap) {
 TEST(UfomapMapperTest, CorridorNominalWallsProtectFirstClusterBeforeWallsAppear) {
   auto mapper = makeMapper("ufomap_mapper_corridor_nominal_walls", true);
   const auto points = makeBallCluster(0.45, -0.25);
-  const auto result = mapper->processInputCloud(
+  const auto first = mapper->processInputCloud(
       makeCloud(points, 25.0), makeOdom(makePoint(0.0, 0.0, 0.0), 25.0));
 
-  EXPECT_TRUE(result.runtime_stats.corridor_wall_valid);
-  EXPECT_GT(result.runtime_stats.corridor_candidate_point_count, 0U);
-  EXPECT_EQ(result.classification.dynamic_point_count, 0U);
+  EXPECT_TRUE(first.runtime_stats.corridor_wall_valid);
+  EXPECT_GT(first.runtime_stats.corridor_candidate_point_count, 0U);
+  EXPECT_EQ(first.classification.dynamic_point_count, 0U);
+  const auto result = mapper->processInputCloud(
+      makeCloud(points, 25.1), makeOdom(makePoint(0.0, 0.0, 0.0), 25.1));
+  EXPECT_GT(result.classification.dynamic_point_count, 0U);
   const auto ball_node = mapper->queryNode(ufo::Point(0.57F, -0.23F, 0.62F));
   EXPECT_FALSE(ball_node.occupied);
+}
+
+TEST(UfomapMapperTest, SparseCorridorClusterIsHeldOutAndPublished) {
+  auto mapper = makeMapper("ufomap_mapper_corridor_sparse_cluster", true);
+  auto points = makeStaticCorridorWalls();
+  points.push_back(makePoint(0.55, -0.20, 0.55));
+  points.push_back(makePoint(0.60, -0.20, 0.60));
+  points.push_back(makePoint(0.55, -0.15, 0.60));
+
+  const auto first = mapper->processInputCloud(
+      makeCloud(points, 26.0), makeOdom(makePoint(0.0, 0.0, 0.0), 26.0));
+
+  EXPECT_EQ(first.classification.dynamic_point_count, 0U);
+  const auto result = mapper->processInputCloud(
+      makeCloud(points, 26.1), makeOdom(makePoint(0.0, 0.0, 0.0), 26.1));
+  EXPECT_EQ(result.classification.dynamic_point_count, 3U);
+  ASSERT_EQ(result.classification.dynamic_cluster_points.size(), 3U);
+  EXPECT_TRUE(result.classification.dynamic_cluster_points.front().realtime_only);
+  const auto node = mapper->queryNode(ufo::Point(0.57F, -0.18F, 0.58F));
+  EXPECT_FALSE(node.occupied);
 }
 
 TEST(UfomapMapperTest, CorridorLongitudinalRoiLeavesDistantClusterToStaticMap) {
@@ -330,7 +366,7 @@ TEST(UfomapMapperTest, GroundFilteredConfirmedBallStillFeedsDynamicClusterer) {
   EXPECT_FALSE(ball_node.occupied);
 }
 
-TEST(UfomapMapperTest, ConfirmedCorridorTrackCoastsWhenCandidatesAreRejected) {
+TEST(UfomapMapperTest, ConfirmedCorridorTrackIsPrioritizedAmongClutter) {
   auto mapper = makeMapper("ufomap_mapper_corridor_candidate_rejection", true);
   const std::vector<double> ball_positions{-0.25, -0.10, 0.05, 0.20};
   for (std::size_t index = 0U; index < ball_positions.size(); ++index) {
@@ -366,7 +402,7 @@ TEST(UfomapMapperTest, StaticCorridorWallsDoNotCreateCandidates) {
   }
 }
 
-TEST(UfomapMapperTest, StaticInternalClusterIsReleasedWithoutDynamicPublish) {
+TEST(UfomapMapperTest, StaticInternalClusterPublishesBrieflyThenReleasesStatic) {
   auto mapper = makeMapper("ufomap_mapper_corridor_static_internal", true);
   std::vector<geometry_msgs::Point> points;
   appendCompactCluster(points, 0.60, 0.0);
@@ -375,13 +411,56 @@ TEST(UfomapMapperTest, StaticInternalClusterIsReleasedWithoutDynamicPublish) {
     const double stamp = 50.0 + 0.1 * static_cast<double>(index);
     last_result = mapper->processInputCloud(
         makeCloud(points, stamp), makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
-    if (index < 4U) {
+    if (index >= 1U && index < 3U) {
+      EXPECT_GT(last_result.classification.dynamic_point_count, 0U);
+    } else if (index == 0U) {
       EXPECT_EQ(last_result.classification.dynamic_point_count, 0U);
     }
   }
 
   EXPECT_EQ(last_result.classification.dynamic_point_count, 0U);
   const auto static_node = mapper->queryNode(ufo::Point(0.58F, -0.02F, 0.58F));
+  EXPECT_TRUE(static_node.occupied);
+}
+
+TEST(UfomapMapperTest, ConfirmedCorridorTrackCanDowngradeAfterStopping) {
+  auto mapper = makeMapper("ufomap_mapper_corridor_confirmed_stop", true);
+  const std::vector<double> moving_positions{-0.25, -0.10, 0.05, 0.20};
+  for (std::size_t index = 0U; index < moving_positions.size(); ++index) {
+    const double stamp = 57.0 + 0.1 * static_cast<double>(index);
+    mapper->processInputCloud(
+        makeCloud(makeCorridorFrame(moving_positions[index]), stamp),
+        makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
+  }
+
+  UfomapFrameResult stopped_result;
+  for (std::size_t index = 0U; index < 10U; ++index) {
+    const double stamp = 57.4 + 0.1 * static_cast<double>(index);
+    stopped_result = mapper->processInputCloud(
+        makeCloud(makeCorridorFrame(0.20), stamp),
+        makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
+  }
+
+  EXPECT_EQ(stopped_result.runtime_stats.corridor_confirmed_point_count, 0U);
+  EXPECT_EQ(stopped_result.classification.dynamic_point_count, 0U);
+  const auto static_node = mapper->queryNode(ufo::Point(0.57F, 0.18F, 0.62F));
+  EXPECT_TRUE(static_node.occupied);
+}
+
+TEST(UfomapMapperTest, ForwardMovingClusterIsNotConfirmedAsLateralDynamic) {
+  auto mapper = makeMapper("ufomap_mapper_corridor_forward_motion", true);
+  UfomapFrameResult last_result;
+  for (std::size_t index = 0U; index < 12U; ++index) {
+    std::vector<geometry_msgs::Point> points;
+    appendCompactCluster(points, 0.45 + 0.12 * static_cast<double>(index), 0.0);
+    const double stamp = 55.0 + 0.1 * static_cast<double>(index);
+    last_result = mapper->processInputCloud(
+        makeCloud(points, stamp), makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
+  }
+
+  EXPECT_EQ(last_result.runtime_stats.corridor_confirmed_point_count, 0U);
+  EXPECT_EQ(last_result.classification.dynamic_point_count, 0U);
+  const auto static_node = mapper->queryNode(ufo::Point(1.77F, 0.0F, 0.60F));
   EXPECT_TRUE(static_node.occupied);
 }
 

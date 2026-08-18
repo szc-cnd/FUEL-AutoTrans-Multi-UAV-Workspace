@@ -32,6 +32,7 @@
     <arg name="swing_velocity_deadband" default="0.08"/>
     <arg name="swing_minimum_speed" default="0.25"/>
     <arg name="swing_enable_harmonic_prediction" default="false"/>
+    <arg name="swing_realtime_observation_only" default="false"/>
     <arg name="swing_harmonic_min_samples" default="12"/>
     <arg name="swing_harmonic_max_history_samples" default="80"/>
     <arg name="swing_harmonic_min_motion_span" default="0.35"/>
@@ -141,6 +142,7 @@
         <param name="fsm/swing_velocity_deadband" value="$(arg swing_velocity_deadband)" type="double"/>
         <param name="fsm/swing_minimum_speed" value="$(arg swing_minimum_speed)" type="double"/>
         <param name="fsm/swing_enable_harmonic_prediction" value="$(arg swing_enable_harmonic_prediction)" type="bool"/>
+        <param name="fsm/swing_realtime_observation_only" value="$(arg swing_realtime_observation_only)" type="bool"/>
         <param name="fsm/swing_harmonic_min_samples" value="$(arg swing_harmonic_min_samples)" type="int"/>
         <param name="fsm/swing_harmonic_max_history_samples" value="$(arg swing_harmonic_max_history_samples)" type="int"/>
         <param name="fsm/swing_harmonic_min_motion_span" value="$(arg swing_harmonic_min_motion_span)" type="double"/>

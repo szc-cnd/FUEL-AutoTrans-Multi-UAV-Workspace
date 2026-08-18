@@ -49,6 +49,9 @@ public:
     double velocity_deadband{0.08};
     double minimum_swing_speed{0.25};
     bool enable_harmonic_prediction{false};
+    // 通道实时模式只把当前观测位置作为未来各采样时刻的占据位置，
+    // 不使用反射模型或简谐模型推断障碍物未来横向运动。
+    bool realtime_observation_only{false};
     int harmonic_min_samples{12};
     int harmonic_max_history_samples{80};
     double harmonic_min_motion_span{0.35};
