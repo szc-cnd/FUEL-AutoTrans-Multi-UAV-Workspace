@@ -157,7 +157,7 @@
     <param name="arrive_z" value="0.20" />
     <param name="front_hint_dwell_sec" value="2.0" />
     <param name="front_hint_initial_wait_sec" value="1.0" />
-    <param name="front_yaw_scan_half_angle_rad" value="0.5236" />
+    <param name="front_yaw_scan_half_angle_rad" value="0.7854" />
     <param name="front_yaw_scan_rate_rad_s" value="0.35" />
     <param name="front_hint_forward_margin" value="1.0" />
     <param name="front_hint_lateral_margin" value="1.0" />
@@ -213,5 +213,5 @@
 
   <node if="$(arg enable_rviz)" pkg="rviz" type="rviz"
         name="search_landing_test_rviz"
-        args="-d $(find plan_manage)/config/traj.rviz" />
+        args="-d $(find plan_manage)/config/search_landing_test.rviz" />
 </launch>

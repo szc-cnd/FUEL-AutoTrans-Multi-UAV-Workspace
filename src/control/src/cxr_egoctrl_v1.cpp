@@ -63,6 +63,14 @@ bool isLandingSearchHighSpeedState(const std::string& state)
            state == "FINAL_ARUCO_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
            state == "ARUCO_LOCKED_DIFF_APPROACH";
 }
+
+bool isLandingSearchYawScanState(const std::string& state)
+{
+    return state == "FRONT_ARUCO_INITIAL_WAIT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_LEFT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RIGHT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RETURN";
+}
 }
 
 class Ctrl
@@ -78,6 +86,7 @@ public:
     void endpoint_hold_cb(const std_msgs::Bool::ConstPtr& msg);
     void landing_request_cb(const std_msgs::Bool::ConstPtr& msg);
     void landing_search_state_cb(const std_msgs::String::ConstPtr& msg);
+    void landing_search_yaw_cb(const quadrotor_msgs::PositionCommand::ConstPtr& msg);
     void control(const ros::TimerEvent&);
 
     ros::NodeHandle nh;
@@ -131,10 +140,15 @@ public:
     bool safety_hold_uses_mavros_frame;
     bool landing_requested;
     bool landing_search_speed_active;
+    bool landing_search_yaw_active;
+    bool have_landing_search_yaw;
+    double landing_search_yaw;
+    ros::Time last_landing_search_yaw_time;
     std::string odom_topic, setpoint_topic;
     // 2026-07-13: 控制输入、任务门控和 MAVROS 输出按车辆参数隔离，默认实例为 iris_0。
     std::string vehicle_ns, position_cmd_topic, safety_hold_topic, endpoint_hold_topic;
-    std::string landing_request_topic, goal_topic, marker_topic, world_frame, drone_frame;
+    std::string landing_request_topic, landing_search_yaw_topic;
+    std::string goal_topic, marker_topic, world_frame, drone_frame;
     std::string landing_search_state_topic;
     double traj_cmd_timeout; // 规划轨迹超时保护
     double planner_enable_height; // FAST-LIO z 高度接管门限
@@ -159,7 +173,8 @@ public:
     ros::Time last_control_stamp;
 
     ros::Subscriber state_sub, twist_sub, target_sub, position_sub, mavros_pose_sub;
-    ros::Subscriber safety_hold_sub, endpoint_hold_sub, landing_request_sub, landing_search_state_sub;
+    ros::Subscriber safety_hold_sub, endpoint_hold_sub, landing_request_sub,
+        landing_search_state_sub, landing_search_yaw_sub;
     ros::Publisher local_pos_pub, pubMarker;
     ros::Timer timer;
 };
@@ -183,6 +198,8 @@ Ctrl::Ctrl()
                            vehicle_ns + "/planning/endpoint_hold");
     pnh.param<std::string>("landing_request_topic", landing_request_topic,
                            vehicle_ns + "/mission/landing_request");
+    pnh.param<std::string>("landing_search_yaw_topic", landing_search_yaw_topic,
+                           vehicle_ns + "/landing_diff/yaw");
     pnh.param<std::string>("landing_search_state_topic", landing_search_state_topic,
                            std::string("/landing_diff_search_manager/state"));
     pnh.param<std::string>("goal_topic", goal_topic, vehicle_ns + "/move_base_simple/goal");
@@ -207,6 +224,9 @@ Ctrl::Ctrl()
         nh.subscribe(landing_request_topic, 2, &Ctrl::landing_request_cb, this);
     landing_search_state_sub =
         nh.subscribe(landing_search_state_topic, 5, &Ctrl::landing_search_state_cb, this);
+    landing_search_yaw_sub =
+        nh.subscribe(landing_search_yaw_topic, 5,
+                     &Ctrl::landing_search_yaw_cb, this);
 
     local_pos_pub = nh.advertise<mavros_msgs::PositionTarget>(setpoint_topic, 10);
     pubMarker = nh.advertise<visualization_msgs::Marker>(marker_topic, 5);
@@ -234,6 +254,9 @@ Ctrl::Ctrl()
     safety_hold_uses_mavros_frame = false;
     landing_requested = false;
     landing_search_speed_active = false;
+    landing_search_yaw_active = false;
+    have_landing_search_yaw = false;
+    landing_search_yaw = 0.0;
     have_odom = false;
     traj_cmd_timeout = 0.6;
     pnh.param("planner_enable_height", planner_enable_height, 0.5);
@@ -521,13 +544,28 @@ void Ctrl::landing_request_cb(const std_msgs::Bool::ConstPtr& msg)
 void Ctrl::landing_search_state_cb(const std_msgs::String::ConstPtr& msg)
 {
     const std::string state = firstToken(msg->data);
+    landing_search_yaw_active = isLandingSearchYawScanState(state);
     const bool next_active = isLandingSearchHighSpeedState(state);
-    if (next_active == landing_search_speed_active) return;
+    if (next_active == landing_search_speed_active)
+    {
+        if (landing_search_yaw_active)
+            ROS_INFO_THROTTLE(2.0, "[landing_search_yaw] direct yaw override active, state=%s",
+                              state.c_str());
+        return;
+    }
 
     landing_search_speed_active = next_active;
     ROS_WARN("[landing_search_speed] state=%s horizontal limit=%.2fm/s",
              state.c_str(),
              landing_search_speed_active ? landing_search_max_cmd_speed_xy : max_cmd_speed_xy);
+}
+
+void Ctrl::landing_search_yaw_cb(const quadrotor_msgs::PositionCommand::ConstPtr& msg)
+{
+    if (!std::isfinite(msg->yaw)) return;
+    landing_search_yaw = wrapAngle(msg->yaw);
+    have_landing_search_yaw = true;
+    last_landing_search_yaw_time = ros::Time::now();
 }
 
 // ===============================================
@@ -550,6 +588,11 @@ void Ctrl::control(const ros::TimerEvent&)
     // 只有在解锁(armed)时允许非零速度生效。
     bool armed = current_state.armed;
     bool allow_nonzero = armed;
+    const bool landing_search_yaw_fresh =
+        have_landing_search_yaw &&
+        (ros::Time::now() - last_landing_search_yaw_time).toSec() <= 0.5;
+    const bool use_landing_search_yaw =
+        landing_search_yaw_active && landing_search_yaw_fresh;
 
     // 初始化 current_goal 的 header/frame/type_mask（心跳也会发布）
     current_goal.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
@@ -701,7 +744,9 @@ void Ctrl::control(const ros::TimerEvent&)
         current_goal.acceleration_or_force.x = 0.0;
         current_goal.acceleration_or_force.y = 0.0;
         current_goal.acceleration_or_force.z = 0.0;
-        current_goal.yaw = ever_received_trajectory ? timeout_hold_yaw : now_yaw;
+        current_goal.yaw = use_landing_search_yaw
+                               ? landing_search_yaw
+                               : (ever_received_trajectory ? timeout_hold_yaw : now_yaw);
         local_pos_pub.publish(current_goal);
         last_cmd_vx = current_goal.velocity.x;
         last_cmd_vy = current_goal.velocity.y;
@@ -824,7 +869,10 @@ void Ctrl::control(const ros::TimerEvent&)
     // 2026-07-20: 控制器必须直接执行规划器的平滑ego_yaw，使Gazebo实机、RViz机体和规划航向框
     // 使用同一航向源；旧逻辑按瞬时速度重新计算yaw，会在低速/重规划时与框不一致并产生跳变。
     double desire_yaw = current_yaw;
-    if (allow_yaw && std::isfinite(ego_yaw)) desire_yaw = ego_yaw;
+    if (use_landing_search_yaw)
+        desire_yaw = landing_search_yaw;
+    else if (allow_yaw && std::isfinite(ego_yaw))
+        desire_yaw = ego_yaw;
     desire_yaw = wrapAngle(desire_yaw);
 
     current_goal.type_mask = velocity_mask;

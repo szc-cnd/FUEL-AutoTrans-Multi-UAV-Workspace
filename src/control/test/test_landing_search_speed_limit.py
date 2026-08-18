@@ -17,6 +17,10 @@ def test_landing_search_speed_is_state_gated():
     assert "landing_search_max_cmd_speed_xy" in code
     assert "landing_search_max_reverse_speed" in code
     assert "landing_search_speed_active && !landing_requested" in code
+    assert "isLandingSearchYawScanState" in code
+    assert "landing_search_yaw_cb" in code
+    assert "landing_search_yaw_active" in code
+    assert "use_landing_search_yaw" in code
 
 
 def test_platform_handoff_does_not_bypass_precision_landing():
@@ -37,5 +41,6 @@ def test_platform_handoff_does_not_bypass_precision_landing():
 def test_landing_search_speed_defaults_are_wired_in_launch():
     launch = LAUNCH.read_text(encoding="utf-8")
     assert 'name="landing_search_state_topic"' in launch
+    assert 'name="landing_search_yaw_topic"' in launch
     assert 'name="max_cmd_speed_xy" value="0.20"' in launch
     assert 'name="landing_search_max_cmd_speed_xy" value="0.50"' in launch
