@@ -36,6 +36,17 @@ DynamicObjectDetection makeDetection(const double stamp,
   return makeDetectionAt(stamp, 1.0, 0.2, 0.6, realtime_only, provisional);
 }
 
+DynamicObjectDetection withMeasuredVelocity(DynamicObjectDetection detection,
+                                            const double vx,
+                                            const double vy,
+                                            const double vz) {
+  detection.measured_velocity.x = vx;
+  detection.measured_velocity.y = vy;
+  detection.measured_velocity.z = vz;
+  detection.measured_velocity_valid = true;
+  return detection;
+}
+
 std_msgs::Header makeHeader(const double stamp) {
   std_msgs::Header header;
   header.frame_id = "map";
@@ -85,6 +96,34 @@ TEST(DynamicObjectTrackerTest, GenericFirstHitKeepsOriginalMotionGate) {
   const auto result = tracker.processDynamicTracks(
       makeHeader(20.0), {makeDetection(20.0, false, false)});
   EXPECT_TRUE(result.dynamic_objects_msg.objects.empty());
+}
+
+TEST(DynamicObjectTrackerTest, CorridorMeasuredVelocityReachesOutputAndCoastClearsIt) {
+  ros::NodeHandle pnh("~tracker_corridor_measured_velocity");
+  pnh.setParam("tracking_publish_corridor_provisional", true);
+  pnh.setParam("tracking_corridor_provisional_min_hits", 1);
+  pnh.setParam("tracking_corridor_realtime_max_publish_missed_frames", 3);
+
+  DynamicObjectTracker tracker(pnh);
+  const auto first = tracker.processDynamicTracks(
+      makeHeader(25.0),
+      {withMeasuredVelocity(
+          makeDetectionAt(25.0, 1.0, 0.2, 0.6, true, true, 8U),
+          0.75, -0.20, 0.05)});
+  ASSERT_EQ(first.dynamic_objects_msg.objects.size(), 1U);
+  const auto& current_state = first.dynamic_objects_msg.objects.front().model_state;
+  ASSERT_GE(current_state.size(), 6U);
+  EXPECT_NEAR(current_state[3], 0.75, 1e-9);
+  EXPECT_NEAR(current_state[4], -0.20, 1e-9);
+  EXPECT_NEAR(current_state[5], 0.05, 1e-9);
+
+  const auto coast = tracker.processDynamicTracks(makeHeader(25.1), {});
+  ASSERT_EQ(coast.dynamic_objects_msg.objects.size(), 1U);
+  const auto& coast_state = coast.dynamic_objects_msg.objects.front().model_state;
+  ASSERT_GE(coast_state.size(), 6U);
+  EXPECT_DOUBLE_EQ(coast_state[3], 0.0);
+  EXPECT_DOUBLE_EQ(coast_state[4], 0.0);
+  EXPECT_DOUBLE_EQ(coast_state[5], 0.0);
 }
 
 TEST(DynamicObjectTrackerTest, CorridorFarJumpCannotReuseExistingId) {

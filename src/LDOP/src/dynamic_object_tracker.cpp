@@ -747,6 +747,17 @@ Eigen::VectorXd stateForModel(const MotionModelType model_type,
   return Eigen::VectorXd();
 }
 
+void applyMeasuredVelocity(KalmanFilterBase& filter,
+                           const geometry_msgs::Vector3& measured_velocity) {
+  if (!std::isfinite(measured_velocity.x) || !std::isfinite(measured_velocity.y) ||
+      !std::isfinite(measured_velocity.z)) {
+    return;
+  }
+  filter.setVelocity(Eigen::Vector3d(measured_velocity.x,
+                                     measured_velocity.y,
+                                     measured_velocity.z));
+}
+
 ClassificationSizeUpdate updateClassificationSizeState(
     TrackState& track,
     const DynamicObjectDetection& detection,
@@ -1581,6 +1592,9 @@ void DynamicObjectTracker::updateMatchedTrack(TrackState& track,
   } else {
     track.filter->update(pointToEigen(detection.bbox.center));
   }
+  if (detection.measured_velocity_valid && isCorridorRealtimeTrack(track)) {
+    applyMeasuredVelocity(*track.filter, detection.measured_velocity);
+  }
   if (track.motion_evidence_frames >= config_.motion_min_evidence_frames &&
       track.filter->velocity().norm() >= config_.motion_confirmation_speed) {
     track.motion_confirmed = true;
@@ -1677,6 +1691,9 @@ void DynamicObjectTracker::createTrack(const DynamicObjectDetection& detection, 
   // 参考 LDOT：新轨迹直接以首帧 detection 中心初始化状态，避免首帧仍被 Kalman 增益
   // 拉向原点/旧参考点，导致蓝色轨迹头落在无人机与目标之间。
   track.filter->initialize(pointToEigen(detection.bbox.center));
+  if (detection.measured_velocity_valid && isCorridorRealtimeCandidate(detection)) {
+    applyMeasuredVelocity(*track.filter, detection.measured_velocity);
+  }
   track.bbox = detection.bbox;
   track.object_class = ObjectClass::Unknown;
   track.corridor_realtime_only = isCorridorRealtimeCandidate(detection);

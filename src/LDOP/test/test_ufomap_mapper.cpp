@@ -364,6 +364,12 @@ TEST(UfomapMapperTest, CorridorLateralMotionBecomesConfirmed) {
 
   EXPECT_GT(last_result.runtime_stats.corridor_confirmed_point_count, 0U);
   EXPECT_GT(last_result.classification.dynamic_point_count, 0U);
+  ASSERT_FALSE(last_result.classification.dynamic_cluster_points.empty());
+  const auto& cluster_point = last_result.classification.dynamic_cluster_points.front();
+  EXPECT_TRUE(cluster_point.measured_velocity_valid);
+  EXPECT_GT(std::hypot(cluster_point.measured_velocity.x,
+                       cluster_point.measured_velocity.y),
+            0.10);
 }
 
 TEST(UfomapMapperTest, SingleVoxelLateralNoiseNeverBecomesConfirmed) {

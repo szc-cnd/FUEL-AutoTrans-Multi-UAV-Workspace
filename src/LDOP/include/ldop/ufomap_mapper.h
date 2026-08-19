@@ -239,6 +239,9 @@ struct UfomapDynamicClusterPoint {
   bool realtime_only{false};
   // 未完成动静态确认的通道候选可单独标记为 provisional，供 tracker 提前发布。
   bool provisional{false};
+  // 通道状态机的多帧质心速度，沿世界坐标传给 tracker；普通点无效。
+  ufo::Point measured_velocity{};
+  bool measured_velocity_valid{false};
   // 通道检测层的稳定轨迹 ID，仅在 LDOP 内部传递，用于避免下游再次按空间
   // 猜测身份后产生 ID 跳变。0 表示普通动态点或来源未知。
   std::uint32_t corridor_source_track_id{0U};
@@ -393,6 +396,7 @@ class UfomapMapper {
     std::vector<bool> dynamic_indices;
     std::vector<bool> provisional_indices;
     std::vector<std::uint32_t> source_track_ids;
+    std::vector<ufo::Point> measured_velocities;
     // 候选过多时不发布为动态，但也不应立即写入静态地图。
     std::vector<bool> holdout_indices;
     // 仅标记已经由通道状态机确认释放为静态的原始点。地面滤波删除这些点时，

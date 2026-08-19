@@ -1168,6 +1168,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
   result.dynamic_indices.assign(points.size(), false);
   result.provisional_indices.assign(points.size(), false);
   result.source_track_ids.assign(points.size(), 0U);
+  result.measured_velocities.assign(points.size(), ufo::Point(0.0F, 0.0F, 0.0F));
   result.holdout_indices.assign(points.size(), false);
   result.released_static_indices.assign(points.size(), false);
   if (!config_.corridor_dynamic_enabled || points.empty()) {
@@ -1926,6 +1927,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
           result.dynamic_indices[index] = true;
           result.provisional_indices[index] = !track->confirmed;
           result.source_track_ids[index] = track->id;
+          result.measured_velocities[index] = track->velocity;
           result.holdout_indices[index] = false;
         }
         if (track->confirmed) {
@@ -2034,6 +2036,8 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
   std::vector<bool> corridor_dynamic_output(output_points->size(), false);
   std::vector<bool> corridor_provisional_output(output_points->size(), false);
   std::vector<std::uint32_t> corridor_source_track_ids_output(output_points->size(), 0U);
+  std::vector<ufo::Point> corridor_measured_velocities_output(
+      output_points->size(), ufo::Point(0.0F, 0.0F, 0.0F));
   std::vector<bool> corridor_holdout_output(output_points->size(), false);
   std::vector<bool> corridor_dynamic_raw_kept(range_filtered_points->size(), false);
   std::vector<bool> corridor_raw_kept(range_filtered_points->size(), false);
@@ -2051,6 +2055,8 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
         corridor_candidates.provisional_indices[source_index];
     corridor_source_track_ids_output[output_index] =
         corridor_candidates.source_track_ids[source_index];
+    corridor_measured_velocities_output[output_index] =
+        corridor_candidates.measured_velocities[source_index];
     corridor_holdout_output[output_index] =
         corridor_candidates.holdout_indices[source_index];
     corridor_dynamic_raw_kept[source_index] = corridor_dynamic_output[output_index];
@@ -2147,6 +2153,12 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
               index < corridor_source_track_ids_output.size()
                   ? corridor_source_track_ids_output[index]
                   : 0U;
+          cluster_point.measured_velocity =
+              index < corridor_measured_velocities_output.size()
+                  ? corridor_measured_velocities_output[index]
+                  : ufo::Point(0.0F, 0.0F, 0.0F);
+          cluster_point.measured_velocity_valid =
+              cluster_point.corridor_source_track_id != 0U;
         } else {
           const auto code = runtime.map.toCodeChecked(point);
           if (!code.has_value()) {
@@ -2196,6 +2208,11 @@ UfomapFrameResult UfomapMapper::processInputCloud(const sensor_msgs::PointCloud2
           source_index < corridor_candidates.source_track_ids.size()
               ? corridor_candidates.source_track_ids[source_index]
               : 0U;
+      cluster_point.measured_velocity =
+          source_index < corridor_candidates.measured_velocities.size()
+              ? corridor_candidates.measured_velocities[source_index]
+              : ufo::Point(0.0F, 0.0F, 0.0F);
+      cluster_point.measured_velocity_valid = cluster_point.corridor_source_track_id != 0U;
       classification.dynamic_cluster_points.push_back(cluster_point);
     }
 
