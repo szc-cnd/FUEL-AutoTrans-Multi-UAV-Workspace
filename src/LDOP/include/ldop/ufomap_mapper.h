@@ -65,6 +65,7 @@ struct UfomapMapperConfig {
   // 更早的点仍保持 holdout，避免首帧采样抖动直接触发规划。
   int corridor_min_publish_hits{2};
   double corridor_min_lateral_speed{0.1};
+  double corridor_max_lateral_speed{1.2};
   double corridor_min_lateral_span{0.15};
   // 未知区域中的紧凑候选先按实时障碍输出；只有稳定静止后才释放到静态图。
   bool corridor_publish_unknown_as_dynamic{true};
@@ -73,6 +74,10 @@ struct UfomapMapperConfig {
   int corridor_confirmed_static_confirm_frames{15};
   double corridor_static_lateral_speed{0.08};
   double corridor_forward_alignment_cos{0.85};
+  bool corridor_ego_motion_rejection_enabled{true};
+  double corridor_ego_motion_min_speed{0.10};
+  double corridor_ego_motion_alignment_cos{0.80};
+  int corridor_ego_static_confirm_frames{2};
   int corridor_max_missed_frames{5};
   // mapper 内部身份保留与 planner-facing 输出保活分离；仅用于跨短时遮挡重关联。
   int corridor_internal_max_missed_frames{12};
@@ -143,12 +148,17 @@ struct UfomapMapperParams {
   int corridor_min_confirm_hits{3};
   int corridor_min_publish_hits{2};
   double corridor_min_lateral_speed{0.1};
+  double corridor_max_lateral_speed{1.2};
   double corridor_min_lateral_span{0.15};
   bool corridor_publish_unknown_as_dynamic{true};
   int corridor_static_confirm_frames{4};
   int corridor_confirmed_static_confirm_frames{15};
   double corridor_static_lateral_speed{0.08};
   double corridor_forward_alignment_cos{0.85};
+  bool corridor_ego_motion_rejection_enabled{true};
+  double corridor_ego_motion_min_speed{0.10};
+  double corridor_ego_motion_alignment_cos{0.80};
+  int corridor_ego_static_confirm_frames{2};
   int corridor_max_missed_frames{5};
   int corridor_internal_max_missed_frames{12};
   double corridor_internal_track_timeout{1.2};
