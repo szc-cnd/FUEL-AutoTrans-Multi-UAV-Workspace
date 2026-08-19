@@ -36,13 +36,6 @@ struct SwingCollisionResult
 class SwingObstacleGuard
 {
 public:
-  enum class ObservationState
-  {
-    EMPTY,
-    MEASURED,
-    PREDICTION_ONLY,
-    STALE
-  };
   struct Config
   {
     double corridor_width{1.5};
@@ -52,9 +45,6 @@ public:
     double horizontal_margin{0.10};
     double vertical_margin{0.10};
     double observation_retention{0.80};
-    double measurement_freshness{0.25};
-    double prediction_only_timeout{1.50};
-    double logical_track_reset_timeout{3.0};
     // 新 ID 在短时遮挡后可接管旧摆球历史；不满足空间/尺寸/运动门限时不继承。
     double identity_handoff_max_gap{2.0};
     double identity_handoff_position_gate{0.65};
@@ -83,14 +73,6 @@ public:
               double observation_time);
   void clear();
 
-  ObservationState observationState(double now) const;
-  bool hasRecentMeasurement(double now, double max_age = 0.25) const;
-  bool hasLogicalTrack(double now) const;
-  bool logicalTrackSnapshot(double now,
-                            SwingObstacleObservation *observation,
-                            double *minimum_bottom_z = nullptr,
-                            double *first_observation_time = nullptr) const;
-
   bool findCollision(const std::vector<SwingTrajectorySample> &trajectory,
                      double query_time,
                      SwingCollisionResult *result = nullptr) const;
@@ -116,18 +98,14 @@ private:
     double first_observation_time{0.0};
     double minimum_bottom_z{0.0};
     double observation_time{0.0};
-    ObservationState state{ObservationState::MEASURED};
   };
 
   Config config_;
-  // 通道场景只允许一个主要摆球。map 的 key 固定为0，观测中的 LDOP ID
-  // 仅用于日志，不参与轨迹身份判断。
   std::unordered_map<uint32_t, Track> tracks_;
 
   static Config sanitizeConfig(const Config &config);
-  double associationCost(const Track &track,
-                         const SwingObstacleObservation &observation,
-                         double observation_time) const;
+  std::unordered_map<uint32_t, Track>::iterator findIdentityHandoff(
+      const SwingObstacleObservation &observation, double observation_time);
 };
 
 } // namespace diff_planner

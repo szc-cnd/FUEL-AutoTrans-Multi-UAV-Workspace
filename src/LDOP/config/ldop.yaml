@@ -51,17 +51,12 @@ corridor_history_frames: 5
 corridor_min_confirm_hits: 3
 corridor_min_publish_hits: 2  # 未确认候选连续命中2帧后才送规划器，首帧仍只做静态图 holdout
 corridor_min_lateral_speed: 0.10
-corridor_max_lateral_speed: 1.20  # 超高速横向质心跳变视为关联/采样噪声，不作为摆球运动证据
 corridor_min_lateral_span: 0.12  # 确认前最近窗口内至少累计的横向位移，单位m
-corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇还需连续横向运动且通过自运动拒绝后才临时输出
+corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇短时关联后按实时障碍输出，首帧不写死到静态图
 corridor_static_confirm_frames: 4  # 10Hz点云下连续约0.4s无横向运动后才释放为静态
 corridor_confirmed_static_confirm_frames: 15  # 已确认摆球端点会短暂停速，连续约1.5s静止才降为静态
 corridor_static_lateral_speed: 0.08  # 低于该横向速度视为静止证据
 corridor_forward_alignment_cos: 0.85  # 速度近似沿无人机前后方向时归为静态候选
-corridor_ego_motion_rejection_enabled: true  # 拒绝与无人机水平速度同轴的质心漂移，避免自运动误判
-corridor_ego_motion_min_speed: 0.10  # 无人机水平速度低于该值时不启用自运动方向门
-corridor_ego_motion_alignment_cos: 0.80  # 同向或反向夹角小于约37度视为自运动采样漂移
-corridor_ego_static_confirm_frames: 2  # 自运动疑似静态簇约0.2s后回填静态点云
 corridor_max_missed_frames: 5  # 同一障碍允许丢失约0.5s，仅保留最后真实位置
 corridor_internal_max_missed_frames: 12  # 仅用于mapper内部身份重关联，planner-facing保活不变
 corridor_internal_track_timeout: 1.20

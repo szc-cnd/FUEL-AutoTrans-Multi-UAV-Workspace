@@ -86,9 +86,10 @@ bool estimateHarmonicMotion(
   std::sort(half_periods.begin(), half_periods.end());
 
   const double center = 0.5 * (observed_minimum + observed_maximum);
-  // 使用实际观测端点形成的半幅值，预测始终落在历史摆动包络内；half_width
-  // 只作为通道物理上限。这样不依赖车辆是否正好位于通道中线。
-  const double amplitude = std::min(0.5 * observed_span, half_width);
+  const double corridor_limited_amplitude =
+      std::min(center + half_width, half_width - center);
+  const double amplitude =
+      std::min(0.5 * observed_span, corridor_limited_amplitude);
   if (amplitude < 0.5 * config.harmonic_min_motion_span)
     return false;
 
@@ -131,16 +132,6 @@ SwingObstacleGuard::Config SwingObstacleGuard::sanitizeConfig(const Config &conf
   sanitized.horizontal_margin = nonnegativeOr(config.horizontal_margin, 0.10);
   sanitized.vertical_margin = nonnegativeOr(config.vertical_margin, 0.10);
   sanitized.observation_retention = positiveOr(config.observation_retention, 0.80);
-  sanitized.measurement_freshness =
-      positiveOr(config.measurement_freshness, 0.25);
-  sanitized.prediction_only_timeout =
-      positiveOr(config.prediction_only_timeout, 1.50);
-  sanitized.measurement_freshness = std::min(
-      sanitized.measurement_freshness, sanitized.prediction_only_timeout);
-  sanitized.logical_track_reset_timeout =
-      positiveOr(config.logical_track_reset_timeout, 3.0);
-  sanitized.logical_track_reset_timeout = std::max(
-      sanitized.logical_track_reset_timeout, sanitized.prediction_only_timeout);
   sanitized.underpass_learning_time =
       nonnegativeOr(config.underpass_learning_time, 3.0);
   sanitized.velocity_deadband = nonnegativeOr(config.velocity_deadband, 0.08);
@@ -169,48 +160,78 @@ SwingObstacleGuard::Config SwingObstacleGuard::sanitizeConfig(const Config &conf
   return sanitized;
 }
 
-double SwingObstacleGuard::associationCost(
-    const Track &track, const SwingObstacleObservation &observation,
-    const double observation_time) const
+std::unordered_map<uint32_t, SwingObstacleGuard::Track>::iterator
+SwingObstacleGuard::findIdentityHandoff(
+    const SwingObstacleObservation &observation, const double observation_time)
 {
-  const double dt = std::max(0.0, observation_time - track.observation_time);
-  if (dt > config_.logical_track_reset_timeout)
-    return std::numeric_limits<double>::infinity();
-  const double prediction_dt = std::min(dt, config_.prediction_only_timeout);
-  const Eigen::Vector3d predicted =
-      track.observation.position + prediction_dt * track.motion_hint;
-  const Eigen::Vector3d delta = observation.position - predicted;
-  const double horizontal_distance = delta.head<2>().norm();
-  const double gate = std::min(
-      1.10, config_.identity_handoff_position_gate +
-                prediction_dt * std::max(0.25, track.motion_hint.head<2>().norm()));
-  if (!std::isfinite(horizontal_distance) || horizontal_distance > gate ||
-      std::abs(delta.z()) > 0.40)
-    return std::numeric_limits<double>::infinity();
-
-  double size_penalty = 0.0;
-  for (int axis = 0; axis < 3; ++axis)
+  auto best = tracks_.end();
+  double best_score = std::numeric_limits<double>::infinity();
+  std::size_t compatible_candidates = 0U;
+  for (auto it = tracks_.begin(); it != tracks_.end(); ++it)
   {
-    const double old_size = track.observation.size(axis);
-    const double new_size = observation.size(axis);
-    if (old_size <= 1.0e-3 || new_size <= 1.0e-3)
+    const Track &candidate = it->second;
+    const double gap = observation_time - candidate.observation_time;
+    if (it->first == observation.id || gap <= 1.0e-3 ||
+        gap > config_.identity_handoff_max_gap)
       continue;
-    const double ratio = std::min(old_size, new_size) /
-                         std::max(old_size, new_size);
-    if (ratio < config_.identity_handoff_size_ratio)
-      return std::numeric_limits<double>::infinity();
-    size_penalty += 1.0 - ratio;
+
+    const Eigen::Vector3d delta = observation.position - candidate.observation.position;
+    const double horizontal_distance = delta.head<2>().norm();
+    if (!std::isfinite(horizontal_distance) ||
+        horizontal_distance > config_.identity_handoff_position_gate ||
+        std::abs(delta.z()) > 0.35)
+      continue;
+
+    bool size_compatible = true;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      const double old_size = candidate.observation.size(axis);
+      const double new_size = observation.size(axis);
+      if (old_size > 1.0e-3 && new_size > 1.0e-3)
+      {
+        const double ratio = std::min(old_size, new_size) /
+                             std::max(old_size, new_size);
+        size_compatible = size_compatible &&
+                          ratio >= config_.identity_handoff_size_ratio;
+      }
+    }
+    if (!size_compatible)
+      continue;
+
+    // 静态墙边碎片不能仅凭“距离近”继承摆球历史；要求旧轨迹已有
+    // 横向运动证据或至少观察到足够的横向跨度。
+    double horizontal_span = 0.0;
+    if (!candidate.position_history.empty())
+    {
+      double min_x = candidate.position_history.front().position.x();
+      double max_x = min_x;
+      double min_y = candidate.position_history.front().position.y();
+      double max_y = min_y;
+      for (const Track::TimedPosition &sample : candidate.position_history)
+      {
+        min_x = std::min(min_x, sample.position.x());
+        max_x = std::max(max_x, sample.position.x());
+        min_y = std::min(min_y, sample.position.y());
+        max_y = std::max(max_y, sample.position.y());
+      }
+      horizontal_span = std::max(max_x - min_x, max_y - min_y);
+    }
+    const double horizontal_speed = candidate.motion_hint.head<2>().norm();
+    if (candidate.position_history.size() < 4U ||
+        (horizontal_speed < config_.minimum_swing_speed &&
+         horizontal_span < config_.harmonic_min_motion_span))
+      continue;
+
+    const double score = horizontal_distance + 0.05 * gap;
+    ++compatible_candidates;
+    if (score < best_score)
+    {
+      best = it;
+      best_score = score;
+    }
   }
-
-  double direction_penalty = 0.0;
-  const Eigen::Vector2d old_velocity = track.motion_hint.head<2>();
-  const Eigen::Vector2d new_velocity = observation.velocity.head<2>();
-  if (old_velocity.norm() > 0.08 && new_velocity.norm() > 0.08 &&
-      old_velocity.dot(new_velocity) < 0.0)
-    direction_penalty = 0.10;
-
-  return horizontal_distance + 1.5 * std::abs(delta.z()) +
-         0.08 * size_penalty + direction_penalty;
+  // 同时有多个旧目标符合门限时身份不唯一，宁可重新学习也不错误串轨。
+  return compatible_candidates == 1U ? best : tracks_.end();
 }
 
 void SwingObstacleGuard::update(
@@ -220,172 +241,82 @@ void SwingObstacleGuard::update(
   if (!std::isfinite(observation_time))
     return;
 
-  std::vector<SwingObstacleObservation> valid_observations;
-  valid_observations.reserve(observations.size());
   for (const SwingObstacleObservation &observation : observations)
   {
-    if (finiteObservation(observation))
-      valid_observations.push_back(observation);
-  }
+    if (!finiteObservation(observation))
+      continue;
 
-  constexpr uint32_t kLogicalTrackKey = 0U;
-  auto existing = tracks_.find(kLogicalTrackKey);
-  if (existing != tracks_.end() &&
-      observation_time - existing->second.observation_time >
-          config_.logical_track_reset_timeout)
-  {
-    tracks_.clear();
-    existing = tracks_.end();
-  }
-
-  if (valid_observations.empty())
-  {
+    auto existing = tracks_.find(observation.id);
+    if (existing == tracks_.end())
+    {
+      auto handoff = findIdentityHandoff(observation, observation_time);
+      if (handoff != tracks_.end())
+      {
+        // 只迁移历史，不把旧 ID 同时保留为第二个障碍物；规划器从这一帧
+        // 起继续使用新 ID，但简谐周期、端点和最低高度学习不被清零。
+        Track inherited = std::move(handoff->second);
+        tracks_.erase(handoff);
+        inherited.observation.id = observation.id;
+        tracks_.emplace(observation.id, std::move(inherited));
+        existing = tracks_.find(observation.id);
+      }
+    }
+    Eigen::Vector3d motion_hint = observation.velocity;
+    const double object_bottom =
+        observation.position.z() - 0.5 * observation.size.z();
+    double first_observation_time = observation_time;
+    double minimum_bottom_z = object_bottom;
+    std::deque<Track::TimedPosition> position_history;
     if (existing != tracks_.end())
-      existing->second.state = observationState(observation_time);
-    return;
-  }
+    {
+      const double dt = observation_time - existing->second.observation_time;
+      const bool continuous_track =
+          dt >= 0.0 && dt <= config_.observation_retention;
+      if (dt > 1.0e-3 && continuous_track)
+      {
+        const Eigen::Vector3d finite_difference =
+            (observation.position - existing->second.observation.position) / dt;
+        if (finite_difference.head<2>().norm() > config_.velocity_deadband)
+          motion_hint = finite_difference;
+      }
 
-  std::size_t selected_index = 0U;
-  if (existing == tracks_.end())
-  {
-    double best_extent = -1.0;
-    double second_extent = -1.0;
-    for (std::size_t index = 0U; index < valid_observations.size(); ++index)
-    {
-      const double extent = valid_observations[index].size.norm();
-      if (extent > best_extent)
+      if (continuous_track &&
+          motion_hint.head<2>().norm() <= config_.velocity_deadband)
+        motion_hint = existing->second.motion_hint;
+
+      if (continuous_track)
       {
-        second_extent = best_extent;
-        best_extent = extent;
-        selected_index = index;
-      }
-      else if (extent > second_extent)
-        second_extent = extent;
-    }
-    // 初次出现多个近似尺寸候选时没有历史可判定唯一摆球，保持空轨迹。
-    if (second_extent >= 0.0 && best_extent - second_extent < 0.05)
-      return;
-  }
-  else
-  {
-    double best_cost = std::numeric_limits<double>::infinity();
-    double second_cost = std::numeric_limits<double>::infinity();
-    for (std::size_t index = 0U; index < valid_observations.size(); ++index)
-    {
-      const double cost = associationCost(existing->second,
-                                          valid_observations[index],
-                                          observation_time);
-      if (cost < best_cost)
-      {
-        second_cost = best_cost;
-        best_cost = cost;
-        selected_index = index;
-      }
-      else if (cost < second_cost)
-      {
-        second_cost = cost;
+        first_observation_time = existing->second.first_observation_time;
+        minimum_bottom_z =
+            std::min(existing->second.minimum_bottom_z, object_bottom);
+        position_history = existing->second.position_history;
       }
     }
-    if (!std::isfinite(best_cost) ||
-        (std::isfinite(second_cost) && second_cost - best_cost < 0.08))
-    {
-      existing->second.state = observationState(observation_time);
-      return;
-    }
+
+    position_history.push_back({observation_time, observation.position});
+    while (position_history.size() >
+           static_cast<std::size_t>(config_.harmonic_max_history_samples))
+      position_history.pop_front();
+
+    Track track;
+    track.observation = observation;
+    track.motion_hint = motion_hint;
+    track.position_history = std::move(position_history);
+    track.first_observation_time = first_observation_time;
+    track.minimum_bottom_z = minimum_bottom_z;
+    track.observation_time = observation_time;
+    tracks_[observation.id] = track;
   }
 
-  SwingObstacleObservation observation = valid_observations[selected_index];
-  // 对规划器暴露稳定的逻辑障碍编号。原始LDOP编号不参与任何状态迁移。
-  observation.id = 1U;
-  Eigen::Vector3d motion_hint = observation.velocity;
-  const double object_bottom =
-      observation.position.z() - 0.5 * observation.size.z();
-  double first_observation_time = observation_time;
-  double minimum_bottom_z = object_bottom;
-  std::deque<Track::TimedPosition> position_history;
-  if (existing != tracks_.end())
+  for (auto it = tracks_.begin(); it != tracks_.end();)
   {
-    const double dt = observation_time - existing->second.observation_time;
-    const bool continuous_track =
-        dt >= 0.0 && dt <= config_.observation_retention;
-    if (dt > 1.0e-3 && continuous_track)
-    {
-      const Eigen::Vector3d finite_difference =
-          (observation.position - existing->second.observation.position) / dt;
-      if (finite_difference.head<2>().norm() > config_.velocity_deadband)
-        motion_hint = finite_difference;
-    }
-
-    if (continuous_track &&
-        motion_hint.head<2>().norm() <= config_.velocity_deadband)
-      motion_hint = existing->second.motion_hint;
-
-    if (continuous_track)
-    {
-      first_observation_time = existing->second.first_observation_time;
-      minimum_bottom_z =
-          std::min(existing->second.minimum_bottom_z, object_bottom);
-      position_history = existing->second.position_history;
-    }
+    bool remove = observation_time - it->second.observation_time >
+                  config_.observation_retention;
+    if (remove)
+      it = tracks_.erase(it);
+    else
+      ++it;
   }
-
-  position_history.push_back({observation_time, observation.position});
-  while (position_history.size() >
-         static_cast<std::size_t>(config_.harmonic_max_history_samples))
-    position_history.pop_front();
-
-  Track track;
-  track.observation = observation;
-  track.motion_hint = motion_hint;
-  track.position_history = std::move(position_history);
-  track.first_observation_time = first_observation_time;
-  track.minimum_bottom_z = minimum_bottom_z;
-  track.observation_time = observation_time;
-  track.state = ObservationState::MEASURED;
-  tracks_[kLogicalTrackKey] = track;
-}
-
-SwingObstacleGuard::ObservationState SwingObstacleGuard::observationState(
-    const double now) const
-{
-  if (tracks_.empty() || !std::isfinite(now))
-    return ObservationState::EMPTY;
-  const double age = std::max(0.0, now - tracks_.begin()->second.observation_time);
-  if (age <= config_.measurement_freshness)
-    return ObservationState::MEASURED;
-  if (age <= config_.prediction_only_timeout)
-    return ObservationState::PREDICTION_ONLY;
-  if (age <= config_.logical_track_reset_timeout)
-    return ObservationState::STALE;
-  return ObservationState::EMPTY;
-}
-
-bool SwingObstacleGuard::hasRecentMeasurement(const double now,
-                                              const double max_age) const
-{
-  return !tracks_.empty() && std::isfinite(now) &&
-         now - tracks_.begin()->second.observation_time <= std::max(0.0, max_age);
-}
-
-bool SwingObstacleGuard::hasLogicalTrack(const double now) const
-{
-  return observationState(now) != ObservationState::EMPTY;
-}
-
-bool SwingObstacleGuard::logicalTrackSnapshot(
-    const double now, SwingObstacleObservation *observation,
-    double *minimum_bottom_z, double *first_observation_time) const
-{
-  if (tracks_.empty() || observationState(now) == ObservationState::EMPTY)
-    return false;
-  const Track &track = tracks_.begin()->second;
-  if (observation != nullptr)
-    *observation = track.observation;
-  if (minimum_bottom_z != nullptr)
-    *minimum_bottom_z = track.minimum_bottom_z;
-  if (first_observation_time != nullptr)
-    *first_observation_time = track.first_observation_time;
-  return true;
 }
 
 void SwingObstacleGuard::clear()
@@ -461,7 +392,7 @@ bool SwingObstacleGuard::findCollision(
   {
     const Track &track = entry.second;
     const double age = std::max(0.0, query_time - track.observation_time);
-    if (age > config_.prediction_only_timeout || !finiteObservation(track.observation))
+    if (age > config_.observation_retention || !finiteObservation(track.observation))
       continue;
 
     const double object_radius =

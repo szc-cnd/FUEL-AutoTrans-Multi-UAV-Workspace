@@ -149,11 +149,11 @@ TEST(SwingObstacleGuard, NewIdInheritsRecentSwingHistory)
       {0.5, Eigen::Vector3d(0.5, 0.0, 0.6)}};
   SwingCollisionResult result;
   ASSERT_TRUE(guard.findCollision(trajectory, 2.0, &result));
-  EXPECT_EQ(result.obstacle_id, 1U);
+  EXPECT_EQ(result.obstacle_id, 8U);
   EXPECT_NEAR(result.time_from_now, 0.5, 1.0e-12);
 }
 
-TEST(SwingObstacleGuard, LogicalTrackIgnoresLdopId)
+TEST(SwingObstacleGuard, NewIdDoesNotInheritStaticNearbyTrack)
 {
   SwingObstacleGuard::Config config;
   config.enable_harmonic_prediction = true;
@@ -173,17 +173,16 @@ TEST(SwingObstacleGuard, LogicalTrackIgnoresLdopId)
 
   SwingObstacleObservation new_fragment = static_fragment;
   new_fragment.id = 22;
-  new_fragment.position.y() = 0.24;
-  new_fragment.velocity.y() = 0.4;
+  new_fragment.position.y() = 0.70;
   guard.update({new_fragment}, 0.7);
 
   const std::vector<SwingTrajectorySample> trajectory = {
       {0.0, Eigen::Vector3d(0.0, 0.0, 0.6)},
-      {0.5, Eigen::Vector3d(0.5, 0.24, 0.6)}};
+      {0.5, Eigen::Vector3d(0.5, 0.2, 0.6)}};
   SwingCollisionResult result;
   ASSERT_TRUE(guard.findCollision(trajectory, 0.7, &result));
-  // LDOP 编号改变不创建第二条规划轨迹，规划器始终使用逻辑编号1。
-  EXPECT_EQ(result.obstacle_id, 1U);
+  // 没有运动证据时旧轨迹不会被迁移，旧ID仍按独立静态候选保留。
+  EXPECT_EQ(result.obstacle_id, 21U);
 }
 
 TEST(SwingObstacleGuard, RealtimeModeKeepsCurrentLateralPosition)
@@ -244,7 +243,7 @@ TEST(SwingObstacleGuard, BlocksSameHeightTimedIntersection)
 
   SwingCollisionResult result;
   ASSERT_TRUE(guard.findCollision(straightTrajectory(0.60), 10.0, &result));
-  EXPECT_EQ(result.obstacle_id, 1U);
+  EXPECT_EQ(result.obstacle_id, 7U);
   EXPECT_GE(result.time_from_now, 0.0);
   EXPECT_LE(result.time_from_now, 5.0);
 }
@@ -253,54 +252,7 @@ TEST(SwingObstacleGuard, DropsExpiredObservation)
 {
   SwingObstacleGuard guard;
   guard.update({ballAt(0.55)}, 10.0);
-  EXPECT_FALSE(guard.findCollision(straightTrajectory(0.60), 11.6, nullptr));
-}
-
-TEST(SwingObstacleGuard, EmptyFramesKeepOnePredictionOnlyTrack)
-{
-  SwingObstacleGuard guard;
-  guard.update({ballAt(0.55)}, 10.0);
-  guard.update({}, 10.6);
-
-  EXPECT_EQ(guard.observationState(10.6),
-            SwingObstacleGuard::ObservationState::PREDICTION_ONLY);
-  EXPECT_TRUE(guard.hasLogicalTrack(10.6));
-  EXPECT_FALSE(guard.hasRecentMeasurement(10.6, 0.25));
-  SwingObstacleObservation observation;
-  ASSERT_TRUE(guard.logicalTrackSnapshot(10.6, &observation));
-  EXPECT_EQ(observation.id, 1U);
-}
-
-TEST(SwingObstacleGuard, LogicalTrackBecomesStaleThenResets)
-{
-  SwingObstacleGuard guard;
-  guard.update({ballAt(0.55)}, 10.0);
-
-  EXPECT_EQ(guard.observationState(11.6),
-            SwingObstacleGuard::ObservationState::STALE);
-  EXPECT_TRUE(guard.hasLogicalTrack(12.9));
-  EXPECT_FALSE(guard.hasLogicalTrack(13.1));
-}
-
-TEST(SwingObstacleGuard, AmbiguousFrameDoesNotReplaceLogicalTrack)
-{
-  SwingObstacleGuard guard;
-  SwingObstacleObservation original = ballAt(0.55);
-  original.position.y() = 0.0;
-  guard.update({original}, 10.0);
-
-  SwingObstacleObservation left = original;
-  left.id = 20;
-  left.position.y() = -0.10;
-  SwingObstacleObservation right = original;
-  right.id = 21;
-  right.position.y() = 0.10;
-  guard.update({left, right}, 10.1);
-
-  SwingObstacleObservation retained;
-  ASSERT_TRUE(guard.logicalTrackSnapshot(10.1, &retained));
-  EXPECT_NEAR(retained.position.y(), 0.0, 1.0e-12);
-  EXPECT_EQ(retained.id, 1U);
+  EXPECT_FALSE(guard.findCollision(straightTrajectory(0.60), 11.0, nullptr));
 }
 
 } // namespace

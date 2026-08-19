@@ -340,8 +340,6 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.corridor_min_publish_hits = std::clamp(
       params.corridor_min_publish_hits, 1, config.corridor_history_frames);
   config.corridor_min_lateral_speed = std::max(0.0, params.corridor_min_lateral_speed);
-  config.corridor_max_lateral_speed = std::max(
-      config.corridor_min_lateral_speed, params.corridor_max_lateral_speed);
   config.corridor_min_lateral_span = std::max(0.0, params.corridor_min_lateral_span);
   config.corridor_publish_unknown_as_dynamic = params.corridor_publish_unknown_as_dynamic;
   config.corridor_static_confirm_frames = std::clamp(
@@ -353,15 +351,6 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
       0.0, params.corridor_static_lateral_speed);
   config.corridor_forward_alignment_cos = std::clamp(
       params.corridor_forward_alignment_cos, 0.0, 1.0);
-  config.corridor_ego_motion_rejection_enabled =
-      params.corridor_ego_motion_rejection_enabled;
-  config.corridor_ego_motion_min_speed = std::max(
-      0.0, params.corridor_ego_motion_min_speed);
-  config.corridor_ego_motion_alignment_cos = std::clamp(
-      params.corridor_ego_motion_alignment_cos, 0.0, 1.0);
-  config.corridor_ego_static_confirm_frames = std::clamp(
-      params.corridor_ego_static_confirm_frames, 1,
-      config.corridor_static_confirm_frames);
   config.corridor_max_missed_frames = std::max(0, params.corridor_max_missed_frames);
   config.corridor_internal_max_missed_frames = std::max(
       config.corridor_max_missed_frames, params.corridor_internal_max_missed_frames);
@@ -579,8 +568,6 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_min_publish_hits);
   pnh_.param("corridor_min_lateral_speed", params_.corridor_min_lateral_speed,
              defaults.corridor_min_lateral_speed);
-  pnh_.param("corridor_max_lateral_speed", params_.corridor_max_lateral_speed,
-             defaults.corridor_max_lateral_speed);
   pnh_.param("corridor_min_lateral_span", params_.corridor_min_lateral_span,
              defaults.corridor_min_lateral_span);
   pnh_.param("corridor_publish_unknown_as_dynamic",
@@ -595,18 +582,6 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_static_lateral_speed);
   pnh_.param("corridor_forward_alignment_cos", params_.corridor_forward_alignment_cos,
              defaults.corridor_forward_alignment_cos);
-  pnh_.param("corridor_ego_motion_rejection_enabled",
-             params_.corridor_ego_motion_rejection_enabled,
-             defaults.corridor_ego_motion_rejection_enabled);
-  pnh_.param("corridor_ego_motion_min_speed",
-             params_.corridor_ego_motion_min_speed,
-             defaults.corridor_ego_motion_min_speed);
-  pnh_.param("corridor_ego_motion_alignment_cos",
-             params_.corridor_ego_motion_alignment_cos,
-             defaults.corridor_ego_motion_alignment_cos);
-  pnh_.param("corridor_ego_static_confirm_frames",
-             params_.corridor_ego_static_confirm_frames,
-             defaults.corridor_ego_static_confirm_frames);
   pnh_.param("corridor_max_missed_frames", params_.corridor_max_missed_frames,
              defaults.corridor_max_missed_frames);
   pnh_.param("corridor_internal_max_missed_frames",
@@ -1245,29 +1220,6 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
   corridor_forward_y_ = std::sin(yaw);
   const double lateral_x = -corridor_forward_y_;
   const double lateral_y = corridor_forward_x_;
-  // FAST-LIO 在 cloud_registered 使用世界系点云，并在 Odom_high_freq 中
-  // 发布同一世界系速度。静态物体的可见表面会随视角变化造成质心漂移；
-  // 若该漂移与无人机水平速度近似共线（同向或反向），将其视为自运动采样
-  // 伪速度，而不是通道横向动态证据。
-  const double ego_velocity_x = odom_msg.twist.twist.linear.x;
-  const double ego_velocity_y = odom_msg.twist.twist.linear.y;
-  const double ego_horizontal_speed = std::hypot(ego_velocity_x, ego_velocity_y);
-  const auto egoMotionAligned = [&](const double velocity_x,
-                                    const double velocity_y) {
-    if (!config_.corridor_ego_motion_rejection_enabled ||
-        ego_horizontal_speed < config_.corridor_ego_motion_min_speed) {
-      return false;
-    }
-    const double observed_speed = std::hypot(velocity_x, velocity_y);
-    if (observed_speed < config_.corridor_static_lateral_speed) {
-      return false;
-    }
-    const double cosine = std::abs(
-        (velocity_x * ego_velocity_x + velocity_y * ego_velocity_y) /
-        (observed_speed * ego_horizontal_speed));
-    return std::isfinite(cosine) &&
-           cosine >= config_.corridor_ego_motion_alignment_cos;
-  };
 
   std::vector<double> left_wall_samples;
   std::vector<double> right_wall_samples;
@@ -1716,16 +1668,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
                                     cluster.center.z - previous_center.z);
       const double lateral_displacement = std::abs(
           dotHorizontal(center_delta, lateral_x, lateral_y));
-      const bool reactivation_ego_aligned = dt > 1e-3 &&
-          egoMotionAligned(static_cast<double>(center_delta.x) / dt,
-                           static_cast<double>(center_delta.y) / dt);
-      const bool reactivation_speed_plausible = dt > 1e-3 &&
-          lateral_displacement / dt <= config_.corridor_max_lateral_speed;
       bool reactivating = false;
       if (track->released_static) {
-        if (!reactivation_ego_aligned &&
-            reactivation_speed_plausible &&
-            lateral_displacement >= config_.corridor_reactivation_displacement) {
+        if (lateral_displacement >= config_.corridor_reactivation_displacement) {
           ++track->reactivation_evidence_frames;
         } else {
           track->reactivation_evidence_frames = 0U;
@@ -1819,18 +1764,15 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
             frame_velocity, corridor_forward_x_, corridor_forward_y_);
         const double frame_horizontal_speed = std::hypot(
             frame_lateral_velocity, frame_forward_velocity);
-        const bool frame_ego_motion_aligned = egoMotionAligned(
-            static_cast<double>(frame_velocity.x),
-            static_cast<double>(frame_velocity.y));
         const bool frame_forward_aligned = frame_horizontal_speed >=
                 config_.corridor_static_lateral_speed &&
             std::abs(frame_forward_velocity) / frame_horizontal_speed >=
                 config_.corridor_forward_alignment_cos;
         int direction = 0;
-        if (!frame_forward_aligned && !frame_ego_motion_aligned &&
+        if (!frame_forward_aligned &&
             frame_lateral_velocity >= config_.corridor_min_lateral_speed) {
           direction = 1;
-        } else if (!frame_forward_aligned && !frame_ego_motion_aligned &&
+        } else if (!frame_forward_aligned &&
                    frame_lateral_velocity <= -config_.corridor_min_lateral_speed) {
           direction = -1;
         }
@@ -1847,24 +1789,17 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
                                                   corridor_forward_x_, corridor_forward_y_);
     const double vertical_velocity = static_cast<double>(track->velocity.z);
     const double horizontal_speed = std::hypot(lateral_velocity, forward_velocity);
-    const bool ego_motion_aligned = egoMotionAligned(
-        static_cast<double>(track->velocity.x),
-        static_cast<double>(track->velocity.y));
-    const bool excessive_lateral_speed =
-        std::abs(lateral_velocity) > config_.corridor_max_lateral_speed;
     const bool forward_aligned = horizontal_speed >=
             config_.corridor_static_lateral_speed &&
         std::abs(forward_velocity) / horizontal_speed >=
             config_.corridor_forward_alignment_cos;
     const bool lateral_dominant =
         std::abs(lateral_velocity) >= config_.corridor_min_lateral_speed &&
-        std::abs(lateral_velocity) <= config_.corridor_max_lateral_speed &&
         !forward_aligned &&
-        !ego_motion_aligned &&
         std::abs(vertical_velocity) <= config_.corridor_max_vertical_speed;
     const bool stationary_or_forward =
         std::abs(lateral_velocity) <= config_.corridor_static_lateral_speed ||
-        forward_aligned || ego_motion_aligned || excessive_lateral_speed;
+        forward_aligned;
     std::size_t consecutive_direction = 0U;
     const int latest_direction = track->lateral_direction_history.empty()
         ? 0 : track->lateral_direction_history.back();
@@ -1955,9 +1890,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     const std::size_t static_release_frames = static_cast<std::size_t>(
         (track->confirmed || track->motion_qualified)
             ? config_.corridor_confirmed_static_confirm_frames
-            : ((ego_motion_aligned || excessive_lateral_speed)
-                   ? config_.corridor_ego_static_confirm_frames
-                   : config_.corridor_static_confirm_frames));
+            : config_.corridor_static_confirm_frames);
     if (!track->released_static &&
         (track->static_evidence_frames >= static_release_frames ||
          (!track->confirmed && unresolved_too_long))) {
@@ -1977,23 +1910,17 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       ROS_INFO_STREAM("Corridor candidate released static: id=" << track->id
                       << ", hits=" << track->hits
                       << ", lateral_speed=" << lateral_velocity
-                      << ", forward_speed=" << forward_velocity
-                      << ", ego_aligned=" << ego_motion_aligned
-                      << ", excessive_lateral=" << excessive_lateral_speed
-                      << ", ego_speed=" << ego_horizontal_speed);
+                      << ", forward_speed=" << forward_velocity);
     }
 
     if (!track->released_static) {
       result.candidate_point_count += cluster.indices.size();
       const bool has_publish_history =
           track->hits >= static_cast<std::size_t>(config_.corridor_min_publish_hits);
-      const bool provisional_motion_ready = continuous_lateral_motion &&
-          !ego_motion_aligned;
       const bool publish_current = cluster.indices.size() >=
               static_cast<std::size_t>(config_.corridor_min_cluster_points) &&
           (track->confirmed ||
-           (config_.corridor_publish_unknown_as_dynamic && has_publish_history &&
-            provisional_motion_ready));
+           (config_.corridor_publish_unknown_as_dynamic && has_publish_history));
       if (publish_current &&
           published_track_count < static_cast<std::size_t>(config_.corridor_max_candidates)) {
         for (const std::size_t index : cluster.indices) {
