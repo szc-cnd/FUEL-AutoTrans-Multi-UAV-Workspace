@@ -109,13 +109,23 @@ class LeaderSafePathFollower {
     // 2026-07-16: 接力点使用前机任务命名空间公开，后续实机可直接将该Path桥接给第二架无人机。
     pnh_.param<std::string>("relay_path_topic", relay_path_topic_,
                             "/UAV0/mission/relay_waypoints");
-    pnh_.param<std::string>("world_frame", world_frame_, "world");
-    pnh_.param("leader_offset_x", leader_offset_x_, 0.0);
-    pnh_.param("leader_offset_y", leader_offset_y_, 0.0);
-    pnh_.param("leader_offset_z", leader_offset_z_, 0.0);
-    pnh_.param("follower_offset_x", follower_offset_x_, -1.0);
-    pnh_.param("follower_offset_y", follower_offset_y_, 0.0);
-    pnh_.param("follower_offset_z", follower_offset_z_, 0.0);
+    const std::string alignment_prefix = "/dual_uav_frame_alignment";
+    if (!nh_.getParam(alignment_prefix + "/mission_frame", world_frame_) ||
+        !nh_.getParam(alignment_prefix + "/follower/x", follower_alignment_x_) ||
+        !nh_.getParam(alignment_prefix + "/follower/y", follower_alignment_y_) ||
+        !nh_.getParam(alignment_prefix + "/follower/z", follower_alignment_z_) ||
+        !nh_.getParam(alignment_prefix + "/follower/yaw_rad", follower_alignment_yaw_)) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: incomplete /dual_uav_frame_alignment parameters");
+    }
+    if (world_frame_.empty() || !std::isfinite(follower_alignment_x_) ||
+        !std::isfinite(follower_alignment_y_) ||
+        !std::isfinite(follower_alignment_z_) ||
+        !std::isfinite(follower_alignment_yaw_)) {
+      throw std::runtime_error("leader_safe_path_follower: invalid frame alignment");
+    }
+    follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
+    follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
     // 2026-07-24: 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留0.70m路径间距。
     pnh_.param("follow_distance", follow_distance_, 0.70);
     pnh_.param("release_path_length", release_path_length_, 0.70);
@@ -274,11 +284,12 @@ class LeaderSafePathFollower {
     ROS_INFO("[safe_follower] relay ready: executor=%s continuous_before_exit=%d follow=%.2fm, "
              "door + rolling internal + terminal, "
              "internal_limit=%d (0=unlimited), "
-             "release=%.2fm spacing=%.2fm offset=(%.2f,%.2f,%.2f)",
+             "release=%.2fm spacing=%.2fm alignment=(%.2f,%.2f,%.2f, yaw=%.3f)",
              use_diff_planner_ ? "UAV1_DIFF" : "LEGACY_POSITION_COMMAND",
              static_cast<int>(continuous_follow_before_exit_), follow_distance_,
              max_internal_relay_points_, relay_release_distance_, relay_waypoint_spacing_,
-             follower_offset_x_, follower_offset_y_, follower_offset_z_);
+             follower_alignment_x_, follower_alignment_y_, follower_alignment_z_,
+             follower_alignment_yaw_);
   }
 
  private:
@@ -294,27 +305,32 @@ class LeaderSafePathFollower {
   }
 
   geometry_msgs::Point leaderToWorld(const geometry_msgs::Point& local) const {
-    geometry_msgs::Point world = local;
-    world.x += leader_offset_x_;
-    world.y += leader_offset_y_;
-    world.z += leader_offset_z_;
-    return world;
+    return local;
   }
 
   geometry_msgs::Point followerToWorld(const geometry_msgs::Point& local) const {
-    geometry_msgs::Point world = local;
-    world.x += follower_offset_x_;
-    world.y += follower_offset_y_;
-    world.z += follower_offset_z_;
+    geometry_msgs::Point world;
+    world.x = follower_alignment_cos_ * local.x - follower_alignment_sin_ * local.y +
+              follower_alignment_x_;
+    world.y = follower_alignment_sin_ * local.x + follower_alignment_cos_ * local.y +
+              follower_alignment_y_;
+    world.z = local.z + follower_alignment_z_;
     return world;
   }
 
   geometry_msgs::Point worldToFollower(const geometry_msgs::Point& world) const {
-    geometry_msgs::Point local = world;
-    local.x -= follower_offset_x_;
-    local.y -= follower_offset_y_;
-    local.z -= follower_offset_z_;
+    const double dx = world.x - follower_alignment_x_;
+    const double dy = world.y - follower_alignment_y_;
+    geometry_msgs::Point local;
+    local.x = follower_alignment_cos_ * dx + follower_alignment_sin_ * dy;
+    local.y = -follower_alignment_sin_ * dx + follower_alignment_cos_ * dy;
+    local.z = world.z - follower_alignment_z_;
     return local;
+  }
+
+  double worldYawToFollower(double world_yaw) const {
+    return std::atan2(std::sin(world_yaw - follower_alignment_yaw_),
+                      std::cos(world_yaw - follower_alignment_yaw_));
   }
 
   // 2026-07-24: 前机里程计z不再通过接力路线传给后机；普通任务点只复用XY，
@@ -1410,7 +1426,7 @@ class LeaderSafePathFollower {
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_) {
       if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
-      publishCommand(target_local, terminal_target_world_.yaw, false);
+      publishCommand(target_local, worldYawToFollower(terminal_target_world_.yaw), false);
       publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
       if (!follower_landing_requested_ &&
           (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
@@ -1438,7 +1454,8 @@ class LeaderSafePathFollower {
         return;
       }
     }
-    publishCommand(short_target, terminal_target_world_.yaw, true, terminal_approach_speed_);
+    publishCommand(short_target, worldYawToFollower(terminal_target_world_.yaw), true,
+                   terminal_approach_speed_);
     publishTarget(terminal_target_world_.position);
     publishState("TERMINAL_APPROACH_NO_SEPARATION", 0.2, 1.0, 0.2);
     ROS_WARN_THROTTLE(1.0,
@@ -1518,7 +1535,8 @@ class LeaderSafePathFollower {
       }
     }
     continuous_blocked_since_ = ros::Time(0);
-    publishCommand(target_local, tracking_world.yaw, true, continuous_follow_speed_);
+    publishCommand(target_local, worldYawToFollower(tracking_world.yaw), true,
+                   continuous_follow_speed_);
     publishTarget(lagged_world.position);
     publishState("CONTINUOUS_FOLLOW_0P7M_XY", 0.1, 0.85, 1.0);
     ROS_INFO_THROTTLE(1.0,
@@ -1714,8 +1732,9 @@ class LeaderSafePathFollower {
                                  ? world_frame_ : follower_odom_.header.frame_id;
       // 2026-07-28: 恢复期间只给Diff一个位于前机已验证折线上的短目标，避免原远点反复碰撞。
       goal.pose.position = command_local;
-      goal.pose.orientation.w = std::cos(desired_world.yaw * 0.5);
-      goal.pose.orientation.z = std::sin(desired_world.yaw * 0.5);
+      const double local_yaw = worldYawToFollower(desired_world.yaw);
+      goal.pose.orientation.w = std::cos(local_yaw * 0.5);
+      goal.pose.orientation.z = std::sin(local_yaw * 0.5);
       diff_goal_pub_.publish(goal);
       diff_goal_index_ = active_relay_index_;
       diff_goal_published_ = true;
@@ -1839,7 +1858,7 @@ class LeaderSafePathFollower {
       if ((now - relay_arrival_stamp_).toSec() < relay_arrive_dwell_) {
         hold_target_latched_ = false;
         publishCommand(occupied_attachment ? current_local : desired_local,
-                       desired_world.yaw, false);
+                       worldYawToFollower(desired_world.yaw), false);
         publishState(occupied_attachment ? "RELAY_OCCUPIED_ATTACHMENT_DWELL"
                                          : "RELAY_ARRIVAL_DWELL",
                      0.2, 1.0, 0.2);
@@ -1856,7 +1875,7 @@ class LeaderSafePathFollower {
                   active_relay_index_ + 1, relay_waypoints_.size());
         // 2026-07-22: 正常抵达后把已验证接力点锁为等待目标；即使受扰离开，也会主动拉回而不是接受漂移后的位置。
         hold_target_local_ = occupied_attachment ? current_local : desired_local;
-        hold_target_yaw_ = desired_world.yaw;
+        hold_target_yaw_ = worldYawToFollower(desired_world.yaw);
         hold_target_latched_ = true;
         ++active_relay_index_;
         relay_arrival_stamp_ = ros::Time(0);
@@ -1867,7 +1886,7 @@ class LeaderSafePathFollower {
       }
 
       if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
-      publishCommand(target_local, desired_world.yaw, false);
+      publishCommand(target_local, worldYawToFollower(desired_world.yaw), false);
       publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
       if (!follower_landing_requested_ &&
           (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
@@ -1947,7 +1966,8 @@ class LeaderSafePathFollower {
                                : cruise_speed_;
     if (horizontal_error <= relay_slowdown_radius_)
       command_speed = std::min(command_speed, relay_approach_speed_);
-    publishCommand(target_local, tracking_world.yaw, true, command_speed);
+    publishCommand(target_local, worldYawToFollower(tracking_world.yaw), true,
+                   command_speed);
     publishTarget(desired_world.position);
     publishState(terminal_mode_active_ && active_relay_index_ == terminal_waypoint_index_
                      ? "GO_TERMINAL_RELAY"
@@ -2074,8 +2094,9 @@ class LeaderSafePathFollower {
   bool hold_target_latched_{false};
   geometry_msgs::Point hold_target_local_;
   double hold_target_yaw_{0.0};
-  double leader_offset_x_{0.0}, leader_offset_y_{0.0}, leader_offset_z_{0.0};
-  double follower_offset_x_{-1.0}, follower_offset_y_{0.0}, follower_offset_z_{0.0};
+  double follower_alignment_x_{-1.20}, follower_alignment_y_{0.0};
+  double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
+  double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.5}, follower_start_height_{0.5};
   // 2026-07-24: 默认0.70m路径间隔、0.50m硬间隔；普通路线高度由后机独立固定为0.65m。
   double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.50};

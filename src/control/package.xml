@@ -20,6 +20,8 @@
   <build_depend>std_msgs</build_depend>
   <build_depend>quadrotor_msgs</build_depend>
   <build_depend>tf</build_depend>
+  <build_depend>tf2</build_depend>
+  <build_depend>tf2_ros</build_depend>
   <!-- 2026-07-13: 安全悬停后支持通过 MAVROS SetMode 执行终点自动降落。 -->
   <build_depend>mavros_msgs</build_depend>
   <!-- 后机消费LDOP动态目标状态并在控制侧进行短期预测。 -->
@@ -35,6 +37,8 @@
   <build_export_depend>std_msgs</build_export_depend>
   <build_export_depend>quadrotor_msgs</build_export_depend>
   <build_export_depend>tf</build_export_depend>
+  <build_export_depend>tf2</build_export_depend>
+  <build_export_depend>tf2_ros</build_export_depend>
   <build_export_depend>mavros_msgs</build_export_depend>
   <build_export_depend>ldop</build_export_depend>
 
@@ -48,6 +52,8 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>quadrotor_msgs</exec_depend>
   <exec_depend>tf</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
   <exec_depend>ldop</exec_depend>
 

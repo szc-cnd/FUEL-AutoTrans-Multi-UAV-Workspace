@@ -6,9 +6,13 @@
     <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odometry"/>
     <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odometry"/>
     <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
-    <arg name="follower_offset_x" default="-1.0"/>
-    <arg name="follower_offset_y" default="0.0"/>
-    <arg name="follower_offset_z" default="0.0"/>
+    <arg name="frame_alignment_config"
+         default="$(find exploration_control)/config/dual_uav_frame_alignment.yaml"/>
+
+    <!-- TF、跨机航点和双机距离判断只读取这一份对齐配置。 -->
+    <rosparam command="load" file="$(arg frame_alignment_config)"/>
+    <node pkg="exploration_control" type="dual_uav_frame_alignment"
+          name="dual_uav_frame_alignment" output="screen" required="true"/>
 
     <node pkg="exploration_control" type="leader_safe_path_follower"
           name="leader_safe_path_follower" output="screen">
@@ -41,10 +45,6 @@
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
         <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
-        <param name="world_frame" value="world"/>
-        <param name="follower_offset_x" value="$(arg follower_offset_x)"/>
-        <param name="follower_offset_y" value="$(arg follower_offset_y)"/>
-        <param name="follower_offset_z" value="$(arg follower_offset_z)"/>
         <!-- 2026-07-24: 出口前沿前机实飞XY折线保持0.70m滞后；后机高度独立固定0.65m。 -->
         <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
         <param name="continuous_follow_before_exit" value="false"/>
