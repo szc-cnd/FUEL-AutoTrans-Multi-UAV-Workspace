@@ -106,12 +106,13 @@ std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
     pnh.setParam("corridor_detection_voxel", 0.10);
     pnh.setParam("corridor_history_frames", 5);
     pnh.setParam("corridor_min_confirm_hits", 3);
-    pnh.setParam("corridor_min_lateral_speed", 0.10);
+    pnh.setParam("corridor_min_lateral_speed", 0.20);
     pnh.setParam("corridor_min_lateral_span", 0.12);
     pnh.setParam("corridor_publish_unknown_as_dynamic", true);
     pnh.setParam("corridor_static_confirm_frames", 4);
     pnh.setParam("corridor_confirmed_static_confirm_frames", 15);
-    pnh.setParam("corridor_static_lateral_speed", 0.08);
+    pnh.setParam("corridor_static_lateral_speed", 0.20);
+    pnh.setParam("corridor_reactivation_displacement", 0.15);
     pnh.setParam("corridor_forward_alignment_cos", 0.85);
     pnh.setParam("corridor_max_missed_frames", 5);
     pnh.setParam("corridor_max_forward_speed", 0.80);

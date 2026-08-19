@@ -64,14 +64,14 @@ struct UfomapMapperConfig {
   // 未确认候选至少连续命中该帧数后才进入 planner-facing dynamic_objects；
   // 更早的点仍保持 holdout，避免首帧采样抖动直接触发规划。
   int corridor_min_publish_hits{2};
-  double corridor_min_lateral_speed{0.1};
+  double corridor_min_lateral_speed{0.2};
   double corridor_min_lateral_span{0.15};
   // 未知区域中的紧凑候选先按实时障碍输出；只有稳定静止后才释放到静态图。
   bool corridor_publish_unknown_as_dynamic{true};
   int corridor_static_confirm_frames{4};
   // 已确认的摆动目标在端点会自然降到近零速，必须比未知候选等待更久才释放为静态。
   int corridor_confirmed_static_confirm_frames{15};
-  double corridor_static_lateral_speed{0.08};
+  double corridor_static_lateral_speed{0.2};
   double corridor_forward_alignment_cos{0.85};
   int corridor_max_missed_frames{5};
   // mapper 内部身份保留与 planner-facing 输出保活分离；仅用于跨短时遮挡重关联。
@@ -95,7 +95,7 @@ struct UfomapMapperConfig {
   int corridor_min_wall_points{12};
   double corridor_wall_search_forward{2.5};
   double corridor_wall_filter_alpha{0.2};
-  double corridor_reactivation_displacement{0.04};
+  double corridor_reactivation_displacement{0.15};
   double corridor_turn_reset_yaw{0.35};
   int insert_hit_depth{0};
   int insert_miss_depth{0};
@@ -142,12 +142,12 @@ struct UfomapMapperParams {
   int corridor_history_frames{5};
   int corridor_min_confirm_hits{3};
   int corridor_min_publish_hits{2};
-  double corridor_min_lateral_speed{0.1};
+  double corridor_min_lateral_speed{0.2};
   double corridor_min_lateral_span{0.15};
   bool corridor_publish_unknown_as_dynamic{true};
   int corridor_static_confirm_frames{4};
   int corridor_confirmed_static_confirm_frames{15};
-  double corridor_static_lateral_speed{0.08};
+  double corridor_static_lateral_speed{0.2};
   double corridor_forward_alignment_cos{0.85};
   int corridor_max_missed_frames{5};
   int corridor_internal_max_missed_frames{12};
@@ -169,7 +169,7 @@ struct UfomapMapperParams {
   int corridor_min_wall_points{12};
   double corridor_wall_search_forward{2.5};
   double corridor_wall_filter_alpha{0.2};
-  double corridor_reactivation_displacement{0.04};
+  double corridor_reactivation_displacement{0.15};
   double corridor_turn_reset_yaw{0.35};
   double resolution{0.2};             // 大于0.0，叶子体素尺寸
   int depth_levels{16};               // [2, 20]，由UFOMAP自身限制范围，八叉树层级规模    

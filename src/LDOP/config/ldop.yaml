@@ -50,12 +50,12 @@ corridor_detection_voxel: 0.10  # 动态检测独立网格，与Diff规划分辨
 corridor_history_frames: 5
 corridor_min_confirm_hits: 3
 corridor_min_publish_hits: 2  # 未确认候选连续命中2帧后才送规划器，首帧仍只做静态图 holdout
-corridor_min_lateral_speed: 0.10
+corridor_min_lateral_speed: 0.20
 corridor_min_lateral_span: 0.12  # 确认前最近窗口内至少累计的横向位移，单位m
 corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇短时关联后按实时障碍输出，首帧不写死到静态图
 corridor_static_confirm_frames: 4  # 10Hz点云下连续约0.4s无横向运动后才释放为静态
 corridor_confirmed_static_confirm_frames: 15  # 已确认摆球端点会短暂停速，连续约1.5s静止才降为静态
-corridor_static_lateral_speed: 0.08  # 低于该横向速度视为静止证据
+corridor_static_lateral_speed: 0.20  # 横向速度低于该值视为静止证据
 corridor_forward_alignment_cos: 0.85  # 速度近似沿无人机前后方向时归为静态候选
 corridor_max_missed_frames: 5  # 同一障碍允许丢失约0.5s，仅保留最后真实位置
 corridor_internal_max_missed_frames: 12  # 仅用于mapper内部身份重关联，planner-facing保活不变
@@ -77,7 +77,7 @@ corridor_reject_candidate_count: 12  # 候选状态机每帧最多处理的紧�
 corridor_min_wall_points: 12
 corridor_wall_search_forward: 2.5
 corridor_wall_filter_alpha: 0.20
-corridor_reactivation_displacement: 0.08
+corridor_reactivation_displacement: 0.15
 corridor_turn_reset_yaw: 0.35
 ufomap_insert_only_valid: false  # 仅对有效射线区段执行插入，即ufomap_max_range范围内点的射线段
 ufomap_insert_hit_depth: 0  # 命中点更新深度，0 表示沿用 UFOMap 默认值

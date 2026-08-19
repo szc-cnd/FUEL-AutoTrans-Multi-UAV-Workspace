@@ -1798,7 +1798,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         !forward_aligned &&
         std::abs(vertical_velocity) <= config_.corridor_max_vertical_speed;
     const bool stationary_or_forward =
-        std::abs(lateral_velocity) <= config_.corridor_static_lateral_speed ||
+        std::abs(lateral_velocity) < config_.corridor_static_lateral_speed ||
         forward_aligned;
     std::size_t consecutive_direction = 0U;
     const int latest_direction = track->lateral_direction_history.empty()
