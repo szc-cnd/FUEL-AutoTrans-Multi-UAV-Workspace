@@ -1,0 +1,14 @@
+<launch>
+  <!-- UAV0 优先选平台；UAV1 排除该编号后再锁定另一平台。 -->
+  <node pkg="precision_landing" type="dual_uav_landing_coordinator_node"
+        name="dual_uav_landing_coordinator" output="screen" required="true">
+    <param name="topics/uav0_locked" value="/UAV0/landing/search/locked_id"/>
+    <param name="topics/uav1_locked" value="/UAV1/landing/search/locked_id"/>
+    <param name="topics/uav0_assigned" value="/UAV0/landing/assigned_id"/>
+    <param name="topics/uav1_assigned" value="/UAV1/landing/assigned_id"/>
+    <param name="topics/uav1_excluded" value="/UAV1/landing/excluded_id"/>
+    <param name="topics/assignments_ready"
+           value="/dual_uav_landing/assignments_ready"/>
+    <param name="topics/status" value="/dual_uav_landing/status"/>
+  </node>
+</launch>

@@ -18,6 +18,7 @@
   <arg name="target_rviz_open_rviz" default="true" />
   <arg name="enable_down_camera" default="false" />
   <arg name="enable_precision_landing" default="false" />
+  <arg name="enable_dual_uav_landing_coordinator" default="true" />
   <!-- 比赛模式使用D435粗定位加速；最终降落仍只接受下视final_aruco。 -->
   <arg name="enable_front_aruco_hint" default="true" />
   <arg name="landing_vehicle_ns" default="UAV0" />
@@ -107,4 +108,8 @@
     <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
     <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)" />
   </include>
+
+  <!-- 只在前机启动一份；通过 ROS/WiFi 话题协调两机使用不同 ArUco 平台。 -->
+  <include if="$(arg enable_dual_uav_landing_coordinator)"
+           file="$(find precision_landing)/launch/dual_uav_landing_coordinator.launch" />
 </launch>

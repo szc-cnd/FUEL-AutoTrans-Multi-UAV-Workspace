@@ -11,6 +11,7 @@ topics:
   # 锁定平台 ID 必须交给精降节点，防止多平台同时可见时重新选择其他码。
   target_id: /UAV0/landing/target_id
   assigned_id: /UAV0/landing/assigned_id
+  excluded_id: /UAV0/landing/excluded_id
   status: /UAV0/landing/search/status
   debug_image: /UAV0/landing/search/debug_image
 

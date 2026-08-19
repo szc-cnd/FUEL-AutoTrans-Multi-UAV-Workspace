@@ -30,7 +30,8 @@ class ArucoTracker {
                             const cv::Mat& distortion,
                             double stamp_sec,
                             int requested_id,
-                            bool allow_lock_mutation = true);
+                            bool allow_lock_mutation = true,
+                            int excluded_id = -1);
 
   int lockedId() const;
   void reset();

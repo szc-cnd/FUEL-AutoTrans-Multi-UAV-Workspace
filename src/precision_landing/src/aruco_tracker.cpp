@@ -137,7 +137,8 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
                                         const cv::Mat& distortion,
                                         double stamp_sec,
                                         int requested_id,
-                                        bool allow_lock_mutation) {
+                                        bool allow_lock_mutation,
+                                        int excluded_id) {
   TargetObservation observation;
   observation.stamp_sec = stamp_sec;
 
@@ -200,7 +201,8 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
       continue;
     }
     const int id = ids[i];
-    if ((requested_id >= 0 && id != requested_id) ||
+    if (id == excluded_id ||
+        (requested_id >= 0 && id != requested_id) ||
         (locked_id_ >= 0 && id != locked_id_)) {
       continue;
     }

@@ -155,6 +155,7 @@ private:
     std::string locked_id_topic{"/UAV0/landing/search/locked_id"};
     std::string target_id_topic{"/UAV0/landing/target_id"};
     std::string assigned_id_topic{"/UAV0/landing/assigned_id"};
+    std::string excluded_id_topic{"/UAV0/landing/excluded_id"};
     std::string filtered_target_topic{"/UAV0/landing/search/target_world"};
     private_node_.param("topics/image", image_topic, image_topic);
     private_node_.param("topics/camera_info", camera_info_topic,
@@ -175,6 +176,8 @@ private:
     private_node_.param("topics/target_id", target_id_topic, target_id_topic);
     private_node_.param("topics/assigned_id", assigned_id_topic,
                         assigned_id_topic);
+    private_node_.param("topics/excluded_id", excluded_id_topic,
+                        excluded_id_topic);
     private_node_.param("topics/filtered_target", filtered_target_topic,
                         filtered_target_topic);
 
@@ -193,6 +196,9 @@ private:
     assigned_id_subscriber_ =
         node_.subscribe(assigned_id_topic, 2,
                         &LandingSearchNode::assignedIdCallback, this);
+    excluded_id_subscriber_ =
+        node_.subscribe(excluded_id_topic, 2,
+                        &LandingSearchNode::excludedIdCallback, this);
 
     marker_world_publisher_ =
         node_.advertise<geometry_msgs::PoseStamped>(marker_world_topic_, 5);
@@ -292,6 +298,15 @@ private:
       return;
     }
 
+    if (message->data >= 0 && tracker_.lockedId() == message->data) {
+      requested_marker_id_ = message->data;
+      publishTargetId(requested_marker_id_);
+      ROS_INFO("landing_search: confirmed current locked platform ID=%d",
+               requested_marker_id_);
+      publishStatus("当前锁定平台已由双机协调器确认");
+      return;
+    }
+
     requested_marker_id_ = message->data;
     tracker_.reset();
     target_filter_.reset();
@@ -308,6 +323,34 @@ private:
       ROS_WARN("landing_search: platform assignment cleared; automatic selection enabled");
       publishStatus("平台分配已清除，恢复自动选择");
     }
+  }
+
+  void excludedIdCallback(const std_msgs::Int32ConstPtr &message) {
+    if (message->data < -1) {
+      ROS_WARN("landing_search: reject invalid excluded platform ID=%d",
+               message->data);
+      return;
+    }
+    if (trigger_sent_ || message->data == excluded_marker_id_) {
+      return;
+    }
+
+    excluded_marker_id_ = message->data;
+    if (requested_marker_id_ >= 0 &&
+        requested_marker_id_ == excluded_marker_id_) {
+      requested_marker_id_ = -1;
+      publishTargetId(-1);
+    }
+    if (tracker_.lockedId() == excluded_marker_id_) {
+      tracker_.reset();
+      target_filter_.reset();
+      stable_target_received_ = false;
+      last_stable_target_ = geometry_msgs::PoseStamped();
+      last_stable_target_receive_time_ = ros::Time(0);
+      publishLockedId();
+      publishStatus("已排除另一架无人机占用的平台，继续搜索");
+    }
+    ROS_INFO("landing_search: excluded platform ID=%d", excluded_marker_id_);
   }
 
   const nav_msgs::Odometry *nearestOdometry(const ros::Time &stamp,
@@ -354,7 +397,8 @@ private:
 
     const TargetObservation observation =
         tracker_.process(image->image, camera_matrix_, distortion_,
-                         message->header.stamp.toSec(), requested_marker_id_);
+                         message->header.stamp.toSec(), requested_marker_id_,
+                         true, excluded_marker_id_);
     publishLockedId();
     if (!observation.valid || tracker_.lockedId() < 0) {
       target_filter_.reset();
@@ -527,6 +571,7 @@ private:
   ros::Subscriber mission_status_subscriber_;
   ros::Subscriber landing_request_subscriber_;
   ros::Subscriber assigned_id_subscriber_;
+  ros::Subscriber excluded_id_subscriber_;
   ros::Publisher marker_world_publisher_;
   ros::Publisher filtered_target_publisher_;
   ros::Publisher landing_trigger_publisher_;
@@ -550,6 +595,7 @@ private:
   std::string mission_stage_;
   std::string last_status_;
   int requested_marker_id_{-1};
+  int excluded_marker_id_{-1};
   double max_image_odom_delta_sec_{0.08};
   double image_timeout_sec_{0.30};
   double odom_timeout_sec_{0.30};
