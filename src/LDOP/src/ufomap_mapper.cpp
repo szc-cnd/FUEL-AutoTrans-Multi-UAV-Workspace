@@ -1917,10 +1917,15 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       result.candidate_point_count += cluster.indices.size();
       const bool has_publish_history =
           track->hits >= static_cast<std::size_t>(config_.corridor_min_publish_hits);
+      // 未确认点簇仅凭多帧命中仍可能是静态结构的采样抖动。至少观察到
+      // 连续同向的横向运动后才发布 provisional；确认轨迹继续正常输出。
+      const bool provisional_motion_ready = continuous_lateral_motion ||
+          track->motion_qualified;
       const bool publish_current = cluster.indices.size() >=
               static_cast<std::size_t>(config_.corridor_min_cluster_points) &&
           (track->confirmed ||
-           (config_.corridor_publish_unknown_as_dynamic && has_publish_history));
+           (config_.corridor_publish_unknown_as_dynamic && has_publish_history &&
+            provisional_motion_ready));
       if (publish_current &&
           published_track_count < static_cast<std::size_t>(config_.corridor_max_candidates)) {
         for (const std::size_t index : cluster.indices) {
