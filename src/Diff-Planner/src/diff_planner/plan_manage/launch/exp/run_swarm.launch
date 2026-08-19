@@ -32,6 +32,16 @@
         <arg name="swing_horizontal_margin" value="0.10"/>
         <arg name="swing_vertical_margin" value="0.10"/>
         <arg name="swing_observation_retention" value="2.00"/>
+        <arg name="swing_measurement_freshness" value="0.25"/>
+        <arg name="swing_prediction_only_timeout" value="1.50"/>
+        <arg name="swing_track_reset_timeout" value="3.00"/>
+        <arg name="swing_crossing_speed" value="0.40"/>
+        <arg name="swing_wait_standoff" value="0.50"/>
+        <arg name="swing_exit_clearance" value="0.50"/>
+        <arg name="swing_ground_clearance" value="0.10"/>
+        <arg name="swing_virtual_ground" value="0.05"/>
+        <arg name="swing_replan_debounce" value="0.30"/>
+        <arg name="swing_committed_loss_timeout" value="0.50"/>
         <arg name="swing_identity_handoff_max_gap" value="2.00"/>
         <arg name="swing_identity_handoff_position_gate" value="0.65"/>
         <arg name="swing_identity_handoff_size_ratio" value="0.35"/>
@@ -90,7 +100,7 @@
         <arg name="local_map_size_z" value="1.0"/>
         <arg name="enable_virtual_wall" value="true"/>
         <arg name="virtual_ceil" value="1.5"/>
-        <arg name="virtual_ground" value="-0.2"/>
+        <arg name="virtual_ground" value="0.05"/>
         <!-- 1.5m窄通道使用10cm体素；障碍膨胀两格，给机体和停车漂移留出余量。 -->
         <arg name="map_resolution" value="0.10"/>
         <arg name="inflation_size" value="0.099"/>

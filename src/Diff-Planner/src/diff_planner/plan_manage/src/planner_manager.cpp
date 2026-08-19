@@ -443,6 +443,45 @@ namespace diff_planner
     return true;
   }
 
+  bool DiffPlannerManager::planTemporaryWaypoints(
+      const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+      const Eigen::Vector3d &start_acc,
+      const std::vector<Eigen::Vector3d> &waypoints, const double max_speed)
+  {
+    if (!start_pos.allFinite() || !start_vel.allFinite() ||
+        !start_acc.allFinite() || waypoints.empty() ||
+        !std::isfinite(max_speed) || max_speed <= 0.0)
+      return false;
+    for (const auto &waypoint : waypoints)
+      if (!waypoint.allFinite())
+        return false;
+
+    Eigen::Matrix<double, 3, 3> head_state, tail_state;
+    head_state << start_pos, start_vel, start_acc;
+    tail_state << waypoints.back(), Eigen::Vector3d::Zero(),
+        Eigen::Vector3d::Zero();
+    poly_traj::MinJerkOpt temporary;
+    temporary.reset(head_state, tail_state, waypoints.size());
+
+    Eigen::MatrixXd inner_points(3, std::max<std::size_t>(0U, waypoints.size() - 1U));
+    for (std::size_t index = 0U; index + 1U < waypoints.size(); ++index)
+      inner_points.col(static_cast<int>(index)) = waypoints[index];
+
+    Eigen::VectorXd durations(static_cast<int>(waypoints.size()));
+    Eigen::Vector3d previous = start_pos;
+    for (std::size_t index = 0U; index < waypoints.size(); ++index)
+    {
+      const double distance = (waypoints[index] - previous).norm();
+      durations(static_cast<int>(index)) =
+          std::max(0.8, 1.875 * distance / max_speed);
+      previous = waypoints[index];
+    }
+    temporary.generate(inner_points, durations);
+    if (temporary.getTraj().getMaxVelRate() > max_speed * 1.25)
+      return false;
+    return setLocalTrajFromOpt(temporary, false);
+  }
+
   bool DiffPlannerManager::checkCollision(int drone_id)
   {
     if (traj_.local_traj.start_time < 1e9) // It means my first planning has not started

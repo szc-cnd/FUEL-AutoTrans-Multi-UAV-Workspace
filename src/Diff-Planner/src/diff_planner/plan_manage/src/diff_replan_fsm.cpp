@@ -18,6 +18,10 @@ namespace diff_planner
     swing_wait_active_ = false;
     swing_clear_since_ = 0.0;
     swing_wait_obstacle_id_ = 0;
+    swing_phase_ = SWING_IDLE;
+    swing_selected_side_ = 0;
+    swing_real_observation_seen_ = swing_obstacle_guard_.hasRecentMeasurement(
+        ros::Time::now().toSec(), 0.30);
 
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);
@@ -83,6 +87,15 @@ namespace diff_planner
     nh.param("fsm/swing_prediction_dt", swing_prediction_dt_, 0.05);
     nh.param("fsm/swing_release_clear_time", swing_release_clear_time_, 0.35);
     nh.param("fsm/swing_release_speed", swing_release_speed_, 0.20);
+    nh.param("fsm/swing_prediction_only_timeout", swing_prediction_only_timeout_, 1.50);
+    nh.param("fsm/swing_track_reset_timeout", swing_track_reset_timeout_, 3.0);
+    nh.param("fsm/swing_crossing_speed", swing_crossing_speed_, 0.40);
+    nh.param("fsm/swing_wait_standoff", swing_wait_standoff_, 0.50);
+    nh.param("fsm/swing_exit_clearance", swing_exit_clearance_, 0.50);
+    nh.param("fsm/swing_ground_clearance", swing_ground_clearance_, 0.10);
+    nh.param("fsm/swing_virtual_ground", swing_virtual_ground_, 0.05);
+    nh.param("fsm/swing_replan_debounce", swing_replan_debounce_, 0.30);
+    nh.param("fsm/swing_committed_loss_timeout", swing_committed_loss_timeout_, 0.50);
     if (!std::isfinite(swing_prediction_horizon_) || swing_prediction_horizon_ <= 0.0)
       swing_prediction_horizon_ = 5.0;
     if (!std::isfinite(swing_prediction_dt_) || swing_prediction_dt_ <= 0.0)
@@ -92,6 +105,25 @@ namespace diff_planner
       swing_release_clear_time_ = 0.35;
     if (!std::isfinite(swing_release_speed_) || swing_release_speed_ <= 0.0)
       swing_release_speed_ = 0.20;
+    if (!std::isfinite(swing_prediction_only_timeout_) || swing_prediction_only_timeout_ <= 0.0)
+      swing_prediction_only_timeout_ = 1.50;
+    if (!std::isfinite(swing_track_reset_timeout_) ||
+        swing_track_reset_timeout_ < swing_prediction_only_timeout_)
+      swing_track_reset_timeout_ = 3.0;
+    if (!std::isfinite(swing_crossing_speed_) || swing_crossing_speed_ <= 0.0)
+      swing_crossing_speed_ = 0.40;
+    if (!std::isfinite(swing_wait_standoff_) || swing_wait_standoff_ <= 0.0)
+      swing_wait_standoff_ = 0.50;
+    if (!std::isfinite(swing_exit_clearance_) || swing_exit_clearance_ <= 0.0)
+      swing_exit_clearance_ = 0.50;
+    if (!std::isfinite(swing_ground_clearance_) || swing_ground_clearance_ < 0.0)
+      swing_ground_clearance_ = 0.10;
+    if (!std::isfinite(swing_virtual_ground_))
+      swing_virtual_ground_ = 0.05;
+    if (!std::isfinite(swing_replan_debounce_) || swing_replan_debounce_ < 0.0)
+      swing_replan_debounce_ = 0.30;
+    if (!std::isfinite(swing_committed_loss_timeout_) || swing_committed_loss_timeout_ <= 0.0)
+      swing_committed_loss_timeout_ = 0.50;
 
     SwingObstacleGuard::Config swing_config;
     nh.param("fsm/swing_corridor_width", swing_config.corridor_width, 1.5);
@@ -103,6 +135,10 @@ namespace diff_planner
     nh.param("fsm/swing_vertical_margin", swing_config.vertical_margin, 0.10);
     nh.param("fsm/swing_observation_retention", swing_config.observation_retention,
              2.0);
+    nh.param("fsm/swing_measurement_freshness",
+             swing_config.measurement_freshness, 0.25);
+    swing_config.prediction_only_timeout = swing_prediction_only_timeout_;
+    swing_config.logical_track_reset_timeout = swing_track_reset_timeout_;
     nh.param("fsm/swing_identity_handoff_max_gap",
              swing_config.identity_handoff_max_gap, 2.0);
     nh.param("fsm/swing_identity_handoff_position_gate",
@@ -247,6 +283,8 @@ namespace diff_planner
     const double now_sec = ros::Time::now().toSec();
     if (have_odom_)
       updateFreeOdomHistory(now_sec);
+    if (enable_swing_obstacle_guard_ && have_odom_ && have_target_)
+      updateSwingPassage(now_sec);
 
     static int fsm_num = 0;
     fsm_num++;
@@ -517,40 +555,12 @@ namespace diff_planner
       }
       else if (enable_fail_safe_ && odom_vel_.norm() < escape_stop_speed_)
       {
-        if (swing_wait_active_)
+        if (enable_swing_obstacle_guard_ &&
+            swing_phase_ != SWING_IDLE && swing_phase_ != SWING_ABORTED)
         {
-          SwingCollisionResult collision;
-          const bool blocked = swingTrajectoryBlocked(sampleReleaseTrajectory(),
-                                                       now_sec, &collision);
-          if (blocked)
-          {
-            swing_clear_since_ = 0.0;
-            swing_wait_obstacle_id_ = collision.obstacle_id;
-            ROS_WARN_THROTTLE(
-                0.5,
-                "[摆球避障] 保持悬停：id=%u，若现在放行将在 %.2fs 后相交，球预测=(%.2f, %.2f, %.2f)。",
-                collision.obstacle_id, collision.time_from_now,
-                collision.obstacle_position.x(), collision.obstacle_position.y(),
-                collision.obstacle_position.z());
-            break;
-          }
-
-          if (swing_clear_since_ <= 0.0)
-            swing_clear_since_ = now_sec;
-          if (now_sec - swing_clear_since_ < swing_release_clear_time_)
-            break;
-
-          ROS_INFO("[摆球避障] 穿越窗口已连续安全 %.2fs，恢复原目标并重新规划。",
-                   now_sec - swing_clear_since_);
-          publishPlanningStatus("SWING_OBSTACLE_RELEASED");
-          swing_wait_active_ = false;
-          swing_clear_since_ = 0.0;
-          swing_wait_obstacle_id_ = 0;
-          need_hover_stop_ = false;
-          replan_fail_count_ = 0;
-          last_target_change_time_ = now_sec;
-          stuck_detect_ignore_until_ = now_sec + stuck_detect_grace_time_;
-          changeFSMExecState(GEN_NEW_TRAJ, "SWING_RELEASE");
+          // 摆球的学习、等待和锁侧穿越由 updateSwingPassage() 管理。
+          // 不得落入通用“急停后恢复原目标”分支，否则等待阶段会每帧
+          // 重新规划，且可能绕过真实观测确认直接冲入通道。
           break;
         }
 
@@ -915,6 +925,11 @@ namespace diff_planner
                              ? ros::Time::now().toSec()
                              : msg->header.stamp.toSec();
     swing_obstacle_guard_.update(observations, stamp);
+    // 只有本帧候选真正通过单逻辑轨迹关联时，才能作为首次放行的真实观测。
+    // 多候选歧义帧虽然消息非空，但 guard 会保留预测而不更新观测时间。
+    if (!observations.empty() &&
+        swing_obstacle_guard_.hasRecentMeasurement(stamp, 1.0e-3))
+      swing_real_observation_seen_ = true;
 
     if (!msg->header.frame_id.empty() && msg->header.frame_id != "world" &&
         msg->header.frame_id != "UAV1/camera_init" &&
@@ -924,6 +939,307 @@ namespace diff_planner
           2.0,
           "[摆球避障] LDOP frame_id=%s；当前启动文件只保证 world 与 UAV1/camera_init 重合，请确认坐标系。",
           msg->header.frame_id.c_str());
+    }
+  }
+
+  bool DiffReplanFSM::selectSwingSide(
+      const SwingObstacleObservation &observation)
+  {
+    Eigen::Vector3d forward = final_goal_ - odom_pos_;
+    forward.z() = 0.0;
+    if (forward.head<2>().norm() < 0.05)
+      forward = Eigen::Vector3d::UnitX();
+    else
+      forward.normalize();
+    const Eigen::Vector3d lateral(-forward.y(), forward.x(), 0.0);
+    swing_corridor_origin_ = odom_pos_;
+    swing_corridor_forward_ = forward;
+    swing_corridor_lateral_ = lateral;
+
+    const double lateral_position =
+        (observation.position - odom_pos_).dot(lateral);
+    // 球在无人机右侧意味着无人机位于通道左半侧，反之亦然。
+    if (lateral_position > 0.10)
+      swing_selected_side_ = -1;
+    else if (lateral_position < -0.10)
+      swing_selected_side_ = 1;
+    else
+    {
+      const double half_width = 0.5 * swing_obstacle_guard_.config().corridor_width;
+      const double lane = std::max(
+          0.10, half_width - swing_obstacle_guard_.config().vehicle_radius -
+                    swing_obstacle_guard_.config().corridor_boundary_margin -
+                    0.05);
+      const Eigen::Vector3d left = observation.position + lateral * (-lane);
+      const Eigen::Vector3d right = observation.position + lateral * lane;
+      const bool left_free = planner_manager_->grid_map_->getInflateOccupancy(left) == 0;
+      const bool right_free = planner_manager_->grid_map_->getInflateOccupancy(right) == 0;
+      if (!left_free && !right_free)
+        return false;
+      swing_selected_side_ = left_free && !right_free ? -1 : 1;
+    }
+    return true;
+  }
+
+  bool DiffReplanFSM::swingUnderpassFeasible(
+      const double now, const SwingObstacleObservation &observation,
+      const double minimum_bottom_z,
+      std::vector<Eigen::Vector3d> *waypoints)
+  {
+    if (waypoints == nullptr || !std::isfinite(minimum_bottom_z) ||
+        now - swing_phase_since_ < swing_obstacle_guard_.config().underpass_learning_time)
+      return false;
+    const double minimum_center_z = swing_virtual_ground_ +
+                                    swing_obstacle_guard_.config().vehicle_half_height +
+                                    swing_ground_clearance_;
+    const double underpass_z = minimum_bottom_z -
+                               swing_obstacle_guard_.config().vehicle_half_height -
+                               swing_obstacle_guard_.config().vertical_margin;
+    if (underpass_z < minimum_center_z)
+      return false;
+
+    const Eigen::Vector3d forward = swing_corridor_forward_;
+    const double front = swing_wait_standoff_;
+    const double rear = swing_exit_clearance_;
+    Eigen::Vector3d low = observation.position;
+    low.z() = underpass_z;
+    Eigen::Vector3d entry = low - front * forward;
+    Eigen::Vector3d exit = low + rear * forward;
+    if (planner_manager_->grid_map_->getInflateOccupancy(entry) != 0 ||
+        planner_manager_->grid_map_->getInflateOccupancy(low) != 0 ||
+        planner_manager_->grid_map_->getInflateOccupancy(exit) != 0)
+      return false;
+    Eigen::Vector3d recovery = exit;
+    recovery.z() = observation.position.z();
+    if (planner_manager_->grid_map_->getInflateOccupancy(recovery) != 0)
+      return false;
+    waypoints->clear();
+    waypoints->push_back(entry);
+    waypoints->push_back(low);
+    waypoints->push_back(exit);
+    waypoints->push_back(recovery);
+    return true;
+  }
+
+  bool DiffReplanFSM::startSwingTemporaryTrajectory(
+      const Eigen::Vector3d &target, const double speed,
+      const SWING_PASSAGE_PHASE next_phase)
+  {
+    if (!target.allFinite())
+      return false;
+    return startSwingTemporaryWaypoints({target}, speed, next_phase);
+  }
+
+  bool DiffReplanFSM::startSwingTemporaryWaypoints(
+      const std::vector<Eigen::Vector3d> &waypoints, const double speed,
+      const SWING_PASSAGE_PHASE next_phase)
+  {
+    if (waypoints.empty() ||
+        !std::all_of(waypoints.begin(), waypoints.end(),
+                     [](const Eigen::Vector3d &point) { return point.allFinite(); }) ||
+        ros::Time::now().toSec() - swing_last_replan_time_ < swing_replan_debounce_)
+      return false;
+    Eigen::Vector3d segment_start = odom_pos_;
+    for (const Eigen::Vector3d &segment_end : waypoints)
+    {
+      const double distance = (segment_end - segment_start).norm();
+      const int steps = std::max(1, static_cast<int>(std::ceil(distance / 0.05)));
+      for (int step = 1; step <= steps; ++step)
+      {
+        const double ratio = static_cast<double>(step) / steps;
+        const Eigen::Vector3d point =
+            segment_start + ratio * (segment_end - segment_start);
+        if (planner_manager_->grid_map_->getInflateOccupancy(point) != 0)
+          return false;
+      }
+      segment_start = segment_end;
+    }
+    if (!planner_manager_->planTemporaryWaypoints(
+            odom_pos_, odom_vel_, odom_acc_, waypoints, speed))
+      return false;
+    traj_utils::PolyTraj poly_msg;
+    traj_utils::MINCOTraj minco_msg;
+    polyTraj2ROSMsg(poly_msg, minco_msg);
+    poly_traj_pub_.publish(poly_msg);
+    broadcast_ploytraj_pub_.publish(minco_msg);
+    swing_last_replan_time_ = ros::Time::now().toSec();
+    swing_phase_ = next_phase;
+    swing_phase_since_ = swing_last_replan_time_;
+    swing_wait_active_ = next_phase == SWING_WAIT_WINDOW;
+    need_hover_stop_ = false;
+    flag_escape_emergency_ = true;
+    changeFSMExecState(EXEC_TRAJ, "SWING_TEMPORARY_TRAJ");
+    return true;
+  }
+
+  bool DiffReplanFSM::swingReleaseWindowSafe(
+      const double now, const SwingObstacleObservation &observation)
+  {
+    if (!swing_real_observation_seen_ ||
+        !swing_obstacle_guard_.hasRecentMeasurement(now, 0.30) ||
+        swing_selected_side_ == 0)
+      return false;
+    const double lateral =
+        (observation.position - swing_corridor_origin_).dot(swing_corridor_lateral_);
+    const double velocity = observation.velocity.dot(swing_corridor_lateral_);
+    if (!std::isfinite(lateral) || !std::isfinite(velocity))
+      return false;
+    if (swing_selected_side_ < 0 && !(velocity > 0.08 && lateral > 0.0))
+      return false;
+    if (swing_selected_side_ > 0 && !(velocity < -0.08 && lateral < 0.0))
+      return false;
+
+    const double half_width = 0.5 * swing_obstacle_guard_.config().corridor_width;
+    const double lane = std::max(
+        0.10, half_width - swing_obstacle_guard_.config().vehicle_radius -
+                  swing_obstacle_guard_.config().corridor_boundary_margin - 0.05);
+    // 穿越目标锁定在等待侧车道，不能随球当前横向位置漂移；否则球刚过
+    // 中线时，规划目标会被拖到通道中间，失去“从等待侧穿过”的意义。
+    const double longitudinal =
+        (observation.position - swing_corridor_origin_).dot(
+            swing_corridor_forward_) + swing_exit_clearance_;
+    swing_cross_target_ = swing_corridor_origin_ +
+                          swing_corridor_forward_ * longitudinal +
+                          swing_corridor_lateral_ *
+                              (static_cast<double>(swing_selected_side_) * lane);
+    swing_cross_target_.z() = observation.position.z();
+    const Eigen::Vector3d displacement = swing_cross_target_ - odom_pos_;
+    const double distance = displacement.norm();
+    const double crossing_time = distance / swing_crossing_speed_;
+    if (!std::isfinite(crossing_time) || crossing_time <= 0.0 ||
+        crossing_time > swing_prediction_horizon_)
+      return false;
+
+    std::vector<SwingTrajectorySample> samples;
+    const int steps = std::max(
+        2, static_cast<int>(std::ceil(crossing_time / swing_prediction_dt_)));
+    samples.reserve(static_cast<std::size_t>(steps + 1));
+    for (int step = 0; step <= steps; ++step)
+    {
+      const double ratio = static_cast<double>(step) / steps;
+      const Eigen::Vector3d point = odom_pos_ + ratio * displacement;
+      if (planner_manager_->grid_map_->getInflateOccupancy(point) != 0)
+        return false;
+      samples.push_back({ratio * crossing_time, point});
+    }
+    SwingCollisionResult collision;
+    return !swing_obstacle_guard_.findCollision(samples, now, &collision);
+  }
+
+  void DiffReplanFSM::finishSwingPassage(const char *reason)
+  {
+    ROS_INFO("[摆球通行] %s，清除逻辑摆球状态并恢复原任务。", reason);
+    swing_phase_ = SWING_CLEARING;
+    swing_wait_active_ = false;
+    swing_selected_side_ = 0;
+    swing_real_observation_seen_ = false;
+    swing_obstacle_guard_.clear();
+    swing_phase_ = SWING_IDLE;
+    swing_clear_since_ = 0.0;
+    need_hover_stop_ = false;
+    last_target_change_time_ = ros::Time::now().toSec();
+    changeFSMExecState(GEN_NEW_TRAJ, "SWING_CLEAR");
+  }
+
+  void DiffReplanFSM::updateSwingPassage(const double now)
+  {
+    if (swing_phase_ == SWING_IDLE || swing_phase_ == SWING_ABORTED)
+      return;
+    SwingObstacleObservation observation;
+    double minimum_bottom_z = 0.0;
+    double first_observation_time = 0.0;
+    if (!swing_obstacle_guard_.logicalTrackSnapshot(now, &observation,
+                                                    &minimum_bottom_z,
+                                                    &first_observation_time))
+    {
+      if (swing_phase_ == SWING_COMMITTED_CROSS &&
+          now - swing_phase_since_ > swing_committed_loss_timeout_)
+      {
+        swing_phase_ = SWING_ABORTED;
+        swing_wait_active_ = false;
+        need_hover_stop_ = true;
+        flag_escape_emergency_ = true;
+        changeFSMExecState(EMERGENCY_STOP, "SWING_LOST_DURING_CROSS");
+      }
+      return;
+    }
+
+    const auto state = swing_obstacle_guard_.observationState(now);
+    if (swing_phase_ == SWING_COMMITTED_CROSS &&
+        !swing_obstacle_guard_.hasRecentMeasurement(
+            now, swing_committed_loss_timeout_))
+    {
+      swing_phase_ = SWING_ABORTED;
+      swing_wait_active_ = false;
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      changeFSMExecState(EMERGENCY_STOP, "SWING_LOST_DURING_CROSS");
+      return;
+    }
+    if (state == SwingObstacleGuard::ObservationState::STALE &&
+        swing_phase_ != SWING_COMMITTED_CROSS)
+      return;
+
+    if (swing_phase_ == SWING_LEARNING)
+    {
+      if (state != SwingObstacleGuard::ObservationState::MEASURED)
+        return;
+      if (now - first_observation_time <
+          swing_obstacle_guard_.config().underpass_learning_time)
+        return;
+      if (!selectSwingSide(observation))
+        return;
+      std::vector<Eigen::Vector3d> underpass_waypoints;
+      if (swingUnderpassFeasible(now, observation, minimum_bottom_z,
+                                 &underpass_waypoints))
+      {
+        if (startSwingTemporaryWaypoints(underpass_waypoints,
+                                         swing_crossing_speed_, SWING_UNDERPASS))
+          return;
+      }
+      const double half_width = 0.5 * swing_obstacle_guard_.config().corridor_width;
+      const double lane = std::max(
+          0.10, half_width - swing_obstacle_guard_.config().vehicle_radius -
+                    swing_obstacle_guard_.config().corridor_boundary_margin - 0.05);
+      swing_wait_target_ = observation.position - swing_corridor_forward_ * swing_wait_standoff_ +
+                           swing_corridor_lateral_ * (static_cast<double>(swing_selected_side_) * lane);
+      if (startSwingTemporaryTrajectory(swing_wait_target_, swing_release_speed_,
+                                        SWING_APPROACH_WAIT))
+        return;
+    }
+    else if (swing_phase_ == SWING_APPROACH_WAIT)
+    {
+      const auto &local = planner_manager_->traj_.local_traj;
+      if (local.duration > 0.0 && ros::Time::now().toSec() - local.start_time >=
+                                     local.duration - 0.10)
+      {
+        swing_phase_ = SWING_WAIT_WINDOW;
+        swing_phase_since_ = now;
+        swing_wait_active_ = true;
+        need_hover_stop_ = true;
+        flag_escape_emergency_ = true;
+        changeFSMExecState(EMERGENCY_STOP, "SWING_WAIT_WINDOW");
+      }
+    }
+    else if (swing_phase_ == SWING_WAIT_WINDOW)
+    {
+      if (state != SwingObstacleGuard::ObservationState::MEASURED ||
+          !swingReleaseWindowSafe(now, observation))
+        return;
+      if (startSwingTemporaryTrajectory(swing_cross_target_, swing_crossing_speed_,
+                                        SWING_COMMITTED_CROSS))
+      {
+        swing_wait_active_ = false;
+        return;
+      }
+    }
+    else if (swing_phase_ == SWING_UNDERPASS ||
+             swing_phase_ == SWING_COMMITTED_CROSS)
+    {
+      const auto &local = planner_manager_->traj_.local_traj;
+      if (local.duration > 0.0 && ros::Time::now().toSec() - local.start_time >=
+                                     local.duration - 0.05)
+        finishSwingPassage(swing_phase_ == SWING_UNDERPASS ? "下穿完成" : "锁侧穿越完成");
     }
   }
 
@@ -994,9 +1310,22 @@ namespace diff_planner
 
   void DiffReplanFSM::startSwingWait(const SwingCollisionResult &collision)
   {
+    if (swing_phase_ == SWING_COMMITTED_CROSS ||
+        swing_phase_ == SWING_UNDERPASS)
+    {
+      swing_phase_ = SWING_ABORTED;
+      swing_wait_active_ = false;
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      changeFSMExecState(EMERGENCY_STOP, "SWING_TEMPORARY_COLLISION");
+      return;
+    }
     swing_wait_active_ = true;
     swing_clear_since_ = 0.0;
     swing_wait_obstacle_id_ = collision.obstacle_id;
+    swing_phase_ = SWING_LEARNING;
+    swing_phase_since_ = ros::Time::now().toSec();
+    swing_real_observation_seen_ = false;
     need_hover_stop_ = true;
     flag_escape_emergency_ = true;
     occupied_recovery_active_ = false;

@@ -55,6 +55,17 @@ namespace diff_planner
       SEQUENTIAL_START,
       OCCUPIED_RECOVERY
     };
+    enum SWING_PASSAGE_PHASE
+    {
+      SWING_IDLE,
+      SWING_LEARNING,
+      SWING_UNDERPASS,
+      SWING_APPROACH_WAIT,
+      SWING_WAIT_WINDOW,
+      SWING_COMMITTED_CROSS,
+      SWING_CLEARING,
+      SWING_ABORTED
+    };
     enum TARGET_TYPE
     {
       MANUAL_TARGET = 1,
@@ -117,6 +128,15 @@ namespace diff_planner
     double swing_prediction_dt_;
     double swing_release_clear_time_;
     double swing_release_speed_;
+    double swing_prediction_only_timeout_;
+    double swing_track_reset_timeout_;
+    double swing_crossing_speed_;
+    double swing_wait_standoff_;
+    double swing_exit_clearance_;
+    double swing_ground_clearance_;
+    double swing_virtual_ground_;
+    double swing_replan_debounce_;
+    double swing_committed_loss_timeout_;
 
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
     // AutoTrans 恢复成功后置位；在基于最新里程计发布新轨迹前禁止继续使用旧局部轨迹。
@@ -124,6 +144,16 @@ namespace diff_planner
     bool swing_wait_active_;
     double swing_clear_since_;
     uint32_t swing_wait_obstacle_id_;
+    SWING_PASSAGE_PHASE swing_phase_{SWING_IDLE};
+    int swing_selected_side_{0};
+    bool swing_real_observation_seen_{false};
+    double swing_phase_since_{0.0};
+    double swing_last_replan_time_{0.0};
+    Eigen::Vector3d swing_corridor_origin_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d swing_corridor_forward_{Eigen::Vector3d::UnitX()};
+    Eigen::Vector3d swing_corridor_lateral_{Eigen::Vector3d::UnitY()};
+    Eigen::Vector3d swing_wait_target_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d swing_cross_target_{Eigen::Vector3d::Zero()};
     FSM_EXEC_STATE exec_state_;
     int continously_called_times_{0};
 
@@ -177,6 +207,21 @@ namespace diff_planner
                                 double now,
                                 SwingCollisionResult *result) const;
     void startSwingWait(const SwingCollisionResult &collision);
+    void updateSwingPassage(double now);
+    bool startSwingTemporaryTrajectory(const Eigen::Vector3d &target,
+                                       double speed,
+                                       SWING_PASSAGE_PHASE next_phase);
+    bool startSwingTemporaryWaypoints(
+        const std::vector<Eigen::Vector3d> &waypoints, double speed,
+        SWING_PASSAGE_PHASE next_phase);
+    bool selectSwingSide(const SwingObstacleObservation &observation);
+    bool swingReleaseWindowSafe(double now,
+                                const SwingObstacleObservation &observation);
+    bool swingUnderpassFeasible(double now,
+                                const SwingObstacleObservation &observation,
+                                double minimum_bottom_z,
+                                std::vector<Eigen::Vector3d> *waypoints);
+    void finishSwingPassage(const char *reason);
     bool callOccupiedRecovery(const Eigen::Vector3d &target);
     void updateFreeOdomHistory(double now);
     bool startOccupiedRecovery(double now);

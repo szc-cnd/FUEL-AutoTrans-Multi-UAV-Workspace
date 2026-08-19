@@ -24,8 +24,9 @@ def test_collision_stops_then_waits_for_a_stable_release_window():
     source = FSM_SOURCE.read_text(encoding="utf-8")
     assert 'publishPlanningStatus("SWING_OBSTACLE_WAIT")' in source
     assert 'changeFSMExecState(EMERGENCY_STOP, "SWING_GUARD")' in source
-    assert "now_sec - swing_clear_since_ < swing_release_clear_time_" in source
-    assert 'changeFSMExecState(GEN_NEW_TRAJ, "SWING_RELEASE")' in source
+    assert 'swing_phase_ == SWING_WAIT_WINDOW' in source
+    assert 'swingReleaseWindowSafe' in source
+    assert 'changeFSMExecState(GEN_NEW_TRAJ, "SWING_CLEAR")' in source
 
 
 def test_run_swarm_enables_bounded_corridor_model_and_map_fading():
@@ -33,11 +34,12 @@ def test_run_swarm_enables_bounded_corridor_model_and_map_fading():
     run_swarm = RUN_SWARM.read_text(encoding="utf-8")
     assert 'name="enable_swing_obstacle_guard" default="false"' in advanced
     assert 'name="enable_swing_obstacle_guard" default="true"' in run_swarm
-    assert 'name="enable_swing_harmonic_prediction" default="false"' in run_swarm
-    assert 'name="enable_swing_realtime_only" default="true"' in run_swarm
+    assert 'name="enable_swing_harmonic_prediction" default="true"' in run_swarm
+    assert 'name="enable_swing_realtime_only" default="false"' in run_swarm
     assert 'name="swing_enable_harmonic_prediction" value="$(arg enable_swing_harmonic_prediction)"' in run_swarm
     assert 'name="swing_realtime_observation_only" value="$(arg enable_swing_realtime_only)"' in run_swarm
     assert 'name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"' in run_swarm
     assert 'name="swing_underpass_learning_time" value="3.0"' in run_swarm
     assert 'name="swing_corridor_width" value="1.50"' in run_swarm
-    assert 'name="fading_time" value="0.8"' in run_swarm
+    assert 'name="swing_prediction_only_timeout" value="1.50"' in run_swarm
+    assert 'name="swing_measurement_freshness" value="0.25"' in run_swarm
