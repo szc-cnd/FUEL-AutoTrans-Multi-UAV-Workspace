@@ -102,7 +102,13 @@ namespace diff_planner
     nh.param("fsm/swing_horizontal_margin", swing_config.horizontal_margin, 0.10);
     nh.param("fsm/swing_vertical_margin", swing_config.vertical_margin, 0.10);
     nh.param("fsm/swing_observation_retention", swing_config.observation_retention,
-             0.80);
+             2.0);
+    nh.param("fsm/swing_identity_handoff_max_gap",
+             swing_config.identity_handoff_max_gap, 2.0);
+    nh.param("fsm/swing_identity_handoff_position_gate",
+             swing_config.identity_handoff_position_gate, 0.65);
+    nh.param("fsm/swing_identity_handoff_size_ratio",
+             swing_config.identity_handoff_size_ratio, 0.35);
     nh.param("fsm/swing_underpass_learning_time",
              swing_config.underpass_learning_time, 3.0);
     nh.param("fsm/swing_velocity_deadband", swing_config.velocity_deadband, 0.08);

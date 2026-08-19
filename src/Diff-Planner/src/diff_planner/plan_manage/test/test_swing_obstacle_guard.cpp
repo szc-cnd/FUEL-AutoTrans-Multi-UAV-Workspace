@@ -108,6 +108,83 @@ TEST(SwingObstacleGuard, LearnedHarmonicPredictionIsUsedForCollisionTiming)
   EXPECT_FALSE(reflected_guard.findCollision(trajectory, 3.0, nullptr));
 }
 
+TEST(SwingObstacleGuard, NewIdInheritsRecentSwingHistory)
+{
+  SwingObstacleGuard::Config config;
+  config.enable_harmonic_prediction = true;
+  config.observation_retention = 2.0;
+  config.identity_handoff_max_gap = 2.0;
+  config.vehicle_radius = 0.0;
+  config.horizontal_margin = 0.0;
+  config.harmonic_min_samples = 8;
+  config.harmonic_min_motion_span = 0.25;
+  config.harmonic_reversal_velocity_epsilon = 0.02;
+  SwingObstacleGuard guard(config);
+
+  constexpr double amplitude = 0.45;
+  constexpr double half_period = 0.50;
+  const double omega = std::acos(-1.0) / half_period;
+  for (int index = 0; index <= 30; ++index)
+  {
+    const double time = 0.05 * index;
+    SwingObstacleObservation ball;
+    ball.id = 7;
+    ball.position = Eigen::Vector3d(0.5, amplitude * std::sin(omega * time), 0.6);
+    ball.velocity = Eigen::Vector3d(0.0, amplitude * omega * std::cos(omega * time), 0.0);
+    ball.size = Eigen::Vector3d(0.3, 0.3, 0.3);
+    guard.update({ball}, time);
+  }
+
+  // LDOP 换了 external ID，但新观测仍在旧球的空间/尺寸/运动门内。
+  SwingObstacleObservation replacement;
+  replacement.id = 8;
+  replacement.position = Eigen::Vector3d(0.5, amplitude * std::sin(omega * 1.60), 0.6);
+  replacement.velocity = Eigen::Vector3d(
+      0.0, amplitude * omega * std::cos(omega * 1.60), 0.0);
+  replacement.size = Eigen::Vector3d(0.3, 0.3, 0.3);
+  guard.update({replacement}, 1.60);
+
+  const std::vector<SwingTrajectorySample> trajectory = {
+      {0.0, Eigen::Vector3d(0.0, 0.0, 0.6)},
+      {0.5, Eigen::Vector3d(0.5, 0.0, 0.6)}};
+  SwingCollisionResult result;
+  ASSERT_TRUE(guard.findCollision(trajectory, 2.0, &result));
+  EXPECT_EQ(result.obstacle_id, 8U);
+  EXPECT_NEAR(result.time_from_now, 0.5, 1.0e-12);
+}
+
+TEST(SwingObstacleGuard, NewIdDoesNotInheritStaticNearbyTrack)
+{
+  SwingObstacleGuard::Config config;
+  config.enable_harmonic_prediction = true;
+  config.realtime_observation_only = true;
+  config.observation_retention = 2.0;
+  config.vehicle_radius = 0.0;
+  config.horizontal_margin = 0.0;
+  SwingObstacleGuard guard(config);
+
+  SwingObstacleObservation static_fragment;
+  static_fragment.id = 21;
+  static_fragment.position = Eigen::Vector3d(0.5, 0.2, 0.6);
+  static_fragment.velocity = Eigen::Vector3d::Zero();
+  static_fragment.size = Eigen::Vector3d(0.02, 0.02, 0.02);
+  for (int index = 0; index < 6; ++index)
+    guard.update({static_fragment}, 0.1 * index);
+
+  SwingObstacleObservation new_fragment = static_fragment;
+  new_fragment.id = 22;
+  new_fragment.position.y() = 0.70;
+  guard.update({new_fragment}, 0.7);
+
+  const std::vector<SwingTrajectorySample> trajectory = {
+      {0.0, Eigen::Vector3d(0.0, 0.0, 0.6)},
+      {0.5, Eigen::Vector3d(0.5, 0.2, 0.6)}};
+  SwingCollisionResult result;
+  ASSERT_TRUE(guard.findCollision(trajectory, 0.7, &result));
+  // 没有运动证据时旧轨迹不会被迁移，旧ID仍按独立静态候选保留。
+  EXPECT_EQ(result.obstacle_id, 21U);
+}
+
 TEST(SwingObstacleGuard, RealtimeModeKeepsCurrentLateralPosition)
 {
   SwingObstacleGuard::Config config;

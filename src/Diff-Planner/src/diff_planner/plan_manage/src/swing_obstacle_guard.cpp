@@ -150,7 +150,88 @@ SwingObstacleGuard::Config SwingObstacleGuard::sanitizeConfig(const Config &conf
   if (sanitized.harmonic_max_half_period <= sanitized.harmonic_min_half_period)
     sanitized.harmonic_max_half_period =
         std::max(4.0, 2.0 * sanitized.harmonic_min_half_period);
+  sanitized.identity_handoff_max_gap =
+      positiveOr(config.identity_handoff_max_gap, 2.0);
+  sanitized.identity_handoff_position_gate =
+      positiveOr(config.identity_handoff_position_gate, 0.65);
+  sanitized.identity_handoff_size_ratio =
+      std::max(0.05, std::min(1.0,
+          positiveOr(config.identity_handoff_size_ratio, 0.35)));
   return sanitized;
+}
+
+std::unordered_map<uint32_t, SwingObstacleGuard::Track>::iterator
+SwingObstacleGuard::findIdentityHandoff(
+    const SwingObstacleObservation &observation, const double observation_time)
+{
+  auto best = tracks_.end();
+  double best_score = std::numeric_limits<double>::infinity();
+  std::size_t compatible_candidates = 0U;
+  for (auto it = tracks_.begin(); it != tracks_.end(); ++it)
+  {
+    const Track &candidate = it->second;
+    const double gap = observation_time - candidate.observation_time;
+    if (it->first == observation.id || gap <= 1.0e-3 ||
+        gap > config_.identity_handoff_max_gap)
+      continue;
+
+    const Eigen::Vector3d delta = observation.position - candidate.observation.position;
+    const double horizontal_distance = delta.head<2>().norm();
+    if (!std::isfinite(horizontal_distance) ||
+        horizontal_distance > config_.identity_handoff_position_gate ||
+        std::abs(delta.z()) > 0.35)
+      continue;
+
+    bool size_compatible = true;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      const double old_size = candidate.observation.size(axis);
+      const double new_size = observation.size(axis);
+      if (old_size > 1.0e-3 && new_size > 1.0e-3)
+      {
+        const double ratio = std::min(old_size, new_size) /
+                             std::max(old_size, new_size);
+        size_compatible = size_compatible &&
+                          ratio >= config_.identity_handoff_size_ratio;
+      }
+    }
+    if (!size_compatible)
+      continue;
+
+    // 静态墙边碎片不能仅凭“距离近”继承摆球历史；要求旧轨迹已有
+    // 横向运动证据或至少观察到足够的横向跨度。
+    double horizontal_span = 0.0;
+    if (!candidate.position_history.empty())
+    {
+      double min_x = candidate.position_history.front().position.x();
+      double max_x = min_x;
+      double min_y = candidate.position_history.front().position.y();
+      double max_y = min_y;
+      for (const Track::TimedPosition &sample : candidate.position_history)
+      {
+        min_x = std::min(min_x, sample.position.x());
+        max_x = std::max(max_x, sample.position.x());
+        min_y = std::min(min_y, sample.position.y());
+        max_y = std::max(max_y, sample.position.y());
+      }
+      horizontal_span = std::max(max_x - min_x, max_y - min_y);
+    }
+    const double horizontal_speed = candidate.motion_hint.head<2>().norm();
+    if (candidate.position_history.size() < 4U ||
+        (horizontal_speed < config_.minimum_swing_speed &&
+         horizontal_span < config_.harmonic_min_motion_span))
+      continue;
+
+    const double score = horizontal_distance + 0.05 * gap;
+    ++compatible_candidates;
+    if (score < best_score)
+    {
+      best = it;
+      best_score = score;
+    }
+  }
+  // 同时有多个旧目标符合门限时身份不唯一，宁可重新学习也不错误串轨。
+  return compatible_candidates == 1U ? best : tracks_.end();
 }
 
 void SwingObstacleGuard::update(
@@ -166,6 +247,20 @@ void SwingObstacleGuard::update(
       continue;
 
     auto existing = tracks_.find(observation.id);
+    if (existing == tracks_.end())
+    {
+      auto handoff = findIdentityHandoff(observation, observation_time);
+      if (handoff != tracks_.end())
+      {
+        // 只迁移历史，不把旧 ID 同时保留为第二个障碍物；规划器从这一帧
+        // 起继续使用新 ID，但简谐周期、端点和最低高度学习不被清零。
+        Track inherited = std::move(handoff->second);
+        tracks_.erase(handoff);
+        inherited.observation.id = observation.id;
+        tracks_.emplace(observation.id, std::move(inherited));
+        existing = tracks_.find(observation.id);
+      }
+    }
     Eigen::Vector3d motion_hint = observation.velocity;
     const double object_bottom =
         observation.position.z() - 0.5 * observation.size.z();
@@ -217,18 +312,6 @@ void SwingObstacleGuard::update(
   {
     bool remove = observation_time - it->second.observation_time >
                   config_.observation_retention;
-    if (config_.realtime_observation_only)
-    {
-      // LDOP tracker already owns the three-frame coast window.  An empty
-      // realtime message therefore means this ID is absent now; keeping a
-      // second guard-side cache would silently extend the coast period.
-      const bool seen_in_frame = std::any_of(
-          observations.begin(), observations.end(),
-          [&](const SwingObstacleObservation &observation) {
-            return observation.id == it->first;
-          });
-      remove = !seen_in_frame;
-    }
     if (remove)
       it = tracks_.erase(it);
     else

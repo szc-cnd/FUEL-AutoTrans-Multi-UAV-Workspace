@@ -12,8 +12,8 @@
     <arg name="max_tracking_error" default="0.20"/>
     <arg name="enable_occupied_recovery" default="true"/>
     <arg name="enable_swing_obstacle_guard" default="true"/>
-    <arg name="enable_swing_harmonic_prediction" default="false"/>
-    <arg name="enable_swing_realtime_only" default="true"/>
+    <arg name="enable_swing_harmonic_prediction" default="true"/>
+    <arg name="enable_swing_realtime_only" default="false"/>
     <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
     <arg name="record_dynamic_debug" default="true"/>
     <arg name="dynamic_bag_prefix" default="/home/oem/bags/corridor_debug"/>
@@ -21,7 +21,7 @@
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
-        <!-- 1.5m通道摆球：使用LDOP实时观测，短时丢失只保留最后位置，不做周期外推。 -->
+        <!-- 1.5m通道摆球：短时换ID继承历史，并使用受墙边界约束的简谐预测。 -->
         <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
         <arg name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
         <arg name="swing_corridor_width" value="1.50"/>
@@ -30,19 +30,22 @@
         <arg name="swing_vehicle_half_height" value="0.15"/>
         <arg name="swing_horizontal_margin" value="0.10"/>
         <arg name="swing_vertical_margin" value="0.10"/>
-        <arg name="swing_observation_retention" value="0.20"/>
+        <arg name="swing_observation_retention" value="2.00"/>
+        <arg name="swing_identity_handoff_max_gap" value="2.00"/>
+        <arg name="swing_identity_handoff_position_gate" value="0.65"/>
+        <arg name="swing_identity_handoff_size_ratio" value="0.35"/>
         <arg name="swing_underpass_learning_time" value="3.0"/>
         <arg name="swing_velocity_deadband" value="0.08"/>
         <arg name="swing_minimum_speed" value="0.25"/>
         <arg name="swing_enable_harmonic_prediction" value="$(arg enable_swing_harmonic_prediction)"/>
         <arg name="swing_realtime_observation_only" value="$(arg enable_swing_realtime_only)"/>
-        <arg name="swing_harmonic_min_samples" value="12"/>
+        <arg name="swing_harmonic_min_samples" value="8"/>
         <arg name="swing_harmonic_max_history_samples" value="80"/>
-        <arg name="swing_harmonic_min_motion_span" value="0.35"/>
+        <arg name="swing_harmonic_min_motion_span" value="0.25"/>
         <arg name="swing_harmonic_reversal_velocity_epsilon" value="0.04"/>
         <arg name="swing_harmonic_min_half_period" value="0.3"/>
         <arg name="swing_harmonic_max_half_period" value="4.0"/>
-        <arg name="swing_prediction_horizon" value="5.0"/>
+        <arg name="swing_prediction_horizon" value="1.50"/>
         <arg name="swing_prediction_dt" value="0.05"/>
         <arg name="swing_release_clear_time" value="0.35"/>
         <arg name="swing_release_speed" value="0.20"/>
