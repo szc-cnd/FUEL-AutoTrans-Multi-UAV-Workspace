@@ -60,42 +60,21 @@ struct UfomapMapperConfig {
   double corridor_roi_max_z{1.5};
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
-  int corridor_min_confirm_hits{5};
-  // 未确认候选至少连续命中该帧数后才进入 planner-facing dynamic_objects；
-  // 更早的点仍保持 holdout，避免首帧采样抖动直接触发规划。
-  int corridor_min_publish_hits{4};
-  double corridor_min_lateral_speed{0.2};
+  int corridor_min_confirm_hits{3};
+  double corridor_min_lateral_speed{0.1};
   double corridor_min_lateral_span{0.15};
-  // 未知区域中的紧凑候选先按实时障碍输出；只有稳定静止后才释放到静态图。
-  bool corridor_publish_unknown_as_dynamic{true};
-  int corridor_static_confirm_frames{4};
-  // 已确认的摆动目标在端点会自然降到近零速，必须比未知候选等待更久才释放为静态。
-  int corridor_confirmed_static_confirm_frames{15};
-  double corridor_static_lateral_speed{0.2};
-  double corridor_forward_alignment_cos{0.85};
-  int corridor_max_missed_frames{5};
-  // mapper 内部身份保留与 planner-facing 输出保活分离；仅用于跨短时遮挡重关联。
-  int corridor_internal_max_missed_frames{12};
-  double corridor_internal_track_timeout{1.2};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
-  double corridor_track_timeout{0.6};
+  double corridor_track_timeout{0.4};
   int corridor_min_cluster_points{4};
-  double corridor_min_confirm_extent{0.18};
-  double corridor_min_confirm_second_extent{0.06};
-  int corridor_min_confirm_extent_frames{2};
   double corridor_max_cluster_extent{0.6};
-  // 超尺寸父簇只在通道层内部用 6 邻域再分割；普通簇仍使用上面的 26 邻域。
-  bool corridor_oversized_split_enabled{true};
-  int corridor_split_min_cluster_points{3};
-  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};
   double corridor_wall_search_forward{2.5};
   double corridor_wall_filter_alpha{0.2};
-  double corridor_reactivation_displacement{0.15};
+  double corridor_reactivation_displacement{0.04};
   double corridor_turn_reset_yaw{0.35};
   int insert_hit_depth{0};
   int insert_miss_depth{0};
@@ -140,36 +119,21 @@ struct UfomapMapperParams {
   double corridor_roi_max_z{1.5};
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
-  int corridor_min_confirm_hits{5};
-  int corridor_min_publish_hits{4};
-  double corridor_min_lateral_speed{0.2};
+  int corridor_min_confirm_hits{3};
+  double corridor_min_lateral_speed{0.1};
   double corridor_min_lateral_span{0.15};
-  bool corridor_publish_unknown_as_dynamic{true};
-  int corridor_static_confirm_frames{4};
-  int corridor_confirmed_static_confirm_frames{15};
-  double corridor_static_lateral_speed{0.2};
-  double corridor_forward_alignment_cos{0.85};
-  int corridor_max_missed_frames{5};
-  int corridor_internal_max_missed_frames{12};
-  double corridor_internal_track_timeout{1.2};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
-  double corridor_track_timeout{0.6};
+  double corridor_track_timeout{0.4};
   int corridor_min_cluster_points{4};
-  double corridor_min_confirm_extent{0.18};
-  double corridor_min_confirm_second_extent{0.06};
-  int corridor_min_confirm_extent_frames{2};
   double corridor_max_cluster_extent{0.6};
-  bool corridor_oversized_split_enabled{true};
-  int corridor_split_min_cluster_points{3};
-  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};
   double corridor_wall_search_forward{2.5};
   double corridor_wall_filter_alpha{0.2};
-  double corridor_reactivation_displacement{0.15};
+  double corridor_reactivation_displacement{0.04};
   double corridor_turn_reset_yaw{0.35};
   double resolution{0.2};             // 大于0.0，叶子体素尺寸
   int depth_levels{16};               // [2, 20]，由UFOMAP自身限制范围，八叉树层级规模    
@@ -235,16 +199,6 @@ struct UfomapDynamicClusterPoint {
   // 通道候选使用独立 0.1m 检测网格；普通 LDOP 点仍使用 UFOMap key。
   UfomapVoxelCode detector_voxel_code;
   bool use_detector_voxel{false};
-  // 通道层只做当前帧/短时保活，不应进入未来轨迹预测。
-  bool realtime_only{false};
-  // 未完成动静态确认的通道候选可单独标记为 provisional，供 tracker 提前发布。
-  bool provisional{false};
-  // 通道状态机的多帧质心速度，沿世界坐标传给 tracker；普通点无效。
-  ufo::Point measured_velocity{};
-  bool measured_velocity_valid{false};
-  // 通道检测层的稳定轨迹 ID，仅在 LDOP 内部传递，用于避免下游再次按空间
-  // 猜测身份后产生 ID 跳变。0 表示普通动态点或来源未知。
-  std::uint32_t corridor_source_track_id{0U};
 };
 
 struct UfomapClassificationResult {
@@ -394,14 +348,8 @@ class UfomapMapper {
   struct CorridorCandidateResult {
     std::vector<bool> handled_indices;
     std::vector<bool> dynamic_indices;
-    std::vector<bool> provisional_indices;
-    std::vector<std::uint32_t> source_track_ids;
-    std::vector<ufo::Point> measured_velocities;
     // 候选过多时不发布为动态，但也不应立即写入静态地图。
     std::vector<bool> holdout_indices;
-    // 仅标记已经由通道状态机确认释放为静态的原始点。地面滤波删除这些点时，
-    // processInputCloud() 可据此精确补回静态分类和地图积分。
-    std::vector<bool> released_static_indices;
     std::size_t candidate_point_count{0U};
     std::size_t confirmed_point_count{0U};
     bool wall_valid{false};
@@ -410,8 +358,6 @@ class UfomapMapper {
   struct CorridorTrackSample {
     ros::Time stamp;
     ufo::Point center{};
-    double raw_extent{0.0};
-    double raw_second_extent{0.0};
   };
 
   struct CorridorTrack {
@@ -422,17 +368,8 @@ class UfomapMapper {
     std::deque<CorridorTrackSample> history;
     std::size_t hits{0U};
     std::size_t missed_frames{0U};
-    std::size_t static_evidence_frames{0U};
-    std::size_t lateral_evidence_frames{0U};
-    std::size_t reactivation_evidence_frames{0U};
     // 最近窗口内的方向证据；0 表示该帧速度低于阈值。
     std::deque<int> lateral_direction_history;
-    // 一旦出现强多帧横向运动即保持为真，使稀疏摆球在端点/换向时不会
-    // 因暂时缺少尺寸或方向证据被当成静态；仅在状态重新初始化时清除。
-    bool motion_qualified{false};
-    // 记录最近一次强横向运动证据；尺寸确认只允许使用同一近期历史窗口
-    // 内的运动资格，避免旧运动碎片与后来静态大簇拼成确认目标。
-    ros::Time last_motion_qualified_stamp;
     bool confirmed{false};
     bool released_static{false};
     ros::Time last_seen;

@@ -92,8 +92,6 @@ class KalmanFilterBase {
 
   Eigen::Vector3d position() const;
   Eigen::Vector3d velocity() const;
-  // 仅更新状态中的速度分量，不重置协方差和自适应噪声历史。
-  void setVelocity(const Eigen::Vector3d& velocity);
 
  protected:
   void updateInnovationBuffer(const Eigen::VectorXd& innovation);

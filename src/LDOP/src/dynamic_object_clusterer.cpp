@@ -71,13 +71,6 @@ struct Fragment {
   double sum_y{0.0};
   double sum_z{0.0};
   std::size_t point_count{0U};
-  // 一个连通块只要包含通道实时点，就沿用该语义；普通 UFOMap 点保持 false。
-  bool corridor_realtime_only{false};
-  bool corridor_provisional{false};
-  ufo::Point measured_velocity{};
-  bool measured_velocity_valid{false};
-  std::uint32_t corridor_source_track_id{0U};
-  bool corridor_source_conflict{false};
 };
 
 // 根据 6/18/26 连通规则生成邻域偏移，供后续 key 空间 BFS 使用。
@@ -171,32 +164,6 @@ void mergeInto(Fragment& target, const Fragment& source) {
   target.sum_y += source.sum_y;
   target.sum_z += source.sum_z;
   target.point_count += source.point_count;
-  target.corridor_realtime_only =
-      target.corridor_realtime_only || source.corridor_realtime_only;
-  target.corridor_provisional = target.corridor_provisional || source.corridor_provisional;
-  if (target.measured_velocity_valid && source.measured_velocity_valid) {
-    target.measured_velocity.x =
-        0.5F * (target.measured_velocity.x + source.measured_velocity.x);
-    target.measured_velocity.y =
-        0.5F * (target.measured_velocity.y + source.measured_velocity.y);
-    target.measured_velocity.z =
-        0.5F * (target.measured_velocity.z + source.measured_velocity.z);
-  } else if (source.measured_velocity_valid) {
-    target.measured_velocity = source.measured_velocity;
-    target.measured_velocity_valid = true;
-  }
-  if (target.corridor_source_conflict || source.corridor_source_conflict) {
-    target.corridor_source_track_id = 0U;
-    target.corridor_source_conflict = true;
-    target.measured_velocity_valid = false;
-  } else if (target.corridor_source_track_id == 0U) {
-    target.corridor_source_track_id = source.corridor_source_track_id;
-  } else if (source.corridor_source_track_id != 0U &&
-             target.corridor_source_track_id != source.corridor_source_track_id) {
-    target.corridor_source_track_id = 0U;
-    target.corridor_source_conflict = true;
-    target.measured_velocity_valid = false;
-  }
 }
 
 DynamicObjectDetection fragmentToDetection(const Fragment& fragment,
@@ -214,14 +181,6 @@ DynamicObjectDetection fragmentToDetection(const Fragment& fragment,
   detection.bbox.size.z = std::max(fragment.max_z - fragment.min_z, 0.0);
   detection.bbox.yaw = 0.0;
   detection.stamp = stamp;
-  detection.corridor_realtime_only = fragment.corridor_realtime_only;
-  detection.corridor_provisional = fragment.corridor_provisional;
-  detection.measured_velocity.x = fragment.measured_velocity.x;
-  detection.measured_velocity.y = fragment.measured_velocity.y;
-  detection.measured_velocity.z = fragment.measured_velocity.z;
-  detection.measured_velocity_valid = fragment.measured_velocity_valid;
-  detection.corridor_source_track_id = fragment.corridor_source_track_id;
-  detection.corridor_source_conflict = fragment.corridor_source_conflict;
   return detection;
 }
 
@@ -229,16 +188,6 @@ bool shouldMergeVerticalFragments(const Fragment& lhs,
                                   const Fragment& rhs,
                                   const DynamicObjectClustererConfig& config) {
   constexpr double kAreaEpsilon = 1e-9;
-
-  // 普通 LDOP 动态点和通道 realtime 点即使空间上重叠，也不能合并；
-  // 否则一个通道 provisional 碎片会把普通目标错误改成无未来预测目标。
-  if (lhs.corridor_realtime_only != rhs.corridor_realtime_only) {
-    return false;
-  }
-  if (lhs.corridor_source_track_id != 0U && rhs.corridor_source_track_id != 0U &&
-      lhs.corridor_source_track_id != rhs.corridor_source_track_id) {
-    return false;
-  }
 
   const double lhs_size_x = std::max(lhs.max_x - lhs.min_x, 0.0);
   const double lhs_size_y = std::max(lhs.max_y - lhs.min_y, 0.0);
@@ -541,52 +490,6 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
     fragment.sum_y = sum_y;
     fragment.sum_z = sum_z;
     fragment.point_count = cluster_points.size();
-    fragment.corridor_realtime_only = std::any_of(
-        cluster_points.begin(), cluster_points.end(),
-        [&dynamic_points](const std::size_t point_index) {
-          return dynamic_points[point_index].realtime_only;
-        });
-    fragment.corridor_provisional = std::any_of(
-        cluster_points.begin(), cluster_points.end(),
-        [&dynamic_points](const std::size_t point_index) {
-          return dynamic_points[point_index].provisional;
-        });
-    double velocity_x = 0.0;
-    double velocity_y = 0.0;
-    double velocity_z = 0.0;
-    std::size_t velocity_count = 0U;
-    for (const std::size_t point_index : cluster_points) {
-      const auto& dynamic_point = dynamic_points[point_index];
-      if (!dynamic_point.measured_velocity_valid) {
-        continue;
-      }
-      velocity_x += dynamic_point.measured_velocity.x;
-      velocity_y += dynamic_point.measured_velocity.y;
-      velocity_z += dynamic_point.measured_velocity.z;
-      ++velocity_count;
-    }
-    if (velocity_count > 0U) {
-      const double inverse_count = 1.0 / static_cast<double>(velocity_count);
-      fragment.measured_velocity.x = static_cast<float>(velocity_x * inverse_count);
-      fragment.measured_velocity.y = static_cast<float>(velocity_y * inverse_count);
-      fragment.measured_velocity.z = static_cast<float>(velocity_z * inverse_count);
-      fragment.measured_velocity_valid = true;
-    }
-    for (const std::size_t point_index : cluster_points) {
-      const std::uint32_t source_id =
-          dynamic_points[point_index].corridor_source_track_id;
-      if (source_id == 0U) {
-        continue;
-      }
-      if (fragment.corridor_source_track_id == 0U) {
-        fragment.corridor_source_track_id = source_id;
-      } else if (fragment.corridor_source_track_id != source_id) {
-        fragment.corridor_source_track_id = 0U;
-        fragment.corridor_source_conflict = true;
-        fragment.measured_velocity_valid = false;
-        break;
-      }
-    }
     fragments.push_back(fragment);
   }
 

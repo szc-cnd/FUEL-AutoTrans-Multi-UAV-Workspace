@@ -102,21 +102,13 @@ namespace diff_planner
     nh.param("fsm/swing_horizontal_margin", swing_config.horizontal_margin, 0.10);
     nh.param("fsm/swing_vertical_margin", swing_config.vertical_margin, 0.10);
     nh.param("fsm/swing_observation_retention", swing_config.observation_retention,
-             2.0);
-    nh.param("fsm/swing_identity_handoff_max_gap",
-             swing_config.identity_handoff_max_gap, 2.0);
-    nh.param("fsm/swing_identity_handoff_position_gate",
-             swing_config.identity_handoff_position_gate, 0.65);
-    nh.param("fsm/swing_identity_handoff_size_ratio",
-             swing_config.identity_handoff_size_ratio, 0.35);
+             0.80);
     nh.param("fsm/swing_underpass_learning_time",
              swing_config.underpass_learning_time, 3.0);
     nh.param("fsm/swing_velocity_deadband", swing_config.velocity_deadband, 0.08);
     nh.param("fsm/swing_minimum_speed", swing_config.minimum_swing_speed, 0.25);
     nh.param("fsm/swing_enable_harmonic_prediction",
              swing_config.enable_harmonic_prediction, false);
-    nh.param("fsm/swing_realtime_observation_only",
-             swing_config.realtime_observation_only, false);
     nh.param("fsm/swing_harmonic_min_samples",
              swing_config.harmonic_min_samples, 12);
     nh.param("fsm/swing_harmonic_max_history_samples",
@@ -183,12 +175,11 @@ namespace diff_planner
       swing_obstacle_sub_ = nh.subscribe(swing_obstacle_topic_, 10,
                                          &DiffReplanFSM::dynamicObjectsCallback, this,
                                          ros::TransportHints().tcpNoDelay());
-      ROS_INFO("Swing obstacle guard enabled: topic=%s, corridor=%.2fm, horizon=%.2fs, harmonic=%s, realtime=%s.",
+      ROS_INFO("Swing obstacle guard enabled: topic=%s, corridor=%.2fm, horizon=%.2fs, harmonic=%s.",
                swing_obstacle_topic_.c_str(),
                swing_obstacle_guard_.config().corridor_width,
                swing_prediction_horizon_,
-               swing_obstacle_guard_.config().enable_harmonic_prediction ? "on" : "off",
-               swing_obstacle_guard_.config().realtime_observation_only ? "on" : "off");
+               swing_obstacle_guard_.config().enable_harmonic_prediction ? "on" : "off");
     }
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */

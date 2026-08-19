@@ -45,17 +45,10 @@ public:
     double horizontal_margin{0.10};
     double vertical_margin{0.10};
     double observation_retention{0.80};
-    // 新 ID 在短时遮挡后可接管旧摆球历史；不满足空间/尺寸/运动门限时不继承。
-    double identity_handoff_max_gap{2.0};
-    double identity_handoff_position_gate{0.65};
-    double identity_handoff_size_ratio{0.35};
     double underpass_learning_time{3.0};
     double velocity_deadband{0.08};
     double minimum_swing_speed{0.25};
     bool enable_harmonic_prediction{false};
-    // 通道实时模式只把当前观测位置作为未来各采样时刻的占据位置，
-    // 不使用反射模型或简谐模型推断障碍物未来横向运动。
-    bool realtime_observation_only{false};
     int harmonic_min_samples{12};
     int harmonic_max_history_samples{80};
     double harmonic_min_motion_span{0.35};
@@ -104,8 +97,6 @@ private:
   std::unordered_map<uint32_t, Track> tracks_;
 
   static Config sanitizeConfig(const Config &config);
-  std::unordered_map<uint32_t, Track>::iterator findIdentityHandoff(
-      const SwingObstacleObservation &observation, double observation_time);
 };
 
 } // namespace diff_planner

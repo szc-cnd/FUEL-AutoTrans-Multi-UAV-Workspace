@@ -213,31 +213,6 @@ Eigen::Vector3d KalmanFilterBase::velocity() const {
   return Eigen::Vector3d::Zero();
 }
 
-void KalmanFilterBase::setVelocity(const Eigen::Vector3d& velocity) {
-  if (state_.size() < 6 || !velocity.allFinite()) {
-    return;
-  }
-  switch (model_->type()) {
-    case MotionModelType::CA2D:
-      state_(3) = velocity.x();
-      state_(4) = velocity.y();
-      break;
-    case MotionModelType::CA3D:
-    case MotionModelType::CV3D:
-      state_.segment<3>(3) = velocity;
-      break;
-    case MotionModelType::CTRA: {
-      const double speed = std::hypot(velocity.x(), velocity.y());
-      state_(3) = speed;
-      if (speed > 1.0e-3) {
-        state_(5) = std::atan2(velocity.y(), velocity.x());
-      }
-      break;
-    }
-  }
-  model_->normalizeYaw(state_);
-}
-
 void KalmanFilterBase::updateInnovationBuffer(const Eigen::VectorXd& innovation) {
   if (adaptive_window_size_ <= 1) {
     innovation_buffer_.clear();

@@ -42,17 +42,6 @@ struct DynamicObjectDetection {
   // 当前 detection 的点数只服务于 tracker 的合并/分离保护；
   // 不进入对外 ROS 消息，避免把聚类实现细节固化成公共接口。
   std::size_t point_count{0U};
-  // 仅在 LDOP 内部模块间传递，不改变现有 ROS DynamicObject 消息接口。
-  bool corridor_realtime_only{false};
-  bool corridor_provisional{false};
-  // 通道 mapper 通过多帧质心拟合得到的世界系速度；普通动态点无此字段。
-  geometry_msgs::Vector3 measured_velocity;
-  bool measured_velocity_valid{false};
-  // mapper 通道状态机分配的内部源轨迹 ID；0 表示无通道来源。
-  std::uint32_t corridor_source_track_id{0U};
-  // 同一检测簇混入了多个 mapper 来源时保持显式冲突，不能把 source=0
-  // 当成普通无来源点后重新关联到任一旧轨迹。
-  bool corridor_source_conflict{false};
 };
 
 struct TrackHistorySample {

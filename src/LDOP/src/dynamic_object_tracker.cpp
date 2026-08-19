@@ -39,10 +39,6 @@ struct ClassificationSizeUpdate {
 };
 
 geometry_msgs::Point lastMatchedTrackCenter(const TrackState& track) {
-  if ((track.corridor_realtime_only || track.corridor_provisional) &&
-      track.has_last_observed_center) {
-    return track.last_observed_center;
-  }
   for (auto history_it = track.history.rbegin(); history_it != track.history.rend();
        ++history_it) {
     if (history_it->matched && history_it->model_state.size() >= 3) {
@@ -51,141 +47,6 @@ geometry_msgs::Point lastMatchedTrackCenter(const TrackState& track) {
     }
   }
   return track.bbox.center;
-}
-
-// 通道候选可能先以 provisional 形式出现，随后才变成 confirmed；两种状态
-// 都必须留在同一条“只按真实观测关联”的轨道上，不能落回普通 KF gate。
-bool isCorridorRealtimeCandidate(const DynamicObjectDetection& detection) {
-  return detection.corridor_realtime_only || detection.corridor_provisional ||
-         detection.corridor_source_conflict;
-}
-
-bool isCorridorRealtimeTrack(const TrackState& track) {
-  return track.corridor_realtime_only || track.corridor_provisional;
-}
-
-void clearPendingCorridorSource(TrackState& track) {
-  track.corridor_pending_source_track_id = 0U;
-  track.corridor_pending_source_hits = 0U;
-  track.corridor_pending_source_anchor = geometry_msgs::Point{};
-}
-
-double corridorRealtimeAssociationGate(const TrackState& track,
-                                       const DynamicObjectTrackerConfig& config) {
-  const double base = std::isfinite(config.corridor_realtime_association_gate)
-      ? std::max(0.0, config.corridor_realtime_association_gate) : 0.0;
-  const double maximum = std::isfinite(config.corridor_realtime_association_gate_max)
-      ? std::max(base, config.corridor_realtime_association_gate_max) : base;
-  const double increment = std::isfinite(
-      config.corridor_realtime_association_gate_missed_increment)
-      ? std::max(0.0, config.corridor_realtime_association_gate_missed_increment) : 0.0;
-  const double expanded = base + increment * static_cast<double>(track.missed_frames);
-  return std::min(expanded, maximum);
-}
-
-bool passesCorridorRealtimeAssociationGate(
-    const DynamicObjectDetection& detection,
-    const TrackState& track,
-    const DynamicObjectTrackerConfig& config,
-    const std::optional<std::uint32_t>& preferred_corridor_id) {
-  const bool detection_realtime = isCorridorRealtimeCandidate(detection);
-  const bool track_realtime = isCorridorRealtimeTrack(track);
-  if (!detection_realtime && !track_realtime) {
-    return true;
-  }
-  // 普通 LDOP 目标与通道候选永远不共享 ID，即使它们的 bbox 暂时重叠。
-  if (detection_realtime != track_realtime) {
-    return false;
-  }
-  // source 冲突观测只能续接另一条冲突 provisional 轨迹。它不能匹配普通
-  // mapper source，冲突轨迹也不能在下一帧吸收 clean source 并继承其身份。
-  if (detection.corridor_source_conflict || track.corridor_source_conflict) {
-    if (!(detection.corridor_source_conflict && track.corridor_source_conflict)) {
-      return false;
-    }
-    const double distance = distance3D(
-        detection.bbox.center, lastMatchedTrackCenter(track));
-    return std::isfinite(distance) &&
-           distance <= corridorRealtimeAssociationGate(track, config);
-  }
-  const bool detection_has_source = detection.corridor_source_track_id != 0U;
-  const bool track_has_source = track.corridor_source_track_id != 0U;
-  const bool same_source = detection_has_source && track_has_source &&
-      detection.corridor_source_track_id == track.corridor_source_track_id;
-  const bool changed_source = detection_has_source && track_has_source && !same_source;
-  const double distance = distance3D(detection.bbox.center, lastMatchedTrackCenter(track));
-  const double gate = same_source
-      ? config.corridor_source_association_gate
-      : (changed_source ? config.corridor_changed_source_association_gate
-                        : corridorRealtimeAssociationGate(track, config));
-  if (!(std::isfinite(distance) && distance <= gate)) {
-    return false;
-  }
-  // mapper 轨迹在遮挡/点簇断裂后可能换 source ID，不能因此
-  // 强制换外部 ID。但换源只在距离门和水平尺寸都合理时允许，
-  // 避免将相邻的墙面残片串入旧球轨迹。
-  if (!changed_source) {
-    return true;
-  }
-  // 回放中真实球换 mapper source 时，clusterer 的 raw bbox 可能只剩
-  // 厘米级残片。当前 preferred ID 已经提供了唯一性先验，距离过门
-  // 即允许承接；后续仍会强制降级为 provisional 重新确认。
-  if (preferred_corridor_id.has_value() && track.id == *preferred_corridor_id) {
-    return true;
-  }
-
-  const auto positiveRatio = [](const double lhs, const double rhs) {
-    if (!(std::isfinite(lhs) && std::isfinite(rhs)) || lhs <= 1e-6 || rhs <= 1e-6) {
-      return 0.0;
-    }
-    return std::min(lhs, rhs) / std::max(lhs, rhs);
-  };
-  const double detection_area = detection.bbox.size.x * detection.bbox.size.y;
-  const double track_area = track.bbox.size.x * track.bbox.size.y;
-  const double detection_max_edge = std::max(detection.bbox.size.x, detection.bbox.size.y);
-  const double track_max_edge = std::max(track.bbox.size.x, track.bbox.size.y);
-  return positiveRatio(detection_area, track_area) >=
-             config.corridor_changed_source_min_area_ratio &&
-         positiveRatio(detection_max_edge, track_max_edge) >=
-             config.corridor_changed_source_min_max_edge_ratio;
-}
-
-Eigen::VectorXd outputStateForTrack(const TrackState& track) {
-  Eigen::VectorXd state = track.filter->state();
-  if (!isCorridorRealtimeTrack(track) || state.size() < 3) {
-    return state;
-  }
-
-  const geometry_msgs::Point last_observation = lastMatchedTrackCenter(track);
-  state(0) = last_observation.x;
-  state(1) = last_observation.y;
-  state(2) = last_observation.z;
-  if (track.missed_frames == 0U) {
-    return state;
-  }
-  // 通道实时目标漏检时只保留最后观测位置，显式清零输出速度，避免把 tracker
-  // 内部用于重关联的 Kalman 预测误当成规划器可用的未来状态。
-  switch (track.model_type) {
-    case MotionModelType::CA2D:
-      if (state.size() >= 5) {
-        state(3) = 0.0;
-        state(4) = 0.0;
-      }
-      break;
-    case MotionModelType::CA3D:
-    case MotionModelType::CV3D:
-      if (state.size() >= 6) {
-        state.segment<3>(3).setZero();
-      }
-      break;
-    case MotionModelType::CTRA:
-      if (state.size() >= 5) {
-        state(3) = 0.0;
-        state(4) = 0.0;
-      }
-      break;
-  }
-  return state;
 }
 
 bool hasSimilarHorizontalBoundingBoxSize(const DynamicObjectDetection& detection,
@@ -218,107 +79,9 @@ double horizontalBoundingBoxSizeRatio(const geometry_msgs::Vector3& lhs,
 
 bool isPublishableTrack(const TrackState& track,
                         const DynamicObjectTrackerConfig& config) {
-  const std::size_t max_publish_missed_frames = isCorridorRealtimeTrack(track)
-      ? config.corridor_realtime_max_publish_missed_frames
-      : config.max_publish_missed_frames;
-  if (track.missed_frames > max_publish_missed_frames) {
-    return false;
-  }
-
-  // 通道实时目标已经由 mapper 完成动静态状态机；确认目标直接发布，未知候选
-  // 是否提前发布由独立参数控制，不影响通道外 hits+motion_confirmed 契约。
-  if (isCorridorRealtimeTrack(track)) {
-    if (track.corridor_provisional && !config.publish_corridor_provisional) {
-      return false;
-    }
-    if (track.corridor_provisional) {
-      const bool below_optional_max = config.corridor_provisional_max_hits == 0U ||
-          track.corridor_provisional_hits <= config.corridor_provisional_max_hits;
-      return track.corridor_provisional_hits >= config.corridor_provisional_min_hits &&
-             below_optional_max;
-    }
-    return track.hits >= config.corridor_provisional_min_hits;
-  }
-
-  return track.hits >= config.min_hits_to_publish && track.motion_confirmed;
-}
-
-bool isPreferredCorridorOutput(const TrackState& lhs, const TrackState& rhs) {
-  // mapper 已确认的旧球在短时漏检期优先于新 provisional 碎片；
-  // 新轨迹一旦确认，当前帧已命中者即可稳定接管输出。
-  const bool lhs_confirmed = !lhs.corridor_provisional;
-  const bool rhs_confirmed = !rhs.corridor_provisional;
-  if (lhs_confirmed != rhs_confirmed) {
-    return lhs_confirmed;
-  }
-  const bool lhs_matched = lhs.missed_frames == 0U;
-  const bool rhs_matched = rhs.missed_frames == 0U;
-  if (lhs_matched != rhs_matched) {
-    return lhs_matched;
-  }
-  if (lhs.hits != rhs.hits) {
-    return lhs.hits > rhs.hits;
-  }
-  if (lhs.missed_frames != rhs.missed_frames) {
-    return lhs.missed_frames < rhs.missed_frames;
-  }
-  return lhs.id < rhs.id;
-}
-
-std::vector<const TrackState*> selectTracksForOutput(
-    const std::vector<TrackState>& tracks,
-    const DynamicObjectTrackerConfig& config,
-    const std::optional<std::uint32_t>& preferred_corridor_id) {
-  std::vector<const TrackState*> generic_tracks;
-  std::vector<const TrackState*> corridor_tracks;
-  generic_tracks.reserve(tracks.size());
-  corridor_tracks.reserve(tracks.size());
-  for (const auto& track : tracks) {
-    if (!isPublishableTrack(track, config)) {
-      continue;
-    }
-    (isCorridorRealtimeTrack(track) ? corridor_tracks : generic_tracks).push_back(&track);
-  }
-
-  std::sort(corridor_tracks.begin(), corridor_tracks.end(),
-            [&](const TrackState* lhs, const TrackState* rhs) {
-              if (preferred_corridor_id.has_value()) {
-                const bool lhs_preferred = lhs->id == *preferred_corridor_id;
-                const bool rhs_preferred = rhs->id == *preferred_corridor_id;
-                if (lhs_preferred != rhs_preferred) {
-                  return lhs_preferred;
-                }
-              }
-              return isPreferredCorridorOutput(*lhs, *rhs);
-            });
-  if (config.max_corridor_realtime_tracks == 1U && preferred_corridor_id.has_value()) {
-    const bool preferred_alive = std::any_of(
-        tracks.begin(), tracks.end(), [&](const TrackState& track) {
-          return isCorridorRealtimeTrack(track) && track.id == *preferred_corridor_id;
-        });
-    if (preferred_alive) {
-      const auto preferred = std::find_if(
-          corridor_tracks.begin(), corridor_tracks.end(), [&](const TrackState* track) {
-            return track->id == *preferred_corridor_id;
-          });
-      if (preferred == corridor_tracks.end()) {
-        // 当前球仅在内部身份保留期、已停止对外发布时，独立 provisional
-        // 只能继续积累证据；它不能绕过 mapper 确认直接抢占规划输出。
-        corridor_tracks.clear();
-      } else {
-        corridor_tracks = {*preferred};
-      }
-    }
-  }
-  if (config.max_corridor_realtime_tracks > 0U &&
-      corridor_tracks.size() > config.max_corridor_realtime_tracks) {
-    corridor_tracks.resize(config.max_corridor_realtime_tracks);
-  }
-
-  generic_tracks.insert(generic_tracks.end(), corridor_tracks.begin(), corridor_tracks.end());
-  std::sort(generic_tracks.begin(), generic_tracks.end(),
-            [](const TrackState* lhs, const TrackState* rhs) { return lhs->id < rhs->id; });
-  return generic_tracks;
+  return track.hits >= config.min_hits_to_publish &&
+         track.motion_confirmed &&
+         track.missed_frames <= config.max_publish_missed_frames;
 }
 
 std::size_t classScoreIndex(const ObjectClass object_class) {
@@ -440,78 +203,6 @@ DynamicObjectTrackerConfig buildTrackerConfig(const DynamicObjectTrackerParams& 
       static_cast<std::size_t>(params.min_hits_to_publish > 0 ? params.min_hits_to_publish : defaults.min_hits_to_publish);
   const std::size_t max_publish_hits = config.max_history_size > 1U ? config.max_history_size - 1U : 1U;
   config.min_hits_to_publish = std::min(requested_min_hits, max_publish_hits);
-  config.publish_corridor_provisional = params.publish_corridor_provisional;
-  const int requested_corridor_hits = params.corridor_provisional_min_hits > 0
-      ? params.corridor_provisional_min_hits
-      : defaults.corridor_provisional_min_hits;
-  config.corridor_provisional_min_hits = std::min(
-      static_cast<std::size_t>(requested_corridor_hits), max_publish_hits);
-  const int requested_corridor_max_hits = params.corridor_provisional_max_hits >= 0
-      ? params.corridor_provisional_max_hits
-      : defaults.corridor_provisional_max_hits;
-  config.corridor_provisional_max_hits = requested_corridor_max_hits == 0
-      ? 0U
-      : std::max(config.corridor_provisional_min_hits,
-                 std::min(static_cast<std::size_t>(requested_corridor_max_hits),
-                          max_publish_hits));
-  const int requested_corridor_missed =
-      params.corridor_realtime_max_publish_missed_frames >= 0
-          ? params.corridor_realtime_max_publish_missed_frames
-          : defaults.corridor_realtime_max_publish_missed_frames;
-  config.corridor_realtime_max_publish_missed_frames = std::min(
-      static_cast<std::size_t>(requested_corridor_missed), config.max_coast_frames);
-  config.corridor_realtime_association_gate =
-      std::isfinite(params.corridor_realtime_association_gate) &&
-              params.corridor_realtime_association_gate > 0.0
-          ? params.corridor_realtime_association_gate
-          : defaults.corridor_realtime_association_gate;
-  config.corridor_realtime_association_gate_max =
-      std::isfinite(params.corridor_realtime_association_gate_max) &&
-              params.corridor_realtime_association_gate_max > 0.0
-          ? std::max(params.corridor_realtime_association_gate_max,
-                     config.corridor_realtime_association_gate)
-          : std::max(defaults.corridor_realtime_association_gate_max,
-                     config.corridor_realtime_association_gate);
-  config.corridor_realtime_association_gate_missed_increment =
-      std::isfinite(params.corridor_realtime_association_gate_missed_increment) &&
-              params.corridor_realtime_association_gate_missed_increment >= 0.0
-          ? params.corridor_realtime_association_gate_missed_increment
-          : defaults.corridor_realtime_association_gate_missed_increment;
-  config.corridor_source_association_gate =
-      std::isfinite(params.corridor_source_association_gate) &&
-              params.corridor_source_association_gate > 0.0
-          ? std::max(params.corridor_source_association_gate,
-                     config.corridor_realtime_association_gate_max)
-          : std::max(defaults.corridor_source_association_gate,
-                     config.corridor_realtime_association_gate_max);
-  config.corridor_changed_source_association_gate =
-      std::isfinite(params.corridor_changed_source_association_gate) &&
-              params.corridor_changed_source_association_gate > 0.0
-          ? std::clamp(params.corridor_changed_source_association_gate,
-                       config.corridor_realtime_association_gate_max,
-                       config.corridor_source_association_gate)
-          : std::clamp(defaults.corridor_changed_source_association_gate,
-                       config.corridor_realtime_association_gate_max,
-                       config.corridor_source_association_gate);
-  config.corridor_changed_source_min_area_ratio =
-      std::isfinite(params.corridor_changed_source_min_area_ratio)
-          ? std::clamp(params.corridor_changed_source_min_area_ratio, 0.0, 1.0)
-          : defaults.corridor_changed_source_min_area_ratio;
-  config.corridor_changed_source_min_max_edge_ratio =
-      std::isfinite(params.corridor_changed_source_min_max_edge_ratio)
-          ? std::clamp(params.corridor_changed_source_min_max_edge_ratio, 0.0, 1.0)
-          : defaults.corridor_changed_source_min_max_edge_ratio;
-  const int requested_internal_misses =
-      params.corridor_realtime_max_internal_missed_frames > 0
-          ? params.corridor_realtime_max_internal_missed_frames
-          : defaults.corridor_realtime_max_internal_missed_frames;
-  config.corridor_realtime_max_internal_missed_frames = static_cast<std::size_t>(
-      std::max(requested_internal_misses,
-               static_cast<int>(config.corridor_realtime_max_publish_missed_frames)));
-  const int requested_max_corridor_tracks = params.max_corridor_realtime_tracks > 0
-      ? params.max_corridor_realtime_tracks : defaults.max_corridor_realtime_tracks;
-  config.max_corridor_realtime_tracks =
-      static_cast<std::size_t>(std::max(1, requested_max_corridor_tracks));
   config.motion_min_displacement =
       params.motion_min_displacement > 0.0
           ? params.motion_min_displacement
@@ -747,17 +438,6 @@ Eigen::VectorXd stateForModel(const MotionModelType model_type,
   return Eigen::VectorXd();
 }
 
-void applyMeasuredVelocity(KalmanFilterBase& filter,
-                           const geometry_msgs::Vector3& measured_velocity) {
-  if (!std::isfinite(measured_velocity.x) || !std::isfinite(measured_velocity.y) ||
-      !std::isfinite(measured_velocity.z)) {
-    return;
-  }
-  filter.setVelocity(Eigen::Vector3d(measured_velocity.x,
-                                     measured_velocity.y,
-                                     measured_velocity.z));
-}
-
 ClassificationSizeUpdate updateClassificationSizeState(
     TrackState& track,
     const DynamicObjectDetection& detection,
@@ -832,13 +512,8 @@ ClassificationSizeUpdate updateClassificationSizeState(
 double computeFallbackAssociationCost(const DynamicObjectDetection& detection,
                                       const TrackState& track,
                                       const DynamicObjectTrackerConfig& config,
-                                      const std::optional<std::uint32_t>& preferred_corridor_id,
                                       const double rejected_gate_cost,
                                       const double invalid_cost) {
-  if (!passesCorridorRealtimeAssociationGate(
-          detection, track, config, preferred_corridor_id)) {
-    return invalid_cost;
-  }
   const bool use_distance_fallback = config.spawn_suppression_distance > 0.0;
   const bool use_iou_fallback = config.spawn_suppression_iou_threshold > 0.0;
   if (!use_distance_fallback && !use_iou_fallback) {
@@ -886,26 +561,13 @@ double computeFallbackAssociationCost(const DynamicObjectDetection& detection,
 
 bool shouldSuppressTrackSpawn(const DynamicObjectDetection& detection,
                               const std::vector<TrackState>& tracks,
-                              const DynamicObjectTrackerConfig& config,
-                              const std::optional<std::uint32_t>& preferred_corridor_id) {
+                              const DynamicObjectTrackerConfig& config) {
   if (config.spawn_suppression_distance <= 0.0 &&
       config.spawn_suppression_iou_threshold <= 0.0) {
     return false;
   }
 
   for (const auto& track : tracks) {
-    const bool detection_realtime = isCorridorRealtimeCandidate(detection);
-    const bool track_realtime = isCorridorRealtimeTrack(track);
-    if (detection_realtime || track_realtime) {
-      // 通道候选只使用同源、最后观测的严格距离门。距离门失败时必须
-      // 允许建立新 ID，不能被普通目标的宽松 spawn suppression 吞掉。
-      if (detection_realtime && track_realtime &&
-          passesCorridorRealtimeAssociationGate(
-              detection, track, config, preferred_corridor_id)) {
-        return true;
-      }
-      continue;
-    }
     // 未匹配 detection 若仍贴近已有轨迹，先作为 tentative detection 挂起，避免中心跳动时立刻裂出新 ID。
     if (config.spawn_suppression_iou_threshold > 0.0 &&
         computeHorizontalIntersectionOverUnion(detection.bbox, track.bbox) >=
@@ -958,7 +620,6 @@ void appendHistorySample(TrackState& track, const ros::Time& stamp, const bool m
 CostMatrix buildCostMatrix(const std::vector<DynamicObjectDetection>& detections,
                            const std::vector<TrackState>& tracks,
                            const DynamicObjectTrackerConfig& config,
-                           const std::optional<std::uint32_t>& preferred_corridor_id,
                            const double gate_threshold,
                            const double coasting_gate_relax_factor,
                            const double invalid_cost) {
@@ -967,48 +628,10 @@ CostMatrix buildCostMatrix(const std::vector<DynamicObjectDetection>& detections
   for (std::size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
     const Eigen::Vector3d detection_position = pointToEigen(detections[detection_index].bbox.center);
     for (std::size_t track_index = 0; track_index < tracks.size(); ++track_index) {
-      const TrackState& track = tracks[track_index];
-      const DynamicObjectDetection& detection = detections[detection_index];
-      // 通道层的 provisional/confirmed 目标都来自同一实时检测源。它们不能
-      // 与通道外 temporal 目标交叉关联，也不能使用 KF 马氏门：通道目标在
-      // 漏检时故意不做位置外推，滤波协方差反而可能给出数米级的虚假 gate。
-      if (isCorridorRealtimeCandidate(detection) || isCorridorRealtimeTrack(track)) {
-        if (!passesCorridorRealtimeAssociationGate(
-                detection, track, config, preferred_corridor_id)) {
-          continue;
-        }
-        const double last_observation_distance = distance3D(
-            detection.bbox.center, lastMatchedTrackCenter(track));
-        const bool detection_has_source = detection.corridor_source_track_id != 0U;
-        const bool track_has_source = track.corridor_source_track_id != 0U;
-        const bool same_source = detection_has_source && track_has_source &&
-            detection.corridor_source_track_id == track.corridor_source_track_id;
-        const bool changed_source = detection_has_source && track_has_source && !same_source;
-        const double distance_gate = same_source
-            ? config.corridor_source_association_gate
-            : (changed_source ? config.corridor_changed_source_association_gate
-                              : corridorRealtimeAssociationGate(track, config));
-        // source ID 作为软优先级而非硬门：同源优先，无源次之，
-        // 换源在空间/尺寸合理时仍可承接旧 external ID。
-        double source_penalty = same_source ? 0.0 : 1.0;
-        if (changed_source) {
-          const bool preferred = preferred_corridor_id.has_value() &&
-              track.id == *preferred_corridor_id;
-          // 对多个空闲旧轨都可过 gate 的换源观测，先承接当前
-          // preferred external ID；其余轨迹按最近真实观测时间排序。
-          source_penalty = preferred
-              ? 2.0
-              : 4.0 + 2.0 * static_cast<double>(
-                    std::min<std::size_t>(track.missed_frames, 100U));
-        }
-        matrix[detection_index][track_index] = source_penalty +
-            last_observation_distance / std::max(distance_gate, 1e-6);
-        continue;
-      }
       // cost 仍保留原始马氏距离平方；是否可匹配由对应轨迹的 gate 决定。
-      const double cost = computeMahalanobisCost(detection_position, track);
+      const double cost = computeMahalanobisCost(detection_position, tracks[track_index]);
       const double relaxed_gate =
-          track.missed_frames > 0U
+          tracks[track_index].missed_frames > 0U
               ? gate_threshold * coasting_gate_relax_factor
               : gate_threshold;
       if (std::isfinite(cost) && cost <= relaxed_gate) {
@@ -1019,7 +642,7 @@ CostMatrix buildCostMatrix(const std::vector<DynamicObjectDetection>& detections
       // 主关联仍优先使用马氏距离；只有它被 gate 拒绝时，才用距离/IoU 阈值给这对
       // detection-track 一个“次优回退候选”，专门补原地旋转或小半径旋转时的中心抖动。
       const double fallback_cost = computeFallbackAssociationCost(
-          detection, track, config, preferred_corridor_id, relaxed_gate, invalid_cost);
+          detections[detection_index], tracks[track_index], config, relaxed_gate, invalid_cost);
       if (fallback_cost < invalid_cost) {
         matrix[detection_index][track_index] = fallback_cost;
       }
@@ -1179,45 +802,6 @@ void DynamicObjectTracker::loadParameters() {
   pnh_.param("tracking_max_publish_missed_frames", params_.max_publish_missed_frames,
              defaults.max_publish_missed_frames);
   pnh_.param("tracking_min_hits_to_publish", params_.min_hits_to_publish, defaults.min_hits_to_publish);
-  pnh_.param("tracking_publish_corridor_provisional",
-             params_.publish_corridor_provisional,
-             defaults.publish_corridor_provisional);
-  pnh_.param("tracking_corridor_provisional_min_hits",
-             params_.corridor_provisional_min_hits,
-             defaults.corridor_provisional_min_hits);
-  pnh_.param("tracking_corridor_provisional_max_hits",
-             params_.corridor_provisional_max_hits,
-             defaults.corridor_provisional_max_hits);
-  pnh_.param("tracking_corridor_realtime_max_publish_missed_frames",
-             params_.corridor_realtime_max_publish_missed_frames,
-             defaults.corridor_realtime_max_publish_missed_frames);
-  pnh_.param("tracking_corridor_realtime_association_gate",
-             params_.corridor_realtime_association_gate,
-             defaults.corridor_realtime_association_gate);
-  pnh_.param("tracking_corridor_realtime_association_gate_max",
-             params_.corridor_realtime_association_gate_max,
-             defaults.corridor_realtime_association_gate_max);
-  pnh_.param("tracking_corridor_realtime_association_gate_missed_increment",
-             params_.corridor_realtime_association_gate_missed_increment,
-             defaults.corridor_realtime_association_gate_missed_increment);
-  pnh_.param("tracking_corridor_source_association_gate",
-             params_.corridor_source_association_gate,
-             defaults.corridor_source_association_gate);
-  pnh_.param("tracking_corridor_changed_source_association_gate",
-             params_.corridor_changed_source_association_gate,
-             defaults.corridor_changed_source_association_gate);
-  pnh_.param("tracking_corridor_changed_source_min_area_ratio",
-             params_.corridor_changed_source_min_area_ratio,
-             defaults.corridor_changed_source_min_area_ratio);
-  pnh_.param("tracking_corridor_changed_source_min_max_edge_ratio",
-             params_.corridor_changed_source_min_max_edge_ratio,
-             defaults.corridor_changed_source_min_max_edge_ratio);
-  pnh_.param("tracking_corridor_realtime_max_internal_missed_frames",
-             params_.corridor_realtime_max_internal_missed_frames,
-             defaults.corridor_realtime_max_internal_missed_frames);
-  pnh_.param("tracking_max_corridor_realtime_tracks",
-             params_.max_corridor_realtime_tracks,
-             defaults.max_corridor_realtime_tracks);
   pnh_.param("tracking_motion_min_displacement", params_.motion_min_displacement,
              defaults.motion_min_displacement);
   pnh_.param("tracking_motion_min_evidence_frames", params_.motion_min_evidence_frames,
@@ -1296,7 +880,6 @@ DynamicObjectTrackerFrameResult DynamicObjectTracker::processDynamicTracks(
       buildCostMatrix(detections,
                       tracks_,
                       config_,
-                      corridor_output_track_id_,
                       config_.association_gate_threshold,
                       config_.coasting_gate_relax_factor,
                       config_.invalid_cost);
@@ -1315,8 +898,7 @@ DynamicObjectTrackerFrameResult DynamicObjectTracker::processDynamicTracks(
   for (std::size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
     if (!matched_detections[detection_index]) {
       // 未匹配 detection 先经过建轨抑制，防止同一目标中心抖动时立即产生新 ID。
-      if (shouldSuppressTrackSpawn(
-              detections[detection_index], tracks_, config_, corridor_output_track_id_)) {
+      if (shouldSuppressTrackSpawn(detections[detection_index], tracks_, config_)) {
         ++suppressed_track_spawns;
         continue;
       }
@@ -1333,7 +915,6 @@ DynamicObjectTrackerFrameResult DynamicObjectTracker::processDynamicTracks(
 
   mergeDuplicateTracks();
   deleteExpiredTracks();
-  updateCorridorOutputSelection();
   result.timing.update_tracks_ms = elapsedMs(update_tracks_start, std::chrono::steady_clock::now());
 
   const auto build_output_start = std::chrono::steady_clock::now();
@@ -1373,15 +954,13 @@ DynamicObjectTrackerFrameResult DynamicObjectTracker::processDynamicTracks(
 visualization_msgs::MarkerArray DynamicObjectTracker::buildTrackMarkers(
     const std_msgs::Header& header) const {
   visualization_msgs::MarkerArray markers;
-  const std::vector<const TrackState*> visible_tracks =
-      selectTracksForOutput(tracks_, config_, corridor_output_track_id_);
-  markers.markers.reserve(1U + visible_tracks.size() * 4U);
+  markers.markers.reserve(1U + tracks_.size() * 4U);
   markers.markers.push_back(makeDeleteAllMarker(header, "dynamic_tracks"));
 
-  // 主 track marker 与 dynamic_objects 使用同一选择结果。内部隐藏候选仍继续
-  // 累积命中，但不会在 RViz 中制造额外短命编号。
-  for (const TrackState* track_ptr : visible_tracks) {
-    const auto& track = *track_ptr;
+  for (const auto& track : tracks_) {
+    if (!isPublishableTrack(track, config_)) {
+      continue;
+    }
     const bool coasting = track.missed_frames > 0U;
     std_msgs::ColorRGBA color;
     // 漏检轨迹保留同一颜色但降低透明度，方便 RViz 区分预测延续和本帧匹配。
@@ -1480,11 +1059,6 @@ visualization_msgs::MarkerArray DynamicObjectTracker::buildTrackMarkers(
 void DynamicObjectTracker::predictTracks(const ros::Time& stamp) {
   // 如果当前是第一帧，`tracks_` 为空，这个循环什么都不做。
   for (auto& track : tracks_) {
-    if (isCorridorRealtimeTrack(track)) {
-      // 通道目标的关联只允许使用最后真实观测；禁止 KF 速度外推把轨迹
-      // 推到下一候选位置后再用宽协方差错误吸附远处点簇。
-      continue;
-    }
     // 计算预测步长
     const double dt =
         computeDeltaSeconds(stamp, track.last_stamp, config_.filter_config.default_dt, config_.max_dt);
@@ -1499,43 +1073,6 @@ void DynamicObjectTracker::predictTracks(const ros::Time& stamp) {
 void DynamicObjectTracker::updateMatchedTrack(TrackState& track,
                                              const DynamicObjectDetection& detection,
                                              const ros::Time& stamp) {
-  const bool track_had_source = track.corridor_source_track_id != 0U;
-  const bool detection_has_source = detection.corridor_source_track_id != 0U;
-  const bool changed_source = track_had_source && detection_has_source &&
-      track.corridor_source_track_id != detection.corridor_source_track_id;
-  std::size_t committed_source_hits = 0U;
-  if (changed_source) {
-    const geometry_msgs::Point committed_anchor = lastMatchedTrackCenter(track);
-    const bool same_pending_source =
-        track.corridor_pending_source_track_id == detection.corridor_source_track_id;
-    const double anchor_distance = same_pending_source
-        ? distance3D(detection.bbox.center, track.corridor_pending_source_anchor)
-        : 0.0;
-    if (!same_pending_source || !std::isfinite(anchor_distance) ||
-        anchor_distance > config_.corridor_changed_source_association_gate) {
-      track.corridor_pending_source_track_id = detection.corridor_source_track_id;
-      track.corridor_pending_source_hits = 1U;
-      track.corridor_pending_source_anchor = committed_anchor;
-    } else {
-      ++track.corridor_pending_source_hits;
-    }
-
-    if (track.corridor_pending_source_hits < config_.corridor_provisional_min_hits) {
-      // pending 观测不改正式 source、位置或确认状态；对已提交轨迹而言，
-      // 这一帧仍是漏检。这样首帧碎片可由发布窗口原位保活，而交替 source
-      // 不会把旧位置无限发布。
-      track.corridor_realtime_only = true;
-      track.age += 1U;
-      track.missed_frames += 1U;
-      track.last_stamp = stamp;
-      appendHistorySample(track, stamp, false, config_.max_history_size);
-      return;
-    }
-    committed_source_hits = track.corridor_pending_source_hits;
-  } else {
-    clearPendingCorridorSource(track);
-  }
-
   const std::size_t matched_hits = track.hits + 1U;
   const double observed_displacement =
       distance3D(detection.bbox.center, lastMatchedTrackCenter(track));
@@ -1550,51 +1087,8 @@ void DynamicObjectTracker::updateMatchedTrack(TrackState& track,
     track.object_class = ObjectClass::Unknown;
   }
 
-  // realtime_only 是轨迹级安全属性：一旦某个 ID 被通道层接管，后续
-  // 碎片化/短时混合输入不能把它重新送进未来 predictor。provisional 则
-  // 随当前帧确认状态更新，允许从候选转为已确认。
-  track.corridor_realtime_only =
-      track.corridor_realtime_only || isCorridorRealtimeCandidate(detection);
-  const bool effective_provisional =
-      detection.corridor_provisional || detection.corridor_source_conflict ||
-      track.corridor_source_conflict;
-  if (!effective_provisional) {
-    track.corridor_provisional = false;
-    track.corridor_provisional_hits = 0U;
-  } else if (changed_source) {
-    // external ID 可以承接，但 mapper 新 source 的 provisional 不能借用
-    // 旧 source 的 confirmed 证据；只有 pending 连续窗口完整后才原子提交。
-    track.corridor_provisional = true;
-    track.corridor_provisional_hits = committed_source_hits;
-  } else if (track.corridor_provisional) {
-    ++track.corridor_provisional_hits;
-  } else {
-    // 同一 mapper source 的短暂状态抖动不降级已确认轨迹。
-    track.corridor_provisional_hits = 0U;
-  }
-  if (!detection.corridor_source_conflict &&
-      detection.corridor_source_track_id != 0U) {
-    track.corridor_source_track_id = detection.corridor_source_track_id;
-  }
-  track.corridor_source_conflict =
-      track.corridor_source_conflict || detection.corridor_source_conflict;
-  clearPendingCorridorSource(track);
-  if (isCorridorRealtimeTrack(track)) {
-    track.last_observed_center = detection.bbox.center;
-    track.has_last_observed_center = true;
-  }
-
   // filter 只接收 detection 中心作为 3D 位置观测；bbox 尺寸另行维护，不进入状态向量。
-  if (changed_source) {
-    // source 切换意味着观测身份发生离散重建。重新锚定滤波器，避免把允许的
-    // 质心跳变转换成数米每秒的虚假速度交给下游。
-    track.filter->initialize(pointToEigen(detection.bbox.center));
-  } else {
-    track.filter->update(pointToEigen(detection.bbox.center));
-  }
-  if (detection.measured_velocity_valid && isCorridorRealtimeTrack(track)) {
-    applyMeasuredVelocity(*track.filter, detection.measured_velocity);
-  }
+  track.filter->update(pointToEigen(detection.bbox.center));
   if (track.motion_evidence_frames >= config_.motion_min_evidence_frames &&
       track.filter->velocity().norm() >= config_.motion_confirmation_speed) {
     track.motion_confirmed = true;
@@ -1691,22 +1185,8 @@ void DynamicObjectTracker::createTrack(const DynamicObjectDetection& detection, 
   // 参考 LDOT：新轨迹直接以首帧 detection 中心初始化状态，避免首帧仍被 Kalman 增益
   // 拉向原点/旧参考点，导致蓝色轨迹头落在无人机与目标之间。
   track.filter->initialize(pointToEigen(detection.bbox.center));
-  if (detection.measured_velocity_valid && isCorridorRealtimeCandidate(detection)) {
-    applyMeasuredVelocity(*track.filter, detection.measured_velocity);
-  }
   track.bbox = detection.bbox;
   track.object_class = ObjectClass::Unknown;
-  track.corridor_realtime_only = isCorridorRealtimeCandidate(detection);
-  track.corridor_provisional =
-      detection.corridor_provisional || detection.corridor_source_conflict;
-  track.corridor_provisional_hits = track.corridor_provisional ? 1U : 0U;
-  track.corridor_source_conflict = detection.corridor_source_conflict;
-  track.corridor_source_track_id = detection.corridor_source_conflict
-      ? 0U : detection.corridor_source_track_id;
-  if (isCorridorRealtimeTrack(track)) {
-    track.last_observed_center = detection.bbox.center;
-    track.has_last_observed_center = true;
-  }
   track.max_observed_size = detection.bbox.size;
   track.last_point_count = detection.point_count;
   updateBBoxCenterFromFilter(track);
@@ -1719,16 +1199,10 @@ void DynamicObjectTracker::createTrack(const DynamicObjectDetection& detection, 
 }
 
 void DynamicObjectTracker::coastTrack(TrackState& track, const ros::Time& stamp) {
-  // pending source 必须连续命中；任何空帧都会中断此次身份切换尝试。
-  clearPendingCorridorSource(track);
   track.age += 1U;
   track.missed_frames += 1U;
   track.last_stamp = stamp;
-  if (isCorridorRealtimeTrack(track)) {
-    track.bbox.center = lastMatchedTrackCenter(track);
-  } else {
-    updateBBoxCenterFromFilter(track);
-  }
+  updateBBoxCenterFromFilter(track);
   // 漏检样本同样记录公共状态协方差；预测保活阶段的不确定性对后续调试和预测更关键。
   appendHistorySample(track, stamp, false, config_.max_history_size);
 }
@@ -1770,13 +1244,6 @@ void DynamicObjectTracker::mergeDuplicateTracks() {
       for (std::size_t rhs_index = lhs_index + 1U;
            rhs_index < tracks_.size();
            ++rhs_index) {
-        // mapper 已经在通道层做点簇归并；实时/临时轨迹不能再与任何
-        // 其他轨迹通过普通 duplicate_merge_distance 链式合并，否则相距较远
-        // 的墙面/背景候选会被拼成一个跳跃 ID。
-        if (isCorridorRealtimeTrack(tracks_[lhs_index]) ||
-            isCorridorRealtimeTrack(tracks_[rhs_index])) {
-          continue;
-        }
         const double center_distance =
             distance3D(tracks_[lhs_index].bbox.center, tracks_[rhs_index].bbox.center);
         if (!(std::isfinite(center_distance) &&
@@ -1801,16 +1268,6 @@ void DynamicObjectTracker::mergeDuplicateTracks() {
         const std::size_t keep_index =
             is_preferred(tracks_[lhs_index], tracks_[rhs_index]) ? lhs_index : rhs_index;
         const std::size_t remove_index = keep_index == lhs_index ? rhs_index : lhs_index;
-        // 合并碎片时保留通道语义，避免一个普通碎片胜出后把 realtime_only 丢掉。
-        const bool keep_realtime = tracks_[keep_index].corridor_realtime_only;
-        const bool remove_realtime = tracks_[remove_index].corridor_realtime_only;
-        const bool merged_provisional =
-            (!keep_realtime || tracks_[keep_index].corridor_provisional) &&
-            (!remove_realtime || tracks_[remove_index].corridor_provisional);
-        tracks_[keep_index].corridor_realtime_only = keep_realtime || remove_realtime;
-        // 只要任一 realtime 碎片已经确认，合并轨迹就不能退回 provisional；
-        // 非 realtime 碎片不参与该状态的真假判断。
-        tracks_[keep_index].corridor_provisional = merged_provisional;
         tracks_.erase(tracks_.begin() + static_cast<std::ptrdiff_t>(remove_index));
         merged = true;
         break;
@@ -1824,97 +1281,34 @@ void DynamicObjectTracker::deleteExpiredTracks() {
   tracks_.erase(std::remove_if(tracks_.begin(),
                                tracks_.end(),
                                [this](const TrackState& track) {
-                                 const std::size_t max_missed = isCorridorRealtimeTrack(track)
-                                     ? config_.corridor_realtime_max_internal_missed_frames
-                                     : config_.max_coast_frames;
-                                 return track.missed_frames > max_missed;
+                                 return track.missed_frames > config_.max_coast_frames;
                                }),
                 tracks_.end());
-}
-
-void DynamicObjectTracker::updateCorridorOutputSelection() {
-  if (corridor_output_track_id_.has_value()) {
-    const bool preferred_still_exists = std::any_of(
-        tracks_.begin(), tracks_.end(), [&](const TrackState& track) {
-          return track.id == *corridor_output_track_id_ && isCorridorRealtimeTrack(track) &&
-                 !track.corridor_source_conflict;
-        });
-    if (!preferred_still_exists) {
-      corridor_output_track_id_.reset();
-    }
-  }
-
-  std::vector<const TrackState*> publishable;
-  for (const auto& track : tracks_) {
-    // source 冲突轨迹可以按 provisional 规则短时输出，但不能成为 sticky
-    // preferred；否则一个冲突簇会压住下一帧独立出现的正常候选。
-    if (isCorridorRealtimeTrack(track) && isPublishableTrack(track, config_) &&
-        !track.corridor_source_conflict) {
-      publishable.push_back(&track);
-    }
-  }
-  if (publishable.empty()) {
-    // 超过发布保活时只停止输出，不丢 preferred external ID。
-    // 该 ID 仅在内部轨迹真正删除后清空。
-    return;
-  }
-
-  const auto bestByPriority = [](const TrackState* lhs, const TrackState* rhs) {
-    return isPreferredCorridorOutput(*lhs, *rhs);
-  };
-  const TrackState* best = *std::min_element(
-      publishable.begin(), publishable.end(),
-      [&](const TrackState* lhs, const TrackState* rhs) { return bestByPriority(lhs, rhs); });
-  const TrackState* current = nullptr;
-  if (corridor_output_track_id_.has_value()) {
-    const auto found = std::find_if(
-        publishable.begin(), publishable.end(), [&](const TrackState* track) {
-          return track->id == *corridor_output_track_id_;
-        });
-    if (found != publishable.end()) {
-      current = *found;
-    }
-  }
-
-  const TrackState* matched_confirmed = nullptr;
-  for (const TrackState* track : publishable) {
-    if (!track->corridor_provisional && track->missed_frames == 0U &&
-        (matched_confirmed == nullptr || bestByPriority(track, matched_confirmed))) {
-      matched_confirmed = track;
-    }
-  }
-
-  if (!corridor_output_track_id_.has_value()) {
-    corridor_output_track_id_ = best->id;
-  } else if (current == nullptr) {
-    // preferred 仍在内部身份保留期但已停止发布时，仅由 mapper 已确认且
-    // 本帧命中的轨迹接管；独立 provisional 保持隐藏。
-    if (matched_confirmed != nullptr) {
-      corridor_output_track_id_ = matched_confirmed->id;
-    }
-  } else if (current->corridor_provisional && matched_confirmed != nullptr &&
-             matched_confirmed->id != current->id) {
-    corridor_output_track_id_ = matched_confirmed->id;
-  } else if (current->missed_frames > 0U) {
-    if (matched_confirmed != nullptr && matched_confirmed->id != current->id) {
-      corridor_output_track_id_ = matched_confirmed->id;
-    }
-  }
 }
 
 ldop::DynamicObjectArray DynamicObjectTracker::buildOutput(const std_msgs::Header& header) const {
   ldop::DynamicObjectArray object_array;
   object_array.header = header;
 
-  const std::vector<const TrackState*> ordered_tracks =
-      selectTracksForOutput(tracks_, config_, corridor_output_track_id_);
+  std::vector<const TrackState*> ordered_tracks;
+  ordered_tracks.reserve(tracks_.size());
+  for (const auto& track : tracks_) {
+    ordered_tracks.push_back(&track);
+  }
+  std::sort(ordered_tracks.begin(),
+            ordered_tracks.end(),
+            [](const TrackState* lhs, const TrackState* rhs) { return lhs->id < rhs->id; });
 
   object_array.objects.reserve(ordered_tracks.size());
   for (const TrackState* track : ordered_tracks) {
+    // hits 阈值过滤短轨迹，漏检帧阈值限制对外预测保活时长。
+    if (!isPublishableTrack(*track, config_)) {
+      continue;
+    }
     ldop::DynamicObject object;
     object.id = track->id;
     object.size = track->bbox.size;
-    const Eigen::VectorXd state = outputStateForTrack(*track);
+    const Eigen::VectorXd& state = track->filter->state();
     object.model_state.reserve(static_cast<std::size_t>(state.size()));
     for (int index = 0; index < state.size(); ++index) {
       object.model_state.push_back(state(index));
@@ -1937,19 +1331,30 @@ ldop::DynamicObjectArray DynamicObjectTracker::buildOutput(const std_msgs::Heade
 
 std::vector<TrackPredictionInput> DynamicObjectTracker::buildPredictionInputs(
     const std_msgs::Header& header) const {
-  const std::vector<const TrackState*> ordered_tracks =
-      selectTracksForOutput(tracks_, config_, corridor_output_track_id_);
+  std::vector<const TrackState*> ordered_tracks;
+  ordered_tracks.reserve(tracks_.size());
+  for (const auto& track : tracks_) {
+    ordered_tracks.push_back(&track);
+  }
+  std::sort(ordered_tracks.begin(),
+            ordered_tracks.end(),
+            [](const TrackState* lhs, const TrackState* rhs) { return lhs->id < rhs->id; });
 
   std::vector<TrackPredictionInput> prediction_inputs;
   prediction_inputs.reserve(ordered_tracks.size());
 
   for (const TrackState* track : ordered_tracks) {
+    // 与 DynamicObjectArray 保持同一稳定轨迹过滤策略，避免 predictor 以后把临时噪声当作真实目标。
+    if (!isPublishableTrack(*track, config_)) {
+      continue;
+    }
+
     TrackPredictionInput input;
     input.stamp = header.stamp;
     input.id = track->id;
     input.object_class = track->object_class;
     input.motion_model_type = track->model_type;
-    input.model_state = outputStateForTrack(*track);
+    input.model_state = track->filter->state();
     input.model_covariance = track->filter->covariance();
     input.bbox = track->bbox;
     input.history = track->history;
@@ -1957,8 +1362,6 @@ std::vector<TrackPredictionInput> DynamicObjectTracker::buildPredictionInputs(
     input.hits = track->hits;
     input.missed_frames = track->missed_frames;
     input.matched_in_current_frame = track->missed_frames == 0U;
-    input.corridor_realtime_only = track->corridor_realtime_only;
-    input.corridor_provisional = track->corridor_provisional;
     prediction_inputs.push_back(std::move(input));
   }
 

@@ -142,8 +142,6 @@ struct DynamicObjectPredictorFrameResult {
   PredictionInteractionDiagnostics interaction_diagnostics;
   PredictionFeedbackDiagnostics feedback_diagnostics;
   std::size_t corridor_oscillation_object_count{0U};
-  // 通道 realtime-only 目标仍保留 prediction 索引，但不生成未来 rollout。
-  std::size_t realtime_only_object_count{0U};
   DynamicObjectPredictorTimingStats timing;
 };
 
