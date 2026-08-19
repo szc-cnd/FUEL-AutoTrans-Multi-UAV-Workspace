@@ -16,7 +16,9 @@ CAV0 目前不能直接覆盖 CAV1 的控制器目录。两边的模式入口、
 | MANUAL_CTRL 进入方式 | 主要只处理 CH8 低位起飞 | CH8 低位起飞；中位进入 AUTO_HOVER；高位进入 CMD_CTRL，并检查 PX4/Odom/速度前置条件 |
 | 起飞预流 | 周期性发布约 0.53 的悬停推力 | 按 CAV1 语义，在 OFFBOARD 前只发送低值占位 setpoint，避免残留控制量 |
 | Odom 有效性 | 仍使用 0.5 s 新鲜度作为总入口条件 | 按 CAV1 逻辑区分“曾收到”和“当前新鲜度”；新鲜度只用于对应安全门控，不让一次短暂延迟直接触发错误状态跳转 |
-| NMPC 状态姿态 | 全部取 FAST-LIO 四元数 | 平移、速度取 FAST-LIO 高频 Odom；控制姿态/外力姿态取 MAVROS `local_position/odom` |
+| NMPC 平移状态 | 位置、线速度取普通 FAST-LIO `Odometry` | 只把该输入换成 FAST-LIO 高频 `Odom_high_freq` |
+| NMPC 姿态状态 | CAV0 旧版本与 CAV1 不一致 | 按 CAV1 拼接：控制姿态取 MAVROS `local_position/odom`，不使用 FAST-LIO 高频 Odom 的四元数 |
+| 外力估计姿态 | 独立姿态输入 | 继续取 MAVROS `local_position/odom`，不因高频 Odom 改造而改变 |
 | MPC 失败 | 记录错误后仍读取求解器缓冲并发布 | 校验状态和有限值；短时保持最近一次有效输出；锁存当前位置悬停并后台重试；不自动降落 |
 | 轨迹接收 | FUEL 轨迹入口逻辑 | 保留 FUEL 入口，但增加时间戳、ID、有限值和恢复期间接收门控 |
 | AUTO_LAND | 可能未验证本周期 MPC 成功就请求降落 | 只允许人工/任务降落流程；请求前验证当前控制输出和 PX4 状态，MPC 失败本身不能触发降落 |
@@ -38,11 +40,11 @@ CAV0 目前不能直接覆盖 CAV1 的控制器目录。两边的模式入口、
 ```text
 /UAV0/fast_lio/Odometry                 # FAST-LIO 继续并行发布，供诊断/回滚
 /UAV0/fast_lio/cloud_registered         # 点云，没有“高频点云”替代品
-/UAV0/mavros/local_position/odom        # 外力估计和控制姿态
+/UAV0/mavros/local_position/odom        # NMPC 控制姿态和外力估计姿态
 /UAV0/mavros/imu/data                    # 外力估计 IMU，继续使用 MAVROS
 ```
 
-“全仓消费者”指 CAV0 的 AutoTrans、logger、simple controller、FUEL、相机位姿桥、leader/follower 中属于 UAV0 的输入、launch 默认值和文档。历史归档实验中明确属于 VINS/UKF 的通用默认值不做无依据的批量替换；正在使用的 CAV0 启动入口必须全部走高频话题。若同一工作区同时运行 UAV1，UAV1 使用自己的已验证话题，不把 UAV0 的参数硬编码到 UAV1。
+“全仓消费者”指 CAV0 的 AutoTrans、logger、simple controller、FUEL、相机位姿桥、leader/follower 中属于 UAV0 的 FAST-LIO Odom 输入、launch 默认值和文档。这里只把原来订阅 `/UAV0/fast_lio/Odometry` 的位置/速度输入等价替换为高频话题；MAVROS 姿态、MAVROS IMU、点云和其他传感器接口保持原来源。历史归档实验中明确属于 VINS/UKF 的通用默认值不做无依据的批量替换；正在使用的 CAV0 启动入口必须全部走高频话题。若同一工作区同时运行 UAV1，UAV1 使用自己的已验证话题，不把 UAV0 的参数硬编码到 UAV1。
 
 ### 2.2 FAST-LIO 与 Livox 源码
 
@@ -109,7 +111,8 @@ CAV0 的 `FAST_LIO`、`livox_ros_driver2`、`Livox-SDK2` 当前是 gitlink，目
 统一规则：
 
 ```text
-AutoTrans 平移/速度       -> /UAV0/fast_lio/Odom_high_freq
+AutoTrans 位置/线速度     -> /UAV0/fast_lio/Odom_high_freq
+AutoTrans 控制姿态        -> /UAV0/mavros/local_position/odom
 FUEL 规划器 odometry      -> /UAV0/fast_lio/Odom_high_freq
 simple controller         -> /UAV0/fast_lio/Odom_high_freq
 视觉位姿回传              -> 由高频 Odom 生成
@@ -127,7 +130,7 @@ simple controller         -> /UAV0/fast_lio/Odom_high_freq
 
 1. MANUAL_CTRL 的 CH8 三段入口、OFFBOARD/连接状态/Odom/速度前置检查和中文原因日志。
 2. CAV1 的低值预流、手动模式 setpoint 清理和退出 OFFBOARD 后的安全处理。
-3. `setEstimateState(translation_odom, force_attitude_odom)`：位置/速度取高频 FAST-LIO，姿态取 MAVROS 融合 Odom；四元数顺序和 frame 明确校验。
+3. 按 CAV1 实现 `setEstimateState(translation_odom, attitude_odom)`：位置、线速度只取高频 FAST-LIO；控制四元数只取 MAVROS `local_position/odom`；外力估计也复用该 MAVROS 姿态。不得把 FAST-LIO 高频 Odom 的四元数写入 NMPC 姿态状态，并明确校验四元数顺序、有限值和 frame。
 4. MPC wrapper/controller 必须消费求解返回值：失败时不读取未经验证的 ACADO 缓冲；对控制输入做 `isfinite`、范围和维度检查。
 5. 保留最近一次有效 body-rate/thrust，最多短时保持（使用 CAV1 当前参数）；超过保持窗口进入 `MPC_RECOVERY_HOVER`。
 6. 恢复流程：锁存当前高频位置和 MAVROS 航向、清零外力补偿、阻止新轨迹、重置 hover 参考、后台重新准备/求解；成功若干周期后才解除恢复状态。
@@ -260,7 +263,7 @@ git diff --check
 1. CAV0 三段 CH8 模式入口、状态估计、求解失败恢复和合法降落门控与 CAV1 行为一致；
 2. FUEL 的 B-spline、PositionCommand、yaw 和 bridge 接口仍可用，且恢复时不会继续发布旧轨迹；
 3. CAV0 所有活动位置/速度消费者使用高频 Odom，普通 Odom 仍并行可回滚；
-4. MAVROS 融合姿态和 MAVROS IMU 的来源保持明确，外力补偿不因换频率而改变物理参数；
+4. NMPC 的位置/线速度来自 FAST-LIO 高频 Odom，控制姿态和外力姿态来自 MAVROS `local_position/odom`，MAVROS IMU 来源不变；外力补偿不因换频率而改变物理参数；
 5. 六分屏布局、等待逻辑和中文运行提示与 CAV1 同构；
 6. logger/Evo 能生成包含高频实际轨迹、FUEL 参考轨迹和 MPC 恢复事件的报告；
 7. 静态测试、消息生成、catkin 构建和无桨台架验证全部通过。
