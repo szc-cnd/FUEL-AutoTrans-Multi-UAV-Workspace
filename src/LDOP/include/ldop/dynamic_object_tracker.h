@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -69,12 +70,22 @@ struct DynamicObjectTrackerConfig {
   // 保持默认关闭，避免改变通道外目标和旧配置的发布语义。
   bool publish_corridor_provisional{false};
   std::size_t corridor_provisional_min_hits{2U};
-  std::size_t corridor_provisional_max_hits{4U};
-  std::size_t corridor_realtime_max_publish_missed_frames{3U};
+  // 0 表示不限制；静态释放由 mapper 状态机负责。
+  std::size_t corridor_provisional_max_hits{0U};
+  std::size_t corridor_realtime_max_publish_missed_frames{5U};
   // realtime 关联只看最后真实观测，避免通用 KF/fallback gate 把不同候选拼成一条轨迹。
   double corridor_realtime_association_gate{0.25};
   double corridor_realtime_association_gate_max{0.35};
   double corridor_realtime_association_gate_missed_increment{0.05};
+  // mapper 源 ID 相同的点簇允许更大的质心跳动，但仍保留异常跳变上限。
+  double corridor_source_association_gate{0.75};
+  // mapper 换源 ID 时允许摆球在短时遮挡期间走过更大横向距离。
+  double corridor_changed_source_association_gate{0.55};
+  // 换源关联同时约束水平面积和最大边，拒绝 0.1m 体素碎片。
+  double corridor_changed_source_min_area_ratio{0.25};
+  double corridor_changed_source_min_max_edge_ratio{0.35};
+  // 超出发布保活后仍在内部保留身份，重现时可复用原 external ID。
+  std::size_t corridor_realtime_max_internal_missed_frames{20U};
   // 当前通道场景只允许一个 realtime 目标进入规划器，避免旧 coast 与新
   // provisional 候选同时占用输出并制造短命 ID 洪泛。
   std::size_t max_corridor_realtime_tracks{1U};
@@ -104,11 +115,16 @@ struct DynamicObjectTrackerParams {
   int min_hits_to_publish{3};                           // 大于0，且小于 history_size，轨迹发布的最小匹配次数
   bool publish_corridor_provisional{false};              // 仅对 corridor_provisional 轨迹生效
   int corridor_provisional_min_hits{2};                  // 通道候选提前发布的最小命中次数
-  int corridor_provisional_max_hits{4};                  // 未确认候选最多对外发布的命中次数
-  int corridor_realtime_max_publish_missed_frames{3};    // 通道实时目标只按最后观测保留的漏检帧数
+  int corridor_provisional_max_hits{0};                  // 0表示不限制；>0为未确认候选发布上限
+  int corridor_realtime_max_publish_missed_frames{5};    // 通道实时目标只按最后观测保留的漏检帧数
   double corridor_realtime_association_gate{0.25};        // 通道实时目标无漏帧时的最后观测 gate，单位m
   double corridor_realtime_association_gate_max{0.35};    // 短时漏帧放宽后的最大 gate，单位m
   double corridor_realtime_association_gate_missed_increment{0.05};  // 每个漏帧增加的 gate，单位m
+  double corridor_source_association_gate{0.75};           // mapper源ID一致时的异常跳变上限，单位m
+  double corridor_changed_source_association_gate{0.55};   // mapper换源ID后的重关联上限，单位m
+  double corridor_changed_source_min_area_ratio{0.25};     // 换源水平bbox面积比下限
+  double corridor_changed_source_min_max_edge_ratio{0.35}; // 换源水平bbox最大边比下限
+  int corridor_realtime_max_internal_missed_frames{20};    // 停止发布后内部保留身份的帧数
   int max_corridor_realtime_tracks{1};                    // 当前通道最多输出的 realtime 轨迹数
   double motion_min_displacement{0.04};                 // >0，连续匹配被视为真实运动的最小中心位移，单位m
   int motion_min_evidence_frames{2};                    // >0，对外发布前至少需要的运动证据帧数
@@ -182,6 +198,16 @@ struct TrackState {
   bool motion_confirmed{false};
   bool corridor_realtime_only{false};
   bool corridor_provisional{false};
+  // 只统计当前 mapper source 的连续 provisional 命中；换源时重置。
+  std::size_t corridor_provisional_hits{0U};
+  std::uint32_t corridor_source_track_id{0U};
+  // source 冲突轨迹只与其他冲突观测关联，不能承接普通 mapper source 的身份。
+  bool corridor_source_conflict{false};
+  // mapper 换 source 时先在这里累计连续观测；提交前不覆盖正式 source/位置，
+  // 这样单帧碎片或交替 source 不会让已确认目标断流或跳位。
+  std::uint32_t corridor_pending_source_track_id{0U};
+  std::size_t corridor_pending_source_hits{0U};
+  geometry_msgs::Point corridor_pending_source_anchor;
   // 通道实时目标对外使用最后一次原始点簇质心，不用 KF 平滑中心替代当前观测。
   geometry_msgs::Point last_observed_center;
   bool has_last_observed_center{false};
@@ -227,8 +253,8 @@ class DynamicObjectTracker {
   // 漏检轨迹继续按预测状态维护，给后续帧重关联留窗口。
   void coastTrack(TrackState& track, const ros::Time& stamp);
   void mergeDuplicateTracks();
-  void limitCorridorRealtimeTracks();
   void deleteExpiredTracks();
+  void updateCorridorOutputSelection();
   // 对外只发布命中次数达到阈值的稳定轨迹，减少一帧噪声 detection 直接暴露给下游。
   ldop::DynamicObjectArray buildOutput(const std_msgs::Header& header) const;
   // 与 buildOutput 使用同一稳定轨迹集合，为未来 predictor 提供比 ROS 消息更完整的内部快照。
@@ -239,6 +265,7 @@ class DynamicObjectTracker {
   DynamicObjectTrackerParams params_;
   std::vector<TrackState> tracks_;
   std::uint32_t next_track_id_{0U};
+  std::optional<std::uint32_t> corridor_output_track_id_;
   bool verbose_{false};
 };
 

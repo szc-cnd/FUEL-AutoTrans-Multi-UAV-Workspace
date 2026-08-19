@@ -54,14 +54,18 @@ corridor_min_lateral_speed: 0.10
 corridor_min_lateral_span: 0.12  # 确认前最近窗口内至少累计的横向位移，单位m
 corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇短时关联后按实时障碍输出，首帧不写死到静态图
 corridor_static_confirm_frames: 4  # 10Hz点云下连续约0.4s无横向运动后才释放为静态
+corridor_confirmed_static_confirm_frames: 15  # 已确认摆球端点会短暂停速，连续约1.5s静止才降为静态
 corridor_static_lateral_speed: 0.08  # 低于该横向速度视为静止证据
 corridor_forward_alignment_cos: 0.85  # 速度近似沿无人机前后方向时归为静态候选
-corridor_max_missed_frames: 3  # 同一障碍允许丢失约0.3s，仅保留最后真实位置
+corridor_max_missed_frames: 5  # 同一障碍允许丢失约0.5s，仅保留最后真实位置
 corridor_max_forward_speed: 0.80
 corridor_max_vertical_speed: 0.80
 corridor_association_gate: 0.25  # 10Hz下限制跨帧簇跳配，避免把不同静态碎片拼成高速运动
-corridor_track_timeout: 0.40
+corridor_track_timeout: 0.60
 corridor_min_cluster_points: 3
+corridor_min_confirm_extent: 0.18  # 需形成真实实体尺度后才确认；拒绝单个0.1m体素噪声
+corridor_min_confirm_second_extent: 0.06  # raw bbox第二大轴门槛，拒绝墙边细条/线状回波
+corridor_min_confirm_extent_frames: 2  # 最近历史窗口内至少两帧达到实体尺度，拒绝单帧大回波毛刺
 corridor_max_cluster_extent: 0.60
 corridor_max_candidates: 1
 corridor_reject_candidate_count: 12  # 候选状态机每帧最多处理的紧凑簇；发布仍由 corridor_max_candidates 限制
@@ -96,11 +100,16 @@ tracking_max_publish_missed_frames: 8  # 对外最多保留预测目标8帧，�
 tracking_min_hits_to_publish: 3  # 轨迹至少命中3次后才对外发布，抑制固定杆短暂误检
 tracking_publish_corridor_provisional: true  # 通道候选完成两帧关联后交给规划器，通道外仍使用原发布门槛
 tracking_corridor_provisional_min_hits: 2
-tracking_corridor_provisional_max_hits: 4  # 未确认候选最多输出约0.4s，静态噪声不会长期占用规划器
-tracking_corridor_realtime_max_publish_missed_frames: 3  # 丢失时最多原位保留约0.3s
+tracking_corridor_provisional_max_hits: 0  # 0表示持续观测时不限制；静态释放由mapper状态机负责
+tracking_corridor_realtime_max_publish_missed_frames: 5  # 丢失时最多原位保留约0.5s
 tracking_corridor_realtime_association_gate: 0.25  # 通道实时候选无漏帧时的最后观测距离门，单位m
 tracking_corridor_realtime_association_gate_max: 0.35  # 短时漏帧放宽后的最大距离门，单位m
 tracking_corridor_realtime_association_gate_missed_increment: 0.05  # 每个漏帧增加的距离门，单位m
+tracking_corridor_source_association_gate: 0.75  # mapper源ID相同时允许球点簇质心跳动，但拒绝更大异常跳变
+tracking_corridor_changed_source_association_gate: 0.55  # mapper换ID后按位置+尺寸复用原外部编号
+tracking_corridor_changed_source_min_area_ratio: 0.25  # 换源前后水平bbox面积比下限
+tracking_corridor_changed_source_min_max_edge_ratio: 0.35  # 换源前后水平bbox最大边比下限
+tracking_corridor_realtime_max_internal_missed_frames: 20  # 停止发布后内部保留约2s身份，不外推位置
 tracking_max_corridor_realtime_tracks: 1  # 当前通道最多向规划器输出一个 realtime 轨迹
 tracking_motion_min_displacement: 0.04  # 连续匹配中心位移达到该值才计入真实运动证据，单位m
 tracking_motion_min_evidence_frames: 2  # 对外发布前至少需要的真实运动证据帧数

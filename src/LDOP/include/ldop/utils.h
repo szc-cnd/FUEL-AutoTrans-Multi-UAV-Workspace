@@ -45,6 +45,11 @@ struct DynamicObjectDetection {
   // 仅在 LDOP 内部模块间传递，不改变现有 ROS DynamicObject 消息接口。
   bool corridor_realtime_only{false};
   bool corridor_provisional{false};
+  // mapper 通道状态机分配的内部源轨迹 ID；0 表示无通道来源。
+  std::uint32_t corridor_source_track_id{0U};
+  // 同一检测簇混入了多个 mapper 来源时保持显式冲突，不能把 source=0
+  // 当成普通无来源点后重新关联到任一旧轨迹。
+  bool corridor_source_conflict{false};
 };
 
 struct TrackHistorySample {

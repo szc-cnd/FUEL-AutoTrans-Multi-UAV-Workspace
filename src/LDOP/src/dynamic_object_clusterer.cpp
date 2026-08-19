@@ -74,6 +74,8 @@ struct Fragment {
   // 一个连通块只要包含通道实时点，就沿用该语义；普通 UFOMap 点保持 false。
   bool corridor_realtime_only{false};
   bool corridor_provisional{false};
+  std::uint32_t corridor_source_track_id{0U};
+  bool corridor_source_conflict{false};
 };
 
 // 根据 6/18/26 连通规则生成邻域偏移，供后续 key 空间 BFS 使用。
@@ -170,6 +172,16 @@ void mergeInto(Fragment& target, const Fragment& source) {
   target.corridor_realtime_only =
       target.corridor_realtime_only || source.corridor_realtime_only;
   target.corridor_provisional = target.corridor_provisional || source.corridor_provisional;
+  if (target.corridor_source_conflict || source.corridor_source_conflict) {
+    target.corridor_source_track_id = 0U;
+    target.corridor_source_conflict = true;
+  } else if (target.corridor_source_track_id == 0U) {
+    target.corridor_source_track_id = source.corridor_source_track_id;
+  } else if (source.corridor_source_track_id != 0U &&
+             target.corridor_source_track_id != source.corridor_source_track_id) {
+    target.corridor_source_track_id = 0U;
+    target.corridor_source_conflict = true;
+  }
 }
 
 DynamicObjectDetection fragmentToDetection(const Fragment& fragment,
@@ -189,6 +201,8 @@ DynamicObjectDetection fragmentToDetection(const Fragment& fragment,
   detection.stamp = stamp;
   detection.corridor_realtime_only = fragment.corridor_realtime_only;
   detection.corridor_provisional = fragment.corridor_provisional;
+  detection.corridor_source_track_id = fragment.corridor_source_track_id;
+  detection.corridor_source_conflict = fragment.corridor_source_conflict;
   return detection;
 }
 
@@ -200,6 +214,10 @@ bool shouldMergeVerticalFragments(const Fragment& lhs,
   // 普通 LDOP 动态点和通道 realtime 点即使空间上重叠，也不能合并；
   // 否则一个通道 provisional 碎片会把普通目标错误改成无未来预测目标。
   if (lhs.corridor_realtime_only != rhs.corridor_realtime_only) {
+    return false;
+  }
+  if (lhs.corridor_source_track_id != 0U && rhs.corridor_source_track_id != 0U &&
+      lhs.corridor_source_track_id != rhs.corridor_source_track_id) {
     return false;
   }
 
@@ -514,6 +532,20 @@ std::vector<DynamicObjectDetection> DynamicObjectClusterer::buildDetections(
         [&dynamic_points](const std::size_t point_index) {
           return dynamic_points[point_index].provisional;
         });
+    for (const std::size_t point_index : cluster_points) {
+      const std::uint32_t source_id =
+          dynamic_points[point_index].corridor_source_track_id;
+      if (source_id == 0U) {
+        continue;
+      }
+      if (fragment.corridor_source_track_id == 0U) {
+        fragment.corridor_source_track_id = source_id;
+      } else if (fragment.corridor_source_track_id != source_id) {
+        fragment.corridor_source_track_id = 0U;
+        fragment.corridor_source_conflict = true;
+        break;
+      }
+    }
     fragments.push_back(fragment);
   }
 
