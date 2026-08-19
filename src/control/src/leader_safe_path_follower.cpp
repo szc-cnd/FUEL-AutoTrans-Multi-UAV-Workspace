@@ -100,6 +100,10 @@ class LeaderSafePathFollower {
                             "/UAV1/mission/landing_target");
     pnh_.param<std::string>("follower_landing_request_topic", follower_landing_request_topic_,
                             "/UAV1/mission/landing_request");
+    pnh_.param<std::string>("follower_assigned_target_topic", follower_assigned_target_topic_,
+                            "/UAV1/landing/assigned_target");
+    pnh_.param<std::string>("release_uav1_topic", release_uav1_topic_,
+                            "/dual_uav_landing/release_uav1");
     // 2026-07-15: 只接收找门模块已经确认并锁存的门平面，禁止把临时候选门发给后机。
     pnh_.param<std::string>("door_pose_topic", door_pose_topic_,
                             "/UAV0/corridor_search/workspace_lock");
@@ -245,6 +249,11 @@ class LeaderSafePathFollower {
     leader_landing_request_sub_ = nh_.subscribe(
         leader_landing_request_topic_, 2,
         &LeaderSafePathFollower::leaderLandingRequestCallback, this);
+    release_uav1_sub_ = nh_.subscribe(
+        release_uav1_topic_, 1, &LeaderSafePathFollower::releaseUav1Callback, this);
+    follower_assigned_target_sub_ = nh_.subscribe(
+        follower_assigned_target_topic_, 1,
+        &LeaderSafePathFollower::followerAssignedTargetCallback, this);
     door_pose_sub_ = nh_.subscribe(door_pose_topic_, 1,
                                    &LeaderSafePathFollower::doorPoseCallback, this);
     final_exit_pose_sub_ = nh_.subscribe(
@@ -464,8 +473,19 @@ class LeaderSafePathFollower {
 
   void leaderLandingRequestCallback(const std_msgs::Bool::ConstPtr& msg) {
     if (!msg->data || terminal_mode_active_) return;
+    if (!release_uav1_) {
+      pending_leader_landing_request_ = true;
+      ROS_INFO("[safe_follower] leader landing reported; hold terminal until UAV1 release.");
+      return;
+    }
+    queueFollowerTerminalTarget();
+  }
+
+  void queueFollowerTerminalTarget() {
     RoutePoint nearby_target;
-    if (!getRouteTargetBehindEnd(terminal_landing_spacing_, &nearby_target)) {
+    if (have_assigned_follower_target_) {
+      nearby_target = assigned_follower_target_;
+    } else if (!getRouteTargetBehindEnd(terminal_landing_spacing_, &nearby_target)) {
       ROS_ERROR("[safe_follower] leader landed but no accumulated route is available.");
       return;
     }
@@ -493,6 +513,26 @@ class LeaderSafePathFollower {
               "execute after earlier relay points; leader spacing check disabled.",
               terminal_target_world_.position.x, terminal_target_world_.position.y,
               terminal_target_world_.position.z);
+  }
+
+  void followerAssignedTargetCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    assigned_follower_target_.position = msg->pose.position;
+    assigned_follower_target_.yaw = yawFromQuaternion(msg->pose.orientation);
+    have_assigned_follower_target_ = true;
+    ROS_INFO("[safe_follower] assigned UAV1 landing target received (%.2f, %.2f, %.2f).",
+             msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+  }
+
+  void releaseUav1Callback(const std_msgs::Bool::ConstPtr& msg) {
+    release_uav1_ = msg->data;
+    if (release_uav1_) {
+      ROS_ERROR("[safe_follower] UAV1 released to leave exit waiting point.");
+      hold_target_latched_ = false;
+      if (pending_leader_landing_request_) {
+        pending_leader_landing_request_ = false;
+        queueFollowerTerminalTarget();
+      }
+    }
   }
 
   // 2026-07-21: 从最近一段已认可实飞轨迹估计局部前进方向，避免使用与雷达机体框不一致的yaw。
@@ -1776,6 +1816,14 @@ class LeaderSafePathFollower {
       return;
     }
 
+    // UAV1 reaches the verified exit waypoint, then waits there until UAV0 has
+    // completed the far-platform landing and the coordinator releases it.
+    if (leader_outside_exit_ && exit_waypoint_released_ &&
+        active_relay_index_ > exit_waypoint_index_ && !release_uav1_) {
+      hold("UAV1 waiting at exit for UAV0 landing release");
+      return;
+    }
+
     // 2026-07-28: Diff执行分支在旧连续追踪/直控逻辑之前截断，确保后机只由自身规划器输出轨迹。
     if (handleDiffPlannerExecution(now)) return;
 
@@ -2039,6 +2087,8 @@ class LeaderSafePathFollower {
   ros::Subscriber diff_command_sub_;  // 2026-07-28: UAV1实际轨迹输出存活监测，不参与发布。
   ros::Subscriber dynamic_obstacle_sub_;  // UAV1 LDOP结构化目标状态。
   ros::Subscriber leader_landing_target_sub_, leader_landing_request_sub_, door_pose_sub_;
+  ros::Subscriber release_uav1_sub_;
+  ros::Subscriber follower_assigned_target_sub_;
   ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
   ros::Subscriber leader_task_status_sub_;
   ros::Subscriber diff_status_sub_;  // 2026-07-28: UAV1 Diff轨迹成功/失败反馈。
@@ -2050,6 +2100,7 @@ class LeaderSafePathFollower {
   nav_msgs::Odometry leader_odom_, follower_odom_;
   geometry_msgs::PoseStamped leader_landing_target_;
   RoutePoint terminal_target_world_, confirmed_door_, confirmed_exit_, pending_relay_;
+  RoutePoint assigned_follower_target_;
   sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
   std::vector<DynamicObstacleSample> retained_dynamic_obstacles_;
   std::deque<RoutePoint> route_;
@@ -2064,6 +2115,8 @@ class LeaderSafePathFollower {
   std::string diff_status_topic_;  // 2026-07-28: 默认/drone_1_planning/status。
   std::string traj_started_topic_, world_frame_;
   std::string leader_landing_target_topic_, leader_landing_request_topic_;
+  std::string release_uav1_topic_;
+  std::string follower_assigned_target_topic_;
   std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
   std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
   std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
@@ -2072,6 +2125,9 @@ class LeaderSafePathFollower {
   bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
   bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
   bool have_leader_landing_target_{false}, terminal_mode_active_{false};
+  bool release_uav1_{false};
+  bool pending_leader_landing_request_{false};
+  bool have_assigned_follower_target_{false};
   bool follower_landing_requested_{false};
   bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
   bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。

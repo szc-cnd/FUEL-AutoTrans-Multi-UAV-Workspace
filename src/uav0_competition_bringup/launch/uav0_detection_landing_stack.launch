@@ -107,6 +107,8 @@
     <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
     <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
     <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)" />
+    <arg name="require_platform_assignment"
+         value="$(arg enable_dual_uav_landing_coordinator)" />
   </include>
 
   <!-- 只在前机启动一份；通过 ROS/WiFi 话题协调两机使用不同 ArUco 平台。 -->

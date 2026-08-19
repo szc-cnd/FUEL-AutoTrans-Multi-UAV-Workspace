@@ -40,6 +40,7 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/target_id"] == "$(arg target_id_topic)"
     assert params["topics/assigned_id"] == "$(arg assigned_id_topic)"
     assert params["topics/excluded_id"] == "$(arg excluded_id_topic)"
+    assert params["topics/candidates"] == "$(arg candidates_topic)"
 
 
 def test_search_runtime_assignment_resets_old_lock_before_handoff():
@@ -68,9 +69,10 @@ def test_search_runtime_exclusion_clears_conflicting_lock():
 
 def test_dual_uav_coordinator_assigns_unique_ids_with_uav0_priority():
     source = (PACKAGE / "src/dual_uav_landing_coordinator_node.cpp").read_text()
-    assert "uav1_observed_id_ == uav0_id_" in source
-    assert "publishInt(uav1_excluded_publisher_, uav0_id_)" in source
-    assert "uav0_id_ != uav1_assigned_id_" in source
+    assert "message->platforms.size() < 2U" in source
+    assert "const auto& far_platform = candidates.back()" in source
+    assert "uav0_id_ = far_platform.id" in source
+    assert "publishBool(release_pub_, true)" in source
 
     root = ET.parse(
         PACKAGE / "launch/dual_uav_landing_coordinator.launch"

@@ -141,6 +141,7 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
                                         int excluded_id) {
   TargetObservation observation;
   observation.stamp_sec = stamp_sec;
+  detected_targets_.clear();
 
   if (image.empty()) {
     debug_image_.release();
@@ -202,8 +203,7 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
     }
     const int id = ids[i];
     if (id == excluded_id ||
-        (requested_id >= 0 && id != requested_id) ||
-        (locked_id_ >= 0 && id != locked_id_)) {
+        (requested_id >= 0 && id != requested_id)) {
       continue;
     }
 
@@ -230,6 +230,15 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
     if (has_last_position_ && last_position_id_ == id &&
         (position_camera - last_position_camera_).norm() >
             config_.max_position_jump_m) {
+      continue;
+    }
+
+    detected_targets_.push_back(
+        DetectedTarget{id, position_camera, selectionScore(corners[i], image.size())});
+
+    // Keep publishing other stable candidates for the dual-platform
+    // coordinator, while the mission lock itself remains on one ID.
+    if (locked_id_ >= 0 && id != locked_id_) {
       continue;
     }
 
@@ -331,6 +340,10 @@ void ArucoTracker::beginReacquisition() {
 
 const cv::Mat& ArucoTracker::debugImage() const {
   return debug_image_;
+}
+
+const std::vector<DetectedTarget>& ArucoTracker::detectedTargets() const {
+  return detected_targets_;
 }
 
 void ArucoTracker::breakPendingAcquisition() {

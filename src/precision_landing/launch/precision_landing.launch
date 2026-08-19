@@ -10,6 +10,7 @@
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
   <arg name="assigned_id_topic" default="$(arg topic_prefix)/landing/assigned_id"/>
   <arg name="excluded_id_topic" default="$(arg topic_prefix)/landing/excluded_id"/>
+  <arg name="candidates_topic" default="$(arg topic_prefix)/landing/search/candidates"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
   <arg name="attitude_setpoint_topic"
        default="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
@@ -19,6 +20,7 @@
   <arg name="controller_attitude_input" default="$(arg topic_prefix)/control/attitude_setpoint"/>
   <arg name="landing_setpoint_input" default="$(arg topic_prefix)/landing/setpoint_raw/local"/>
   <arg name="enable_landing_search" default="true"/>
+  <arg name="require_platform_assignment" default="false"/>
   <arg name="enable_front_aruco_hint" default="false"/>
   <arg name="front_image_topic" default="/camera/color/image_raw"/>
   <arg name="front_camera_info_topic" default="/camera/color/camera_info"/>
@@ -49,6 +51,9 @@
     <param name="topics/target_id" value="$(arg target_id_topic)"/>
     <param name="topics/assigned_id" value="$(arg assigned_id_topic)"/>
     <param name="topics/excluded_id" value="$(arg excluded_id_topic)"/>
+    <param name="topics/candidates" value="$(arg candidates_topic)"/>
+    <param name="mission/require_platform_assignment"
+           value="$(arg require_platform_assignment)"/>
     <param name="topics/status" value="$(arg topic_prefix)/landing/search/status"/>
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/search/debug_image"/>
   </node>

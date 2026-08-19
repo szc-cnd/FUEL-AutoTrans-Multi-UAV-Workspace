@@ -8,6 +8,7 @@
 #include <std_msgs/Bool.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/String.h>
+#include "precision_landing/LandingPlatformArray.h"
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -23,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <map>
 
 #include "precision_landing/aruco_tracker.hpp"
 #include "precision_landing/landing_search_core.hpp"
@@ -118,6 +120,8 @@ private:
                         0.25);
     private_node_.param("mission/require_stage_gate", require_stage_gate_,
                         true);
+    private_node_.param("mission/require_platform_assignment",
+                        require_platform_assignment_, false);
     private_node_.param("frames/world", world_frame_, std::string("world"));
 
     if (max_image_odom_delta_sec_ <= 0.0 || image_timeout_sec_ <= 0.0 ||
@@ -156,6 +160,7 @@ private:
     std::string target_id_topic{"/UAV0/landing/target_id"};
     std::string assigned_id_topic{"/UAV0/landing/assigned_id"};
     std::string excluded_id_topic{"/UAV0/landing/excluded_id"};
+    std::string candidates_topic{"/UAV0/landing/search/candidates"};
     std::string filtered_target_topic{"/UAV0/landing/search/target_world"};
     private_node_.param("topics/image", image_topic, image_topic);
     private_node_.param("topics/camera_info", camera_info_topic,
@@ -178,6 +183,8 @@ private:
                         assigned_id_topic);
     private_node_.param("topics/excluded_id", excluded_id_topic,
                         excluded_id_topic);
+    private_node_.param("topics/candidates", candidates_topic,
+                        candidates_topic);
     private_node_.param("topics/filtered_target", filtered_target_topic,
                         filtered_target_topic);
 
@@ -199,6 +206,9 @@ private:
     excluded_id_subscriber_ =
         node_.subscribe(excluded_id_topic, 2,
                         &LandingSearchNode::excludedIdCallback, this);
+    candidates_publisher_ =
+        node_.advertise<precision_landing::LandingPlatformArray>(
+            candidates_topic, 2, true);
 
     marker_world_publisher_ =
         node_.advertise<geometry_msgs::PoseStamped>(marker_world_topic_, 5);
@@ -270,6 +280,7 @@ private:
       mission_stage_ = next_stage;
       tracker_.reset();
       target_filter_.reset();
+      candidate_records_.clear();
       ROS_INFO("landing_search: mission stage -> %s", mission_stage_.c_str());
     }
   }
@@ -310,6 +321,7 @@ private:
     requested_marker_id_ = message->data;
     tracker_.reset();
     target_filter_.reset();
+    candidate_records_.clear();
     stable_target_received_ = false;
     last_stable_target_ = geometry_msgs::PoseStamped();
     last_stable_target_receive_time_ = ros::Time(0);
@@ -344,6 +356,7 @@ private:
     if (tracker_.lockedId() == excluded_marker_id_) {
       tracker_.reset();
       target_filter_.reset();
+      candidate_records_.clear();
       stable_target_received_ = false;
       last_stable_target_ = geometry_msgs::PoseStamped();
       last_stable_target_receive_time_ = ros::Time(0);
@@ -400,11 +413,6 @@ private:
                          message->header.stamp.toSec(), requested_marker_id_,
                          true, excluded_marker_id_);
     publishLockedId();
-    if (!observation.valid || tracker_.lockedId() < 0) {
-      target_filter_.reset();
-      annotateAndPublish(tracker_.debugImage(), "SEARCHING FOR LANDING ARUCO");
-      return;
-    }
 
     double odom_delta_sec = std::numeric_limits<double>::infinity();
     const nav_msgs::Odometry *odometry =
@@ -415,6 +423,19 @@ private:
                         "landing_search: image/odometry unsynchronized (%.3fs)",
                         odom_delta_sec);
       annotateAndPublish(tracker_.debugImage(), "WAITING FOR SYNCED FAST-LIO ODOM");
+      return;
+    }
+
+    publishCandidates(*message, *odometry);
+
+    if (!observation.valid || tracker_.lockedId() < 0 ||
+        (require_platform_assignment_ && requested_marker_id_ < 0)) {
+      target_filter_.reset();
+      annotateAndPublish(
+          tracker_.debugImage(),
+          require_platform_assignment_ && requested_marker_id_ < 0
+              ? "COLLECTING TWO LANDING PLATFORMS"
+              : "SEARCHING FOR LANDING ARUCO");
       return;
     }
 
@@ -527,6 +548,55 @@ private:
     locked_id_publisher_.publish(message);
   }
 
+  void publishCandidates(const sensor_msgs::Image& image,
+                         const nav_msgs::Odometry& odometry) {
+    precision_landing::LandingPlatformArray message;
+    message.header.stamp = image.header.stamp;
+    message.header.frame_id = world_frame_;
+    const Eigen::Vector3d body_position(
+        odometry.pose.pose.position.x, odometry.pose.pose.position.y,
+        odometry.pose.pose.position.z);
+    const Eigen::Quaterniond body_attitude(
+        odometry.pose.pose.orientation.w, odometry.pose.pose.orientation.x,
+        odometry.pose.pose.orientation.y, odometry.pose.pose.orientation.z);
+    for (const DetectedTarget& candidate : tracker_.detectedTargets()) {
+      const Eigen::Vector3d world_position = cameraPointToWorld(
+          candidate.position_camera, camera_translation_body_,
+          camera_orientation_body_, body_position, body_attitude);
+      CandidateRecord& record = candidate_records_[candidate.id];
+      const double gap_sec = record.last_seen.isZero()
+                                 ? 0.0
+                                 : (message.header.stamp - record.last_seen).toSec();
+      if (gap_sec > 0.30) record.count = 0;
+      if (record.count == 0 ||
+          (world_position - record.position_world).norm() <= 0.35) {
+        record.position_world = world_position;
+        record.score = candidate.score;
+        ++record.count;
+      } else {
+        record.count = 1;
+        record.position_world = world_position;
+        record.score = candidate.score;
+      }
+      record.last_seen = message.header.stamp;
+    }
+    for (const auto& item : candidate_records_) {
+      const int id = item.first;
+      const CandidateRecord& record = item.second;
+      if (record.count < 5) continue;
+      precision_landing::LandingPlatform platform;
+      platform.header = message.header;
+      platform.id = id;
+      platform.pose.header = message.header;
+      platform.pose.pose.position.x = record.position_world.x();
+      platform.pose.pose.position.y = record.position_world.y();
+      platform.pose.pose.position.z = record.position_world.z();
+      platform.score = record.score;
+      message.platforms.push_back(platform);
+    }
+    candidates_publisher_.publish(message);
+  }
+
   void publishTargetId(int marker_id) {
     std_msgs::Int32 message;
     message.data = marker_id;
@@ -576,6 +646,7 @@ private:
   ros::Publisher filtered_target_publisher_;
   ros::Publisher landing_trigger_publisher_;
   ros::Publisher status_publisher_;
+  ros::Publisher candidates_publisher_;
   ros::Publisher locked_id_publisher_;
   ros::Publisher target_id_publisher_;
   image_transport::Publisher debug_image_publisher_;
@@ -596,6 +667,13 @@ private:
   std::string last_status_;
   int requested_marker_id_{-1};
   int excluded_marker_id_{-1};
+  struct CandidateRecord {
+    Eigen::Vector3d position_world{Eigen::Vector3d::Zero()};
+    double score{0.0};
+    int count{0};
+    ros::Time last_seen;
+  };
+  std::map<int, CandidateRecord> candidate_records_;
   double max_image_odom_delta_sec_{0.08};
   double image_timeout_sec_{0.30};
   double odom_timeout_sec_{0.30};
@@ -605,6 +683,7 @@ private:
   double approach_height_m_{0.65};
   double max_height_error_m_{0.25};
   bool require_stage_gate_{true};
+  bool require_platform_assignment_{false};
   bool camera_info_received_{false};
   bool stable_target_received_{false};
   bool landing_request_active_{false};

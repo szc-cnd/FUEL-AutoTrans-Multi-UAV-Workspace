@@ -6,17 +6,20 @@ add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
 find_package(catkin REQUIRED COMPONENTS
   roscpp rospy std_msgs std_srvs sensor_msgs geometry_msgs nav_msgs mavros_msgs
   cv_bridge image_transport camera_info_manager rostest
-  tf2 tf2_ros tf2_geometry_msgs
+  tf2 tf2_ros tf2_geometry_msgs message_generation
 )
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d aruco)
 find_package(Threads REQUIRED)
 
+add_message_files(FILES LandingPlatform.msg LandingPlatformArray.msg)
+generate_messages(DEPENDENCIES std_msgs geometry_msgs)
+
 catkin_package(
   INCLUDE_DIRS include
   CATKIN_DEPENDS roscpp std_msgs std_srvs sensor_msgs geometry_msgs nav_msgs mavros_msgs
                  cv_bridge image_transport camera_info_manager
-                 tf2 tf2_ros tf2_geometry_msgs
+                 tf2 tf2_ros tf2_geometry_msgs message_runtime
   DEPENDS EIGEN3 OpenCV
 )
 
@@ -35,6 +38,8 @@ add_library(landing_search_core src/landing_search_core.cpp)
 target_link_libraries(landing_search_core ${catkin_LIBRARIES})
 
 add_executable(landing_search_node src/landing_search_node.cpp)
+add_dependencies(landing_search_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS})
 target_link_libraries(landing_search_node
   landing_search_core aruco_tracker ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
@@ -58,6 +63,8 @@ target_link_libraries(landing_test_mission_node ${catkin_LIBRARIES})
 
 add_executable(dual_uav_landing_coordinator_node
   src/dual_uav_landing_coordinator_node.cpp)
+add_dependencies(dual_uav_landing_coordinator_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS})
 target_link_libraries(dual_uav_landing_coordinator_node ${catkin_LIBRARIES})
 
 catkin_install_python(PROGRAMS test/test_precision_landing_node.py
