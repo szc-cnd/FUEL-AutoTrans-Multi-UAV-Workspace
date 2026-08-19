@@ -57,6 +57,8 @@
   <group unless="$(arg enable_flight_control)">
     <include file="$(find precision_landing)/launch/precision_landing.launch">
       <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+      <arg name="landing_search_config"
+           value="$(find precision_landing)/config/landing_search.yaml" />
       <arg name="enable_front_aruco_hint" value="true" />
       <arg name="setpoint_topic"
            value="$(arg topic_prefix)/search_landing_test/blocked_setpoint" />
@@ -70,6 +72,8 @@
   <group if="$(arg enable_flight_control)">
     <include file="$(find precision_landing)/launch/precision_landing.launch">
       <arg name="vehicle_ns" value="$(arg vehicle_ns)" />
+      <arg name="landing_search_config"
+           value="$(find precision_landing)/config/landing_search.yaml" />
       <arg name="enable_front_aruco_hint" value="true" />
     </include>
   </group>

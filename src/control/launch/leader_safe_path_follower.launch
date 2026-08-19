@@ -9,6 +9,8 @@
         <arg name="odometry_topic" value="/UAV1/fast_lio/Odometry"/>
         <arg name="mission_status_topic" value="/UAV0/mission/task_status"/>
         <arg name="landing_marker_world_topic" value="/UAV1/mission/detection/final_aruco"/>
+        <arg name="landing_search_config"
+             value="$(find precision_landing)/config/landing_search.yaml"/>
         <arg name="enable_front_aruco_hint" value="false"/>
         <arg name="require_platform_assignment" value="true"/>
     </include>

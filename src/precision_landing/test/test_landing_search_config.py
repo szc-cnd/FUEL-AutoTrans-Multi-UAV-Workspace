@@ -25,6 +25,8 @@ def test_search_config_uses_calibrated_down_camera_extrinsic():
 
 def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
+    args = {arg.attrib["name"]: arg.attrib["default"] for arg in root.findall("arg")}
+    assert args["landing_search_config"] == "$(find precision_landing)/config/landing_search.yaml"
     search_nodes = [
         node for node in root.findall("node")
         if node.attrib.get("type") == "landing_search_node"
@@ -41,6 +43,28 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/assigned_id"] == "$(arg assigned_id_topic)"
     assert params["topics/excluded_id"] == "$(arg excluded_id_topic)"
     assert params["topics/candidates"] == "$(arg candidates_topic)"
+
+
+def test_competition_entries_explicitly_share_search_extrinsic():
+    expected = "$(find precision_landing)/config/landing_search.yaml"
+    for relative_path in (
+        "../control/launch/leader_safe_path_follower.launch",
+        "../uav0_competition_bringup/launch/uav0_detection_landing_stack.launch",
+        "../uav0_competition_bringup/launch/uav0_search_landing_test.launch",
+    ):
+        root = ET.parse((PACKAGE / relative_path).resolve()).getroot()
+        precision_includes = [
+            include for include in root.iter("include")
+            if include.attrib.get("file")
+            == "$(find precision_landing)/launch/precision_landing.launch"
+        ]
+        assert precision_includes
+        for include in precision_includes:
+            args = {
+                arg.attrib["name"]: arg.attrib["value"]
+                for arg in include.findall("arg")
+            }
+            assert args["landing_search_config"] == expected
 
 
 def test_search_runtime_assignment_resets_old_lock_before_handoff():
