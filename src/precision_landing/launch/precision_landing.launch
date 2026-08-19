@@ -8,6 +8,7 @@
   <arg name="odometry_topic" default="$(arg topic_prefix)/fast_lio/Odometry"/>
   <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
+  <arg name="assigned_id_topic" default="$(arg topic_prefix)/landing/assigned_id"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
   <arg name="attitude_setpoint_topic"
        default="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
@@ -45,6 +46,7 @@
     <param name="topics/filtered_target" value="$(arg topic_prefix)/landing/search/target_world"/>
     <param name="topics/locked_id" value="$(arg topic_prefix)/landing/search/locked_id"/>
     <param name="topics/target_id" value="$(arg target_id_topic)"/>
+    <param name="topics/assigned_id" value="$(arg assigned_id_topic)"/>
     <param name="topics/status" value="$(arg topic_prefix)/landing/search/status"/>
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/search/debug_image"/>
   </node>

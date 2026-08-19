@@ -38,6 +38,19 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/landing_trigger"] == "$(arg trigger_topic)"
     assert params["topics/marker_world"] == "$(arg landing_marker_world_topic)"
     assert params["topics/target_id"] == "$(arg target_id_topic)"
+    assert params["topics/assigned_id"] == "$(arg assigned_id_topic)"
+
+
+def test_search_runtime_assignment_resets_old_lock_before_handoff():
+    source = (PACKAGE / "src/landing_search_node.cpp").read_text()
+    callback = source.split("void assignedIdCallback", maxsplit=1)[1].split(
+        "const nav_msgs::Odometry", maxsplit=1
+    )[0]
+    assert "if (trigger_sent_)" in callback
+    assert "requested_marker_id_ = message->data" in callback
+    assert "tracker_.reset()" in callback
+    assert "target_filter_.reset()" in callback
+    assert "stable_target_received_ = false" in callback
 
 
 def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():

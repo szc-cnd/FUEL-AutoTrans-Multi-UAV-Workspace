@@ -154,6 +154,7 @@ private:
     std::string status_topic{"/UAV0/landing/search/status"};
     std::string locked_id_topic{"/UAV0/landing/search/locked_id"};
     std::string target_id_topic{"/UAV0/landing/target_id"};
+    std::string assigned_id_topic{"/UAV0/landing/assigned_id"};
     std::string filtered_target_topic{"/UAV0/landing/search/target_world"};
     private_node_.param("topics/image", image_topic, image_topic);
     private_node_.param("topics/camera_info", camera_info_topic,
@@ -172,6 +173,8 @@ private:
     private_node_.param("topics/status", status_topic, status_topic);
     private_node_.param("topics/locked_id", locked_id_topic, locked_id_topic);
     private_node_.param("topics/target_id", target_id_topic, target_id_topic);
+    private_node_.param("topics/assigned_id", assigned_id_topic,
+                        assigned_id_topic);
     private_node_.param("topics/filtered_target", filtered_target_topic,
                         filtered_target_topic);
 
@@ -187,6 +190,9 @@ private:
     landing_request_subscriber_ =
         node_.subscribe(landing_request_topic, 2,
                         &LandingSearchNode::landingRequestCallback, this);
+    assigned_id_subscriber_ =
+        node_.subscribe(assigned_id_topic, 2,
+                        &LandingSearchNode::assignedIdCallback, this);
 
     marker_world_publisher_ =
         node_.advertise<geometry_msgs::PoseStamped>(marker_world_topic_, 5);
@@ -266,6 +272,41 @@ private:
     landing_request_active_ = message->data;
     if (!message->data && !trigger_sent_) {
       publishLandingTrigger(false);
+    }
+  }
+
+  void assignedIdCallback(const std_msgs::Int32ConstPtr &message) {
+    if (message->data < -1) {
+      ROS_WARN("landing_search: reject invalid assigned platform ID=%d",
+               message->data);
+      return;
+    }
+    if (trigger_sent_) {
+      if (message->data != requested_marker_id_) {
+        ROS_ERROR("landing_search: ignore platform reassignment %d -> %d after precision handoff",
+                  requested_marker_id_, message->data);
+      }
+      return;
+    }
+    if (message->data == requested_marker_id_) {
+      return;
+    }
+
+    requested_marker_id_ = message->data;
+    tracker_.reset();
+    target_filter_.reset();
+    stable_target_received_ = false;
+    last_stable_target_ = geometry_msgs::PoseStamped();
+    last_stable_target_receive_time_ = ros::Time(0);
+    publishLockedId();
+    publishTargetId(requested_marker_id_);
+    if (requested_marker_id_ >= 0) {
+      ROS_WARN("landing_search: assigned platform ID=%d; old target cleared",
+               requested_marker_id_);
+      publishStatus("已接收双机平台分配，等待指定 ArUco");
+    } else {
+      ROS_WARN("landing_search: platform assignment cleared; automatic selection enabled");
+      publishStatus("平台分配已清除，恢复自动选择");
     }
   }
 
@@ -485,6 +526,7 @@ private:
   ros::Subscriber odom_subscriber_;
   ros::Subscriber mission_status_subscriber_;
   ros::Subscriber landing_request_subscriber_;
+  ros::Subscriber assigned_id_subscriber_;
   ros::Publisher marker_world_publisher_;
   ros::Publisher filtered_target_publisher_;
   ros::Publisher landing_trigger_publisher_;
