@@ -105,9 +105,10 @@ std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
     pnh.setParam("corridor_roi_max_z", 1.50);
     pnh.setParam("corridor_detection_voxel", 0.10);
     pnh.setParam("corridor_history_frames", 5);
-    pnh.setParam("corridor_min_confirm_hits", 3);
+    pnh.setParam("corridor_min_confirm_hits", 5);
+    pnh.setParam("corridor_min_publish_hits", 4);
     pnh.setParam("corridor_min_lateral_speed", 0.20);
-    pnh.setParam("corridor_min_lateral_span", 0.12);
+    pnh.setParam("corridor_min_lateral_span", 0.15);
     pnh.setParam("corridor_publish_unknown_as_dynamic", true);
     pnh.setParam("corridor_static_confirm_frames", 4);
     pnh.setParam("corridor_confirmed_static_confirm_frames", 15);
@@ -349,7 +350,7 @@ TEST(UfomapMapperTest, CorridorLongitudinalRoiLeavesDistantClusterToStaticMap) {
 
 TEST(UfomapMapperTest, CorridorLateralMotionBecomesConfirmed) {
   auto mapper = makeMapper("ufomap_mapper_corridor_motion", true);
-  const std::vector<double> ball_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> ball_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   UfomapFrameResult last_result;
   std::uint32_t source_track_id = 0U;
   for (std::size_t index = 0U; index < ball_positions.size(); ++index) {
@@ -357,6 +358,14 @@ TEST(UfomapMapperTest, CorridorLateralMotionBecomesConfirmed) {
     last_result = mapper->processInputCloud(
         makeCloud(makeCorridorFrame(ball_positions[index]), stamp),
         makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
+    if (index < 3U) {
+      EXPECT_EQ(last_result.classification.dynamic_point_count, 0U);
+      EXPECT_EQ(last_result.runtime_stats.corridor_confirmed_point_count, 0U);
+    } else if (index == 3U) {
+      EXPECT_EQ(last_result.runtime_stats.corridor_confirmed_point_count, 0U);
+      ASSERT_FALSE(last_result.classification.dynamic_cluster_points.empty());
+      EXPECT_TRUE(last_result.classification.dynamic_cluster_points.front().provisional);
+    }
     if (!last_result.classification.dynamic_cluster_points.empty()) {
       const std::uint32_t current_source =
           last_result.classification.dynamic_cluster_points.front().corridor_source_track_id;
@@ -483,7 +492,7 @@ TEST(UfomapMapperTest, SparseStationaryClusterReleasesStaticAfterFourFrames) {
 
 TEST(UfomapMapperTest, SingleLargeExtentOutlierCannotConfirmSparseTrack) {
   auto mapper = makeMapper("ufomap_mapper_corridor_single_extent_outlier", true);
-  const std::vector<double> compact_positions{-0.25, -0.10};
+  const std::vector<double> compact_positions{-0.25, -0.10, 0.05};
   UfomapFrameResult result;
   for (std::size_t index = 0U; index < compact_positions.size(); ++index) {
     const double stamp = 33.5 + 0.1 * static_cast<double>(index);
@@ -530,7 +539,7 @@ TEST(UfomapMapperTest, ContinuousSlenderLateralClusterCannotPassShapeEvidence) {
 TEST(UfomapMapperTest, TwoRecentPhysicalExtentFramesConfirmMovingTrack) {
   auto mapper = makeMapper("ufomap_mapper_corridor_two_extent_frames", true);
   UfomapFrameResult result;
-  const std::vector<double> compact_positions{-0.25, -0.10};
+  const std::vector<double> compact_positions{-0.40, -0.25, -0.10};
   for (std::size_t index = 0U; index < compact_positions.size(); ++index) {
     const double stamp = 34.2 + 0.1 * static_cast<double>(index);
     result = mapper->processInputCloud(
@@ -543,7 +552,7 @@ TEST(UfomapMapperTest, TwoRecentPhysicalExtentFramesConfirmMovingTrack) {
     auto frame = makeStaticCorridorWalls();
     const auto ball = makeBallCluster(0.45, lateral);
     frame.insert(frame.end(), ball.begin(), ball.end());
-    const double stamp = 34.4 + 0.1 * static_cast<double>(index);
+    const double stamp = 34.5 + 0.1 * static_cast<double>(index);
     result = mapper->processInputCloud(
         makeCloud(frame, stamp), makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
     if (index == 0U) {
@@ -558,7 +567,7 @@ TEST(UfomapMapperTest, TwoRecentPhysicalExtentFramesConfirmMovingTrack) {
 
 TEST(UfomapMapperTest, ConfirmedCorridorTrackKeepsSourceIdAcrossTurnReset) {
   auto mapper = makeMapper("ufomap_mapper_corridor_turn_reset", true);
-  const std::vector<double> ball_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> ball_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   UfomapFrameResult result;
   for (std::size_t index = 0U; index < ball_positions.size(); ++index) {
     const double stamp = 31.0 + 0.1 * static_cast<double>(index);
@@ -572,7 +581,7 @@ TEST(UfomapMapperTest, ConfirmedCorridorTrackKeepsSourceIdAcrossTurnReset) {
       result.classification.dynamic_cluster_points.front().corridor_source_track_id;
   ASSERT_NE(source_track_id, 0U);
 
-  const double turn_stamp = 31.4;
+  const double turn_stamp = 31.5;
   result = mapper->processInputCloud(
       makeCloud(makeBallCluster(0.45, 0.20), turn_stamp),
       makeOdom(makePoint(0.0, 0.0, 0.0), turn_stamp, 0.50));
@@ -620,16 +629,23 @@ TEST(UfomapMapperTest, MotionQualifiedSparseTrackDoesNotReleaseOnTurnReset) {
   const auto direction_confirmed = mapper->processInputCloud(
       makeCloud(confirmed_direction_points, 36.2),
       makeOdom(makePoint(0.0, 0.0, 0.0), 36.2, 0.50));
-  ASSERT_GT(direction_confirmed.classification.dynamic_point_count, 0U);
-  ASSERT_FALSE(direction_confirmed.classification.dynamic_cluster_points.empty());
-  EXPECT_TRUE(direction_confirmed.classification.dynamic_cluster_points.front().provisional);
-  EXPECT_EQ(direction_confirmed.classification.dynamic_cluster_points.front().corridor_source_track_id,
+  EXPECT_EQ(direction_confirmed.classification.dynamic_point_count, 0U);
+
+  std::vector<geometry_msgs::Point> publish_ready_points;
+  appendCompactCluster(publish_ready_points, 0.45, 0.12);
+  const auto publish_ready = mapper->processInputCloud(
+      makeCloud(publish_ready_points, 36.3),
+      makeOdom(makePoint(0.0, 0.0, 0.0), 36.3, 0.50));
+  ASSERT_GT(publish_ready.classification.dynamic_point_count, 0U);
+  ASSERT_FALSE(publish_ready.classification.dynamic_cluster_points.empty());
+  EXPECT_TRUE(publish_ready.classification.dynamic_cluster_points.front().provisional);
+  EXPECT_EQ(publish_ready.classification.dynamic_cluster_points.front().corridor_source_track_id,
             source_track_id);
 }
 
 TEST(UfomapMapperTest, ConfirmedCorridorMotionBypassesUfomapWarmup) {
   auto mapper = makeMapper("ufomap_mapper_corridor_warmup", true, false, 30);
-  const std::vector<double> ball_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> ball_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   UfomapFrameResult last_result;
   for (std::size_t index = 0U; index < ball_positions.size(); ++index) {
     const double stamp = 32.0 + 0.1 * static_cast<double>(index);
@@ -645,7 +661,7 @@ TEST(UfomapMapperTest, ConfirmedCorridorMotionBypassesUfomapWarmup) {
 
 TEST(UfomapMapperTest, GroundFilteredConfirmedBallStillFeedsDynamicClusterer) {
   auto mapper = makeMapper("ufomap_mapper_corridor_raw_ground", true, true, 0);
-  const std::vector<double> ball_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> ball_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   UfomapFrameResult last_result;
   for (std::size_t index = 0U; index < ball_positions.size(); ++index) {
     const double stamp = 33.0 + 0.1 * static_cast<double>(index);
@@ -665,7 +681,7 @@ TEST(UfomapMapperTest, GroundFilteredConfirmedBallStillFeedsDynamicClusterer) {
 
 TEST(UfomapMapperTest, GroundFilteredBallReleasedStaticIsRestoredToMap) {
   auto mapper = makeMapper("ufomap_mapper_corridor_raw_static_release", true, true, 0);
-  const std::vector<double> moving_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> moving_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   UfomapFrameResult result;
   for (std::size_t index = 0U; index < moving_positions.size(); ++index) {
     const double stamp = 34.0 + 0.1 * static_cast<double>(index);
@@ -692,7 +708,7 @@ TEST(UfomapMapperTest, GroundFilteredBallReleasedStaticIsRestoredToMap) {
   EXPECT_FALSE(mapper->queryNode(ufo::Point(0.57F, 0.22F, 0.62F)).occupied);
 
   for (std::size_t index = 0U; index < 20U; ++index) {
-    const double stamp = 34.4 + 0.1 * static_cast<double>(index);
+    const double stamp = 34.5 + 0.1 * static_cast<double>(index);
     result = mapper->processInputCloud(
         makeCloud(makeElevatedGroundFrame(0.20), stamp),
         makeOdom(makePoint(0.0, 0.0, 1.20), stamp));
@@ -761,7 +777,7 @@ TEST(UfomapMapperTest, StaticInternalClusterNeverPublishesAndReleasesStatic) {
 
 TEST(UfomapMapperTest, ConfirmedCorridorTrackSurvivesEndpointThenDowngradesAfterLongStop) {
   auto mapper = makeMapper("ufomap_mapper_corridor_confirmed_stop", true);
-  const std::vector<double> moving_positions{-0.25, -0.10, 0.05, 0.20};
+  const std::vector<double> moving_positions{-0.40, -0.25, -0.10, 0.05, 0.20};
   for (std::size_t index = 0U; index < moving_positions.size(); ++index) {
     const double stamp = 57.0 + 0.1 * static_cast<double>(index);
     mapper->processInputCloud(
@@ -771,7 +787,7 @@ TEST(UfomapMapperTest, ConfirmedCorridorTrackSurvivesEndpointThenDowngradesAfter
 
   UfomapFrameResult stopped_result;
   for (std::size_t index = 0U; index < 8U; ++index) {
-    const double stamp = 57.4 + 0.1 * static_cast<double>(index);
+    const double stamp = 57.5 + 0.1 * static_cast<double>(index);
     stopped_result = mapper->processInputCloud(
         makeCloud(makeCorridorFrame(0.20), stamp),
         makeOdom(makePoint(0.0, 0.0, 0.0), stamp));
@@ -782,7 +798,7 @@ TEST(UfomapMapperTest, ConfirmedCorridorTrackSurvivesEndpointThenDowngradesAfter
   EXPECT_GT(stopped_result.classification.dynamic_point_count, 0U);
 
   for (std::size_t index = 8U; index < 20U; ++index) {
-    const double stamp = 57.4 + 0.1 * static_cast<double>(index);
+    const double stamp = 57.5 + 0.1 * static_cast<double>(index);
     stopped_result = mapper->processInputCloud(
         makeCloud(makeCorridorFrame(0.20), stamp),
         makeOdom(makePoint(0.0, 0.0, 0.0), stamp));

@@ -60,10 +60,10 @@ struct UfomapMapperConfig {
   double corridor_roi_max_z{1.5};
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
-  int corridor_min_confirm_hits{3};
+  int corridor_min_confirm_hits{5};
   // 未确认候选至少连续命中该帧数后才进入 planner-facing dynamic_objects；
   // 更早的点仍保持 holdout，避免首帧采样抖动直接触发规划。
-  int corridor_min_publish_hits{2};
+  int corridor_min_publish_hits{4};
   double corridor_min_lateral_speed{0.2};
   double corridor_min_lateral_span{0.15};
   // 未知区域中的紧凑候选先按实时障碍输出；只有稳定静止后才释放到静态图。
@@ -140,8 +140,8 @@ struct UfomapMapperParams {
   double corridor_roi_max_z{1.5};
   double corridor_detection_voxel{0.1};
   int corridor_history_frames{5};
-  int corridor_min_confirm_hits{3};
-  int corridor_min_publish_hits{2};
+  int corridor_min_confirm_hits{5};
+  int corridor_min_publish_hits{4};
   double corridor_min_lateral_speed{0.2};
   double corridor_min_lateral_span{0.15};
   bool corridor_publish_unknown_as_dynamic{true};

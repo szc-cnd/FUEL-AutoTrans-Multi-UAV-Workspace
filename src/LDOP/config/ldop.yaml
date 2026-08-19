@@ -48,10 +48,10 @@ corridor_roi_min_z: 0.15
 corridor_roi_max_z: 1.50
 corridor_detection_voxel: 0.10  # 动态检测独立网格，与Diff规划分辨率一致
 corridor_history_frames: 5
-corridor_min_confirm_hits: 3
-corridor_min_publish_hits: 2  # 未确认候选连续命中2帧后才送规划器，首帧仍只做静态图 holdout
+corridor_min_confirm_hits: 5
+corridor_min_publish_hits: 4  # provisional至少命中4帧，并同时满足连续3次同向横移
 corridor_min_lateral_speed: 0.20
-corridor_min_lateral_span: 0.12  # 确认前最近窗口内至少累计的横向位移，单位m
+corridor_min_lateral_span: 0.15  # 确认前最近窗口内至少累计的横向位移，单位m
 corridor_publish_unknown_as_dynamic: true  # 未知紧凑簇短时关联后按实时障碍输出，首帧不写死到静态图
 corridor_static_confirm_frames: 4  # 10Hz点云下连续约0.4s无横向运动后才释放为静态
 corridor_confirmed_static_confirm_frames: 15  # 已确认摆球端点会短暂停速，连续约1.5s静止才降为静态

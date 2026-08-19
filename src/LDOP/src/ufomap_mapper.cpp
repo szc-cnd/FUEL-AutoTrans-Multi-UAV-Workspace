@@ -1814,6 +1814,8 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     // 的轨迹回退为静态。
     const bool continuous_lateral_motion = lateral_dominant &&
         consecutive_direction >= 2U;
+    const bool provisional_lateral_motion = lateral_dominant &&
+        consecutive_direction >= 3U;
     if (!track->released_static) {
       if (continuous_lateral_motion) {
         ++track->lateral_evidence_frames;
@@ -1832,8 +1834,8 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         track->lateral_direction_history.begin(), track->lateral_direction_history.end(), -1));
     const std::size_t dominant_evidence = std::max(positive_evidence, negative_evidence);
     const std::size_t contrary_evidence = std::min(positive_evidence, negative_evidence);
-    const bool recent_direction_consistent = consecutive_direction >= 3U &&
-        dominant_evidence >= 3U && dominant_evidence > contrary_evidence;
+    const bool recent_direction_consistent = consecutive_direction >= 4U &&
+        dominant_evidence >= 4U && dominant_evidence > contrary_evidence;
     double lateral_span = 0.0;
     if (track->history.size() >= 2U) {
       double minimum_lateral = std::numeric_limits<double>::infinity();
@@ -1919,7 +1921,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
           track->hits >= static_cast<std::size_t>(config_.corridor_min_publish_hits);
       // 未确认点簇仅凭多帧命中仍可能是静态结构的采样抖动。至少观察到
       // 连续同向的横向运动后才发布 provisional；确认轨迹继续正常输出。
-      const bool provisional_motion_ready = continuous_lateral_motion ||
+      const bool provisional_motion_ready = provisional_lateral_motion ||
           track->motion_qualified;
       const bool publish_current = cluster.indices.size() >=
               static_cast<std::size_t>(config_.corridor_min_cluster_points) &&
