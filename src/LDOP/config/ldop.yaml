@@ -58,6 +58,8 @@ corridor_confirmed_static_confirm_frames: 15  # 已确认摆球端点会短暂�
 corridor_static_lateral_speed: 0.08  # 低于该横向速度视为静止证据
 corridor_forward_alignment_cos: 0.85  # 速度近似沿无人机前后方向时归为静态候选
 corridor_max_missed_frames: 5  # 同一障碍允许丢失约0.5s，仅保留最后真实位置
+corridor_internal_max_missed_frames: 12  # 仅用于mapper内部身份重关联，planner-facing保活不变
+corridor_internal_track_timeout: 1.20
 corridor_max_forward_speed: 0.80
 corridor_max_vertical_speed: 0.80
 corridor_association_gate: 0.25  # 10Hz下限制跨帧簇跳配，避免把不同静态碎片拼成高速运动
@@ -67,6 +69,9 @@ corridor_min_confirm_extent: 0.18  # 需形成真实实体尺度后才确认；�
 corridor_min_confirm_second_extent: 0.06  # raw bbox第二大轴门槛，拒绝墙边细条/线状回波
 corridor_min_confirm_extent_frames: 2  # 最近历史窗口内至少两帧达到实体尺度，拒绝单帧大回波毛刺
 corridor_max_cluster_extent: 0.60
+corridor_oversized_split_enabled: true
+corridor_split_min_cluster_points: 3
+corridor_split_max_subclusters: 8
 corridor_max_candidates: 1
 corridor_reject_candidate_count: 12  # 候选状态机每帧最多处理的紧凑簇；发布仍由 corridor_max_candidates 限制
 corridor_min_wall_points: 12

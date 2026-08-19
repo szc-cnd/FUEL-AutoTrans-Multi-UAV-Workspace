@@ -74,6 +74,9 @@ struct UfomapMapperConfig {
   double corridor_static_lateral_speed{0.08};
   double corridor_forward_alignment_cos{0.85};
   int corridor_max_missed_frames{5};
+  // mapper 内部身份保留与 planner-facing 输出保活分离；仅用于跨短时遮挡重关联。
+  int corridor_internal_max_missed_frames{12};
+  double corridor_internal_track_timeout{1.2};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
@@ -83,6 +86,10 @@ struct UfomapMapperConfig {
   double corridor_min_confirm_second_extent{0.06};
   int corridor_min_confirm_extent_frames{2};
   double corridor_max_cluster_extent{0.6};
+  // 超尺寸父簇只在通道层内部用 6 邻域再分割；普通簇仍使用上面的 26 邻域。
+  bool corridor_oversized_split_enabled{true};
+  int corridor_split_min_cluster_points{3};
+  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};
@@ -143,6 +150,8 @@ struct UfomapMapperParams {
   double corridor_static_lateral_speed{0.08};
   double corridor_forward_alignment_cos{0.85};
   int corridor_max_missed_frames{5};
+  int corridor_internal_max_missed_frames{12};
+  double corridor_internal_track_timeout{1.2};
   double corridor_max_forward_speed{0.8};
   double corridor_max_vertical_speed{0.8};
   double corridor_association_gate{0.45};
@@ -152,6 +161,9 @@ struct UfomapMapperParams {
   double corridor_min_confirm_second_extent{0.06};
   int corridor_min_confirm_extent_frames{2};
   double corridor_max_cluster_extent{0.6};
+  bool corridor_oversized_split_enabled{true};
+  int corridor_split_min_cluster_points{3};
+  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};

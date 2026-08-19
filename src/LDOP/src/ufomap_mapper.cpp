@@ -352,6 +352,10 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.corridor_forward_alignment_cos = std::clamp(
       params.corridor_forward_alignment_cos, 0.0, 1.0);
   config.corridor_max_missed_frames = std::max(0, params.corridor_max_missed_frames);
+  config.corridor_internal_max_missed_frames = std::max(
+      config.corridor_max_missed_frames, params.corridor_internal_max_missed_frames);
+  config.corridor_internal_track_timeout = params.corridor_internal_track_timeout > 0.0
+      ? params.corridor_internal_track_timeout : defaults.corridor_internal_track_timeout;
   config.corridor_max_forward_speed = std::max(0.0, params.corridor_max_forward_speed);
   config.corridor_max_vertical_speed = std::max(0.0, params.corridor_max_vertical_speed);
   config.corridor_association_gate = params.corridor_association_gate > 0.0
@@ -369,6 +373,10 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
       params.corridor_min_confirm_extent_frames, 2, config.corridor_history_frames);
   config.corridor_max_cluster_extent = params.corridor_max_cluster_extent > 0.0
       ? params.corridor_max_cluster_extent : defaults.corridor_max_cluster_extent;
+  config.corridor_oversized_split_enabled = params.corridor_oversized_split_enabled;
+  config.corridor_split_min_cluster_points = std::max(
+      2, params.corridor_split_min_cluster_points);
+  config.corridor_split_max_subclusters = std::max(1, params.corridor_split_max_subclusters);
   config.corridor_max_candidates = std::max(1, params.corridor_max_candidates);
   config.corridor_reject_candidate_count = std::max(
       config.corridor_max_candidates, params.corridor_reject_candidate_count);
@@ -576,6 +584,12 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_forward_alignment_cos);
   pnh_.param("corridor_max_missed_frames", params_.corridor_max_missed_frames,
              defaults.corridor_max_missed_frames);
+  pnh_.param("corridor_internal_max_missed_frames",
+             params_.corridor_internal_max_missed_frames,
+             defaults.corridor_internal_max_missed_frames);
+  pnh_.param("corridor_internal_track_timeout",
+             params_.corridor_internal_track_timeout,
+             defaults.corridor_internal_track_timeout);
   pnh_.param("corridor_max_forward_speed", params_.corridor_max_forward_speed,
              defaults.corridor_max_forward_speed);
   pnh_.param("corridor_max_vertical_speed", params_.corridor_max_vertical_speed,
@@ -596,6 +610,12 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_min_confirm_extent_frames);
   pnh_.param("corridor_max_cluster_extent", params_.corridor_max_cluster_extent,
              defaults.corridor_max_cluster_extent);
+  pnh_.param("corridor_oversized_split_enabled", params_.corridor_oversized_split_enabled,
+             defaults.corridor_oversized_split_enabled);
+  pnh_.param("corridor_split_min_cluster_points", params_.corridor_split_min_cluster_points,
+             defaults.corridor_split_min_cluster_points);
+  pnh_.param("corridor_split_max_subclusters", params_.corridor_split_max_subclusters,
+             defaults.corridor_split_max_subclusters);
   pnh_.param("corridor_max_candidates", params_.corridor_max_candidates,
              defaults.corridor_max_candidates);
   pnh_.param("corridor_reject_candidate_count", params_.corridor_reject_candidate_count,
@@ -1251,9 +1271,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                        [&](const CorridorTrack& track) {
                          return track.missed_frames > static_cast<std::size_t>(
-                                    config_.corridor_max_missed_frames) ||
+                                    config_.corridor_internal_max_missed_frames) ||
                                 (stamp - track.last_seen).toSec() >
-                                    config_.corridor_track_timeout;
+                                    config_.corridor_internal_track_timeout;
                        }),
         corridor_tracks_.end());
     return result;
@@ -1292,6 +1312,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
 
   struct CorridorCluster {
     std::vector<std::size_t> indices;
+    std::vector<TemporalGridKey> keys;
     ufo::Point center{};
     ufo::Point size{};
     double raw_extent{0.0};
@@ -1314,6 +1335,58 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     }
     return values;
   }();
+  const std::array<std::array<int, 3>, 6> split_offsets = {{{-1, 0, 0}, {1, 0, 0},
+                                                              {0, -1, 0}, {0, 1, 0},
+                                                              {0, 0, -1}, {0, 0, 1}}};
+
+  const auto makeCluster = [&](std::vector<std::size_t> indices,
+                               std::vector<TemporalGridKey> keys,
+                               const bool reject_oversized,
+                               CorridorCluster* output) {
+    if (output == nullptr || indices.size() < 2U) {
+      return false;
+    }
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double min_z = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    double max_z = -std::numeric_limits<double>::infinity();
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    for (const std::size_t index : indices) {
+      const auto& point = points[index];
+      min_x = std::min(min_x, static_cast<double>(point.x));
+      min_y = std::min(min_y, static_cast<double>(point.y));
+      min_z = std::min(min_z, static_cast<double>(point.z));
+      max_x = std::max(max_x, static_cast<double>(point.x));
+      max_y = std::max(max_y, static_cast<double>(point.y));
+      max_z = std::max(max_z, static_cast<double>(point.z));
+      sum_x += point.x;
+      sum_y += point.y;
+      sum_z += point.z;
+    }
+    const double extent = std::hypot(std::hypot(max_x - min_x, max_y - min_y), max_z - min_z);
+    if (reject_oversized && config_.corridor_max_cluster_extent > 0.0 &&
+        extent > config_.corridor_max_cluster_extent) {
+      return false;
+    }
+    const double count = static_cast<double>(indices.size());
+    output->indices = std::move(indices);
+    output->keys = std::move(keys);
+    output->center = ufo::Point(static_cast<float>(sum_x / count),
+                                static_cast<float>(sum_y / count),
+                                static_cast<float>(sum_z / count));
+    output->size = ufo::Point(static_cast<float>(std::max(max_x - min_x, detection_voxel)),
+                              static_cast<float>(std::max(max_y - min_y, detection_voxel)),
+                              static_cast<float>(std::max(max_z - min_z, detection_voxel)));
+    output->raw_extent = extent;
+    std::array<double, 3> raw_axis_extents{max_x - min_x, max_y - min_y, max_z - min_z};
+    std::sort(raw_axis_extents.begin(), raw_axis_extents.end());
+    output->raw_second_extent = raw_axis_extents[1];
+    return true;
+  };
 
   for (const auto& bucket : candidate_buckets) {
     if (visited.count(bucket.first) != 0U) {
@@ -1330,6 +1403,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       if (found == candidate_buckets.end()) {
         continue;
       }
+      cluster.keys.push_back(key);
       cluster.indices.insert(cluster.indices.end(), found->second.begin(), found->second.end());
       for (const auto& offset : offsets) {
         const TemporalGridKey neighbor{key.x + offset[0], key.y + offset[1], key.z + offset[2]};
@@ -1339,50 +1413,66 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       }
     }
 
-    // 低回波簇也进入短时状态机；发布门槛仍在下面单独判断。这样首见
-    // 只有少量点的球不会既不发布又不写入地图。
-    if (cluster.indices.size() < 2U) {
+    CorridorCluster parent;
+    if (!makeCluster(std::move(cluster.indices), std::move(cluster.keys), false, &parent)) {
       continue;
     }
-    double min_x = std::numeric_limits<double>::infinity();
-    double min_y = std::numeric_limits<double>::infinity();
-    double min_z = std::numeric_limits<double>::infinity();
-    double max_x = -std::numeric_limits<double>::infinity();
-    double max_y = -std::numeric_limits<double>::infinity();
-    double max_z = -std::numeric_limits<double>::infinity();
-    double sum_x = 0.0;
-    double sum_y = 0.0;
-    double sum_z = 0.0;
-    for (const std::size_t index : cluster.indices) {
-      const auto& point = points[index];
-      min_x = std::min(min_x, static_cast<double>(point.x));
-      min_y = std::min(min_y, static_cast<double>(point.y));
-      min_z = std::min(min_z, static_cast<double>(point.z));
-      max_x = std::max(max_x, static_cast<double>(point.x));
-      max_y = std::max(max_y, static_cast<double>(point.y));
-      max_z = std::max(max_z, static_cast<double>(point.z));
-      sum_x += point.x;
-      sum_y += point.y;
-      sum_z += point.z;
-    }
-    const double extent = std::hypot(std::hypot(max_x - min_x, max_y - min_y), max_z - min_z);
-    if (config_.corridor_max_cluster_extent > 0.0 &&
-        extent > config_.corridor_max_cluster_extent) {
+    const bool oversized = config_.corridor_max_cluster_extent > 0.0 &&
+                           parent.raw_extent > config_.corridor_max_cluster_extent;
+    if (!oversized || !config_.corridor_oversized_split_enabled) {
+      if (!oversized) {
+        clusters.push_back(std::move(parent));
+      }
       continue;
     }
-    const double count = static_cast<double>(cluster.indices.size());
-    cluster.center = ufo::Point(static_cast<float>(sum_x / count),
-                                static_cast<float>(sum_y / count),
-                                static_cast<float>(sum_z / count));
-    cluster.size = ufo::Point(static_cast<float>(std::max(max_x - min_x, detection_voxel)),
-                              static_cast<float>(std::max(max_y - min_y, detection_voxel)),
-                              static_cast<float>(std::max(max_z - min_z, detection_voxel)));
-    cluster.raw_extent = extent;
-    std::array<double, 3> raw_axis_extents{
-        max_x - min_x, max_y - min_y, max_z - min_z};
-    std::sort(raw_axis_extents.begin(), raw_axis_extents.end());
-    cluster.raw_second_extent = raw_axis_extents[1];
-    clusters.push_back(std::move(cluster));
+
+    // 大簇通常是球与墙边通过一两个对角体素桥接。只对这个父簇
+    // 重跑 6 邻域，避免全局改成 6 邻域后把稀疏球切碎。
+    std::unordered_set<TemporalGridKey, TemporalGridKeyHash> parent_keys(
+        parent.keys.begin(), parent.keys.end());
+    std::unordered_set<TemporalGridKey, TemporalGridKeyHash> split_visited;
+    std::size_t accepted_subclusters = 0U;
+    for (const auto& start_key : parent.keys) {
+      if (!split_visited.insert(start_key).second) {
+        continue;
+      }
+      std::queue<TemporalGridKey> split_queue;
+      split_queue.push(start_key);
+      std::vector<TemporalGridKey> child_keys;
+      std::vector<std::size_t> child_indices;
+      while (!split_queue.empty()) {
+        const TemporalGridKey key = split_queue.front();
+        split_queue.pop();
+        const auto found = candidate_buckets.find(key);
+        if (found == candidate_buckets.end()) {
+          continue;
+        }
+        child_keys.push_back(key);
+        child_indices.insert(child_indices.end(), found->second.begin(), found->second.end());
+        for (const auto& offset : split_offsets) {
+          const TemporalGridKey neighbor{key.x + offset[0], key.y + offset[1], key.z + offset[2]};
+          if (parent_keys.count(neighbor) != 0U && split_visited.insert(neighbor).second) {
+            split_queue.push(neighbor);
+          }
+        }
+      }
+
+      CorridorCluster child;
+      if (!makeCluster(std::move(child_indices), std::move(child_keys), true, &child) ||
+          child.indices.size() < static_cast<std::size_t>(config_.corridor_split_min_cluster_points) ||
+          child.raw_second_extent < config_.corridor_min_confirm_second_extent) {
+        continue;
+      }
+      clusters.push_back(std::move(child));
+      if (++accepted_subclusters >=
+          static_cast<std::size_t>(config_.corridor_split_max_subclusters)) {
+        break;
+      }
+    }
+    if (accepted_subclusters == 0U) {
+      ROS_DEBUG_STREAM_THROTTLE(1.0, "corridor oversized cluster unresolved, extent="
+                                      << parent.raw_extent << " points=" << parent.indices.size());
+    }
   }
 
   // 摆球的主要位移发生在通道横向。漏帧后允许横向门逐步放宽，
@@ -1391,7 +1481,8 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
                                    const CorridorCluster& cluster) {
     const double missed = static_cast<double>(std::min<std::size_t>(
         track.missed_frames,
-        static_cast<std::size_t>(config_.corridor_max_missed_frames)));
+        static_cast<std::size_t>(std::min(
+            config_.corridor_internal_max_missed_frames, 5))));
     const double relaxed_gate = config_.corridor_association_gate * (1.0 + 0.20 * missed);
     const double lateral_gate = track.confirmed
         ? std::max(config_.corridor_association_gate, relaxed_gate) : relaxed_gate;
@@ -1496,9 +1587,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
         std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                        [&](const CorridorTrack& track) {
                          return track.missed_frames > static_cast<std::size_t>(
-                                    config_.corridor_max_missed_frames) ||
+                                    config_.corridor_internal_max_missed_frames) ||
                                 (stamp - track.last_seen).toSec() >
-                                    config_.corridor_track_timeout;
+                                    config_.corridor_internal_track_timeout;
                        }),
         corridor_tracks_.end());
   };
@@ -1860,9 +1951,9 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       std::remove_if(corridor_tracks_.begin(), corridor_tracks_.end(),
                      [&](const CorridorTrack& track) {
                        return track.missed_frames > static_cast<std::size_t>(
-                                  config_.corridor_max_missed_frames) ||
+                                  config_.corridor_internal_max_missed_frames) ||
                               (stamp - track.last_seen).toSec() >
-                                  config_.corridor_track_timeout;
+                                  config_.corridor_internal_track_timeout;
                      }),
       corridor_tracks_.end());
 
