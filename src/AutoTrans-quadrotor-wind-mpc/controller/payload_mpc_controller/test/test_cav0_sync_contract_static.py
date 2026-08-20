@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+import unittest
+from pathlib import Path
+
+
+WORKSPACE = Path(__file__).resolve().parents[5]
+PACKAGE = Path(__file__).resolve().parents[1]
+
+
+class Cav0SyncContractStaticTest(unittest.TestCase):
+    def test_controller_sources_are_split_as_required(self):
+        launch = (PACKAGE / "launch/quad_wind_mpc_controller.launch").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('/UAV0/fast_lio/Odom_high_freq', launch)
+        self.assertIn('/UAV0/mavros/local_position/odom', launch)
+        self.assertIn('/UAV0/mavros/imu/data', launch)
+        self.assertIn('from="~force_attitude_odom"', launch)
+
+    def test_recovery_has_no_automatic_land_transition(self):
+        fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        begin = fsm.index("void MPCFSM::beginMpcRecovery")
+        end = fsm.index("void MPCFSM::processMpcRecovery", begin)
+        recovery = fsm[begin:end]
+        self.assertIn("MPC_RECOVERY_HOVER", recovery)
+        self.assertNotIn("AUTO_LAND", recovery)
+        process = fsm[end : fsm.index("void MPCFSM::", end + 10)]
+        self.assertIn("planning_restart_pub_", process)
+        self.assertIn("CH10", process)
+
+    def test_bridge_uses_latched_output_and_two_second_timeout_abort(self):
+        bridge = (
+            WORKSPACE / "src/autotrans_reference_bridge/src/fuel_autotrans_bridge_node.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true)", bridge)
+        self.assertIn('param("trajectory_timeout", trajectory_timeout_, 2.0)', bridge)
+        self.assertIn("createTimer", bridge)
+        self.assertIn("ACTION_ABORT", bridge)
+
+    def test_six_pane_entry_uses_uav0_high_frequency_chain(self):
+        script = (WORKSPACE / "shfiles/start_uav0_six_terminator.sh").read_text(
+            encoding="utf-8"
+        )
+        layout = (WORKSPACE / "shfiles/terminator_uav0_six.conf").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(layout.count("type = Terminal"), 6)
+        for value in (
+            "/UAV0/fast_lio/Odom_high_freq",
+            "/UAV0/mavros/local_position/odom",
+            "/drone_0_traj_server/heartbeat",
+            "uav0_autotrans_controller.launch",
+        ):
+            self.assertIn(value, script)
+        self.assertNotIn("rosbag record", script)
+
+        controller_launch = (
+            PACKAGE / "launch/quad_wind_mpc_controller.launch"
+        ).read_text(encoding="utf-8")
+        logger = (PACKAGE / "scripts/autotrans_mpc_logger.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('name="enable_rosbag"', controller_launch)
+        self.assertIn('param="rosbag_topics"', controller_launch)
+        self.assertIn("start_rosbag_recording", logger)
+        self.assertIn("stop_rosbag_recording", logger)
+
+    def test_cav1_controller_behavior_is_synced_without_replacing_fuel(self):
+        fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        controller = (PACKAGE / "src/mpc_controller.cpp").read_text(encoding="utf-8")
+        controller_header = (
+            PACKAGE / "include/payload_mpc_controller/mpc_controller.h"
+        ).read_text(encoding="utf-8")
+        inputs = (PACKAGE / "src/mpc_input.cpp").read_text(encoding="utf-8")
+        params = (
+            PACKAGE / "include/payload_mpc_controller/mpc_params.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("beginDirectAutoLand", fsm)
+        self.assertIn("MANUAL_CTRL -> AUTO_HOVER", fsm)
+        self.assertIn("MANUAL_CTRL -> CMD_CTRL", fsm)
+        self.assertIn("yaw_reference_initialized_", controller_header)
+        self.assertIn("predicted_yaw", controller)
+        self.assertIn("trajectory_id 重新计数", inputs)
+        self.assertNotIn("trajectory_id 必须从 1 开始", inputs)
+        self.assertIn("首个有效样本直接初始化", inputs)
+        self.assertIn("force_axis_gain_x", params)
+
+        recovery_start = fsm.index("void MPCFSM::beginMpcRecovery")
+        recovery_end = fsm.index("void MPCFSM::processMpcRecovery", recovery_start)
+        recovery = fsm[recovery_start:recovery_end]
+        self.assertIn("if (!controller_.resetForHover", recovery)
+
+        land_case = fsm.split("case AUTO_LAND:", 1)[1].split("default:", 1)[0]
+        self.assertIn(
+            "controller_.lastMpcSolveSuccessful() && (low_enough || timeout)",
+            land_case,
+        )
+
+        prestream_start = fsm.index("void MPCFSM::publish_manual_ctrl")
+        prestream_end = fsm.index("void MPCFSM::handleOffboardLoss", prestream_start)
+        self.assertIn("msg.thrust = 0.01;", fsm[prestream_start:prestream_end])
+        self.assertIn("suppress_manual_setpoint_", fsm[prestream_start:prestream_end])
+        self.assertIn("manual_setpoint_published_", fsm[prestream_start:prestream_end])
+
+        manual = fsm.split("case MANUAL_CTRL:", 1)[1].split("case AUTO_HOVER:", 1)[0]
+        self.assertIn('state_data.current_state.mode != "OFFBOARD"', manual)
+        self.assertIn("suppress_manual_setpoint_ = !prestream_allowed", manual)
+        self.assertNotIn("takeoff_prestream_start_", manual)
+        self.assertNotIn("至少持续 1.0 s", manual)
+        self.assertIn("controller_.resetThrustMapping();", manual)
+
+        config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
+        self.assertIn("force_attitude_odom: 0.1", config)
+
+    def test_precision_landing_defaults_to_high_frequency_odometry(self):
+        landing_launch = (
+            WORKSPACE / "src/precision_landing/launch/precision_landing.launch"
+        ).read_text(encoding="utf-8")
+        competition_launch = (
+            WORKSPACE
+            / "src/uav0_competition_bringup/launch/uav0_detection_landing_stack.launch"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/fast_lio/Odom_high_freq", landing_launch)
+        self.assertNotIn("/fast_lio/Odometry", landing_launch)
+        self.assertIn("/UAV0/fast_lio/Odom_high_freq", competition_launch)
+
+    def test_controller_joins_preparation_thread_on_early_exit(self):
+        header = (PACKAGE / "include/payload_mpc_controller/mpc_controller.h").read_text(
+            encoding="utf-8"
+        )
+        controller = (PACKAGE / "src/mpc_controller.cpp").read_text(encoding="utf-8")
+        self.assertIn("~MpcController();", header)
+        destructor_start = controller.index("MpcController::~MpcController()")
+        next_method = controller.index("void MpcController::execMPC", destructor_start)
+        destructor = controller[destructor_start:next_method]
+        self.assertIn("waitForPreparation();", destructor)
+
+
+if __name__ == "__main__":
+    unittest.main()
