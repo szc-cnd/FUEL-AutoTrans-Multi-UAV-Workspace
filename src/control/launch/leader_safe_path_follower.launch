@@ -3,6 +3,9 @@
          维护时可设置 UAV1_ENABLE_SEARCH_LANDING=false 完全关闭。 -->
     <arg name="enable_search_landing"
          default="$(optenv UAV1_ENABLE_SEARCH_LANDING true)"/>
+    <!-- UAV1 LDOP未完成实飞验证：即使节点被单独启动，跟随器默认也不消费动态目标。 -->
+    <arg name="enable_dynamic_obstacle_detection"
+         default="$(optenv UAV1_ENABLE_DYNAMIC_OBSTACLE_DETECTION false)"/>
     <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
     <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch"/>
     <!-- UAV1 复用同一套搜索/精降节点；相机驱动和 UAV1/down_camera 话题由机载入口提供。 -->
@@ -39,6 +42,8 @@
         <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
         <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
         <param name="enable_search_landing" value="$(arg enable_search_landing)"/>
+        <param name="enable_dynamic_obstacle_detection"
+               value="$(arg enable_dynamic_obstacle_detection)"/>
         <!-- 2026-07-29: 不再依赖 start_after_hover；双机分别达到高度后锁存就绪，
              UAV1 仍要等接力目标发布并由 Diff 生成真实轨迹后才运动。 -->
         <param name="leader_start_height" value="0.5"/>
