@@ -75,6 +75,7 @@ class LeaderSafePathFollower {
                             "/UAV1/fast_lio/Odometry");
     pnh_.param<std::string>("follower_cloud_topic", follower_cloud_topic_,
                             "/UAV1/fast_lio/cloud_registered");
+    pnh_.param("enable_search_landing", enable_search_landing_, false);
     // 2026-07-29: 起飞就绪由各自 FAST-LIO 高度锁存，不再依赖 start_after_hover Bool。
     pnh_.param("leader_start_height", leader_start_height_, 0.5);
     pnh_.param("follower_start_height", follower_start_height_, 0.5);
@@ -388,6 +389,7 @@ class LeaderSafePathFollower {
   }
 
   void finalExitPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    if (!enable_search_landing_) return;
     if (have_final_exit_) return;
     confirmed_exit_.position = followerCruisePointToWorld(msg->pose.position);
     confirmed_exit_.yaw = yawFromQuaternion(msg->pose.orientation);
@@ -472,6 +474,7 @@ class LeaderSafePathFollower {
   }
 
   void leaderLandingRequestCallback(const std_msgs::Bool::ConstPtr& msg) {
+    if (!enable_search_landing_) return;
     if (!msg->data || terminal_mode_active_) return;
     if (!release_uav1_) {
       pending_leader_landing_request_ = true;
@@ -516,6 +519,7 @@ class LeaderSafePathFollower {
   }
 
   void followerAssignedTargetCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    if (!enable_search_landing_) return;
     assigned_follower_target_.position = msg->pose.position;
     assigned_follower_target_.yaw = yawFromQuaternion(msg->pose.orientation);
     have_assigned_follower_target_ = true;
@@ -524,6 +528,7 @@ class LeaderSafePathFollower {
   }
 
   void releaseUav1Callback(const std_msgs::Bool::ConstPtr& msg) {
+    if (!enable_search_landing_) return;
     release_uav1_ = msg->data;
     if (release_uav1_) {
       ROS_ERROR("[safe_follower] UAV1 released to leave exit waiting point.");
@@ -899,6 +904,10 @@ class LeaderSafePathFollower {
   }
 
   void leaderTaskStatusCallback(const std_msgs::String::ConstPtr& msg) {
+    if (!enable_search_landing_) {
+      leader_outside_exit_ = false;
+      return;
+    }
     // task_status首字段为阶段名。前机真正越过出口后停止0.5m动态跟距，恢复离散任务点/终点执行。
     leader_outside_exit_ = msg->data.find("SEARCH_OUTSIDE_LANDING") == 0 ||
                            msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
@@ -2140,6 +2149,7 @@ class LeaderSafePathFollower {
   bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
   bool pending_relay_valid_{false};
   bool continuous_follow_before_exit_{true}, leader_outside_exit_{false};
+  bool enable_search_landing_{false};
   // 2026-07-20: 接力路线判向、回头暂停和恢复状态独立于前机原始Odometry保存。
   bool have_last_leader_sample_{false}, relay_route_paused_{false};
   bool obstacle_check_enabled_{true}, require_fresh_cloud_{true};

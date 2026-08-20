@@ -67,6 +67,49 @@ def test_competition_entries_explicitly_share_search_extrinsic():
             assert args["landing_search_config"] == expected
 
 
+def test_competition_search_landing_is_disabled_until_manually_enabled():
+    uav0_root = ET.parse(
+        (PACKAGE / "../uav0_competition_bringup/launch/uav0_detection_landing_stack.launch").resolve()
+    ).getroot()
+    uav0_args = {
+        arg.attrib["name"]: arg.attrib["default"] for arg in uav0_root.findall("arg")
+    }
+    assert uav0_args["enable_search_landing"] == "$(optenv UAV0_ENABLE_SEARCH_LANDING false)"
+    search_group = next(
+        group for group in uav0_root.findall("group")
+        if group.attrib.get("if") == "$(arg enable_search_landing)"
+    )
+    gated_uav0_includes = search_group.findall("include")
+    assert any("precision_landing.launch" in item.attrib["file"]
+               and item.attrib.get("if") == "$(arg enable_precision_landing)"
+               for item in gated_uav0_includes)
+    assert any("dual_uav_landing_coordinator.launch" in item.attrib["file"]
+               and item.attrib.get("if") == "$(arg enable_dual_uav_landing_coordinator)"
+               for item in gated_uav0_includes)
+
+    uav1_root = ET.parse(
+        (PACKAGE / "../control/launch/leader_safe_path_follower.launch").resolve()
+    ).getroot()
+    uav1_args = {
+        arg.attrib["name"]: arg.attrib["default"] for arg in uav1_root.findall("arg")
+    }
+    assert uav1_args["enable_search_landing"] == "$(optenv UAV1_ENABLE_SEARCH_LANDING false)"
+    precision_include = next(
+        item for item in uav1_root.findall("include")
+        if "precision_landing.launch" in item.attrib.get("file", "")
+    )
+    assert precision_include.attrib["if"] == "$(arg enable_search_landing)"
+
+    follower = next(
+        node for node in uav1_root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    follower_params = {
+        param.attrib["name"]: param.attrib["value"] for param in follower.findall("param")
+    }
+    assert follower_params["enable_search_landing"] == "$(arg enable_search_landing)"
+
+
 def test_search_runtime_assignment_resets_old_lock_before_handoff():
     source = (PACKAGE / "src/landing_search_node.cpp").read_text()
     callback = source.split("void assignedIdCallback", maxsplit=1)[1].split(

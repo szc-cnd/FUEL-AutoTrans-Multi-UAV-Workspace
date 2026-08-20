@@ -1,8 +1,13 @@
 <launch>
+    <!-- 出口识别调试期间默认关闭后机搜索、平台接近和精降接管。
+         手动恢复：UAV1_ENABLE_SEARCH_LANDING=true 后重新启动本 launch。 -->
+    <arg name="enable_search_landing"
+         default="$(optenv UAV1_ENABLE_SEARCH_LANDING false)"/>
     <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
     <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch"/>
     <!-- UAV1 复用同一套搜索/精降节点；相机驱动和 UAV1/down_camera 话题由机载入口提供。 -->
-    <include file="$(find precision_landing)/launch/precision_landing.launch">
+    <include if="$(arg enable_search_landing)"
+             file="$(find precision_landing)/launch/precision_landing.launch">
         <arg name="vehicle_ns" value="UAV1"/>
         <arg name="image_topic" value="/UAV1/down_camera/image_raw"/>
         <arg name="camera_info_topic" value="/UAV1/down_camera/camera_info"/>
@@ -33,6 +38,7 @@
         <param name="leader_odom_topic" value="$(arg leader_odom_topic)"/>
         <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
         <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
+        <param name="enable_search_landing" value="$(arg enable_search_landing)"/>
         <!-- 2026-07-29: 不再依赖 start_after_hover；双机分别达到高度后锁存就绪，
              UAV1 仍要等接力目标发布并由 Diff 生成真实轨迹后才运动。 -->
         <param name="leader_start_height" value="0.5"/>
