@@ -13,6 +13,7 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+NETWORK_SETUP="${SCRIPT_DIR}/configure_dual_uav_ros_network.sh"
 ROS_SETUP="${UAV1_SIX_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
 LAYOUT_CONFIG="${UAV1_SIX_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav1_six.conf}"
 RUN_ID="${UID:-$(id -u)}"
@@ -84,6 +85,14 @@ source_ros_environment() {
   # shellcheck disable=SC1091
   source "${MATCH_WS}/devel/setup.bash"
   set -u
+
+  if [[ ! -r "${NETWORK_SETUP}" ]]; then
+    log "找不到双机 ROS 网络配置：${NETWORK_SETUP}"
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  source "${NETWORK_SETUP}"
+  configure_dual_uav_ros_network uav1 || return 1
   unset ROS_LOG_DIR
 }
 
@@ -211,6 +220,7 @@ pane_init() {
 
 run_mavros_pane() {
   pane_init 1 MAVROS
+  wait_for_ros_master || keep_pane_open
   printf '[启动] UAV1 MAVROS，并设置 IMU/姿态/里程计/ESC 频率\n'
   sh "${MATCH_WS}/shfiles/run_uav1_sensor_stack.sh" mavros
   printf '[退出] MAVROS 分屏，返回码=%s\n' "$?"
