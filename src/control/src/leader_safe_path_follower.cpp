@@ -409,7 +409,8 @@ class LeaderSafePathFollower {
   // 2026-07-28: 复用后文已有的nearestRouteProgress确定出口在前机实飞折线上的顺序；
   // 像入口一样在前机清空门后再释放出口门心，此前内部点保持原顺序，之后停止新增内部点。
   void tryReleaseFinalExitWaypoint(const char* reason) {
-    if (!have_final_exit_ || !leader_outside_exit_ || exit_waypoint_released_ ||
+    if (!have_final_exit_ || !leader_outside_exit_ || !release_uav1_ ||
+        exit_waypoint_released_ ||
         terminal_mode_active_)
       return;
     if (!relayWaypointSeparationReady("EXIT")) return;
@@ -430,7 +431,7 @@ class LeaderSafePathFollower {
     confirmed_exit_.yaw = yawFromQuaternion(msg->pose.orientation);
     have_final_exit_ = true;
     ROS_ERROR("[safe_follower] FINAL EXIT received center=(%.2f, %.2f, %.2f) "
-              "yaw=%.1fdeg; wait leader CROSS_EXIT completion before release.",
+              "yaw=%.1fdeg; UAV1 remains parked until UAV0 landing release.",
               confirmed_exit_.position.x, confirmed_exit_.position.y,
               confirmed_exit_.position.z, confirmed_exit_.yaw * 180.0 / M_PI);
     tryReleaseFinalExitWaypoint("final exit received after leader outside");
@@ -566,8 +567,9 @@ class LeaderSafePathFollower {
     if (!enable_search_landing_) return;
     release_uav1_ = msg->data;
     if (release_uav1_) {
-      ROS_ERROR("[safe_follower] UAV1 released to leave exit waiting point.");
+      ROS_ERROR("[safe_follower] UAV0 landing confirmed; UAV1 released from its current hold point.");
       hold_target_latched_ = false;
+      tryReleaseFinalExitWaypoint("UAV0 landing success release");
       if (pending_leader_landing_request_) {
         pending_leader_landing_request_ = false;
         queueFollowerTerminalTarget();
@@ -950,9 +952,11 @@ class LeaderSafePathFollower {
                            msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
                            msg->data.find("APPROACH_LANDING") == 0 ||
                            msg->data.find("LANDING") == 0;
-    // 前机越过出口后仍需满足实时1m双机净距才放行后机，避免两机挤在门框。
-    if (leader_outside_exit_)
-      tryReleaseFinalExitWaypoint("leader task stage is outside final exit");
+    // 搜索降落阶段由UAV0独占执行；即使已有出口点和1m间距，也必须等待UAV0成功降落。
+    if (leader_outside_exit_ && !release_uav1_) {
+      setDiffWaitPositionHold(true, "UAV0 searching/landing; UAV1 parked");
+      diff_goal_published_ = false;
+    }
   }
 
   void diffStatusCallback(const std_msgs::String::ConstPtr& msg) {
@@ -1856,6 +1860,11 @@ class LeaderSafePathFollower {
       hold("leader odometry stale");
       return;
     }
+    // CH9 后 UAV1 不提前去出口：UAV0 找齐两个平台并成功降落前始终原地悬停。
+    if (leader_outside_exit_ && !release_uav1_) {
+      hold("UAV1 parked until UAV0 finds two ArUcos and lands");
+      return;
+    }
     // 2026-07-27: 卡死恢复优先于正常连续/离散跟随，避免正常目标每50ms覆盖脱困指令。
     if (handleStuckRecovery(now)) return;
     if (!leader_started_) {
@@ -1865,14 +1874,6 @@ class LeaderSafePathFollower {
 
     // 出口阶段消息可能只到达一次；若当时不足1m，在定时器中持续按实时间距重试。
     tryReleaseFinalExitWaypoint("periodic separation recheck");
-
-    // UAV1 reaches the verified exit waypoint, then waits there until UAV0 has
-    // completed the far-platform landing and the coordinator releases it.
-    if (leader_outside_exit_ && exit_waypoint_released_ &&
-        active_relay_index_ > exit_waypoint_index_ && !release_uav1_) {
-      hold("UAV1 waiting at exit for UAV0 landing release");
-      return;
-    }
 
     // 2026-07-28: Diff执行分支在旧连续追踪/直控逻辑之前截断，确保后机只由自身规划器输出轨迹。
     if (handleDiffPlannerExecution(now)) return;

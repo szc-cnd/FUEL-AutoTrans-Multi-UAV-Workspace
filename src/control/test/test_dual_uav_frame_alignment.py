@@ -133,3 +133,24 @@ def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
         if node.attrib.get("type") == "livox_imu_to_body.py"
     )
     assert adapter.attrib["name"] == "$(arg vehicle_ns)_livox_imu_to_body"
+
+
+def test_uav1_stays_parked_until_uav0_landing_release():
+    source = FOLLOWER.read_text(encoding="utf-8")
+    release_gate = source.split("void tryReleaseFinalExitWaypoint", 1)[1].split(
+        "void finalExitPoseCallback", 1
+    )[0]
+    assert "!release_uav1_" in release_gate
+
+    timer = source.split("void timerCallback", 1)[1].split(
+        "ros::Subscriber", 1
+    )[0]
+    wait = 'if (leader_outside_exit_ && !release_uav1_)'
+    assert wait in timer
+    assert 'hold("UAV1 parked until UAV0 finds two ArUcos and lands")' in timer
+    assert timer.index(wait) < timer.index("handleStuckRecovery(now)")
+
+    release = source.split("void releaseUav1Callback", 1)[1].split(
+        "bool getRouteForwardDirection", 1
+    )[0]
+    assert 'tryReleaseFinalExitWaypoint("UAV0 landing success release")' in release
