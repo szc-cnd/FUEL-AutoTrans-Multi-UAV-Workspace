@@ -27,7 +27,14 @@ add_executable(fuel_autotrans_bridge_node
 add_dependencies(fuel_autotrans_bridge_node ${catkin_EXPORTED_TARGETS})
 target_link_libraries(fuel_autotrans_bridge_node ${catkin_LIBRARIES})
 
+add_executable(autotrans_trajectory_arbiter_node
+  src/autotrans_trajectory_arbiter_node.cpp
+)
+add_dependencies(autotrans_trajectory_arbiter_node ${catkin_EXPORTED_TARGETS})
+target_link_libraries(autotrans_trajectory_arbiter_node ${catkin_LIBRARIES})
+
 install(TARGETS reference_bridge_node fuel_autotrans_bridge_node
+  autotrans_trajectory_arbiter_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

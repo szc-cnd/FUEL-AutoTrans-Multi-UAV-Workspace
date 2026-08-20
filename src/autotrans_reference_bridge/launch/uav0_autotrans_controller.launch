@@ -6,13 +6,29 @@
        default="$(optenv UAV0_AUTOTRANS_SETPOINT_TOPIC /UAV0/mavros/setpoint_raw/attitude)"/>
   <arg name="trajectory_timeout" default="0.5"/>
 
-  <!-- 输入是 FUEL 的 B-spline，输出是 AutoTrans 实际订阅的 PolynomialTraj。 -->
+  <!-- FUEL 与搜索降落 Diff 先分别转换，再按任务阶段向 AutoTrans 唯一输出。 -->
   <node pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
         name="fuel_autotrans_bridge" output="screen">
     <param name="input_topic" value="/UAV0/planning/bspline"/>
-    <param name="output_topic" value="/UAV0/planning/autotrans_trajectory"/>
+    <param name="output_topic" value="/UAV0/fuel/autotrans_trajectory"/>
     <param name="frame_id" value="UAV0/camera_init"/>
     <param name="trajectory_timeout" value="$(arg trajectory_timeout)"/>
+  </node>
+
+  <node pkg="autotrans_reference_bridge" type="reference_bridge_node"
+        name="uav0_diff_autotrans_reference_bridge" output="screen">
+    <param name="input_topic" value="/drone_0_planning/trajectory"/>
+    <param name="output_topic" value="/UAV0/diff/autotrans_trajectory"/>
+    <param name="frame_id" value="UAV0/camera_init"/>
+    <param name="trajectory_timeout" value="0.5"/>
+  </node>
+
+  <node pkg="autotrans_reference_bridge" type="autotrans_trajectory_arbiter_node"
+        name="autotrans_trajectory_arbiter" output="screen" required="true">
+    <param name="fuel_topic" value="/UAV0/fuel/autotrans_trajectory"/>
+    <param name="diff_topic" value="/UAV0/diff/autotrans_trajectory"/>
+    <param name="output_topic" value="/UAV0/planning/autotrans_trajectory"/>
+    <param name="stage_topic" value="/UAV0/mission/task_status"/>
   </node>
 
   <!-- AutoTrans 使用 UAV0 FAST-LIO 位姿、UAV0 MAVROS 传感器和控制接口。 -->
