@@ -8,6 +8,8 @@
     <arg name="max_vel" default="0.50"/>
     <arg name="max_acc" default="1.00"/>
     <arg name="enable_rviz" default="true"/>
+    <!-- 接力入口已用标定参数发布该TF；独立调试时才允许本launch发布零偏移TF。 -->
+    <arg name="publish_world_to_follower_tf" default="true"/>
 
     <!-- 2026-07-28: flight_type=1启用运行时外部目标；占位航点不会在该模式执行。 -->
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
@@ -78,12 +80,14 @@
     </node>
 
     <!-- Diff 自带 exp.rviz 使用 world；UAV1 FAST-LIO 使用 UAV1/camera_init。 -->
-    <node pkg="tf2_ros" type="static_transform_publisher"
+    <node if="$(arg publish_world_to_follower_tf)"
+          pkg="tf2_ros" type="static_transform_publisher"
           name="relay_diff_world_to_uav1_camera_init"
           args="0 0 0 0 0 0 world UAV1/camera_init"/>
 
     <!-- 为 exp.rviz 提供 drone_1 的机体和里程计轨迹。 -->
-    <node pkg="odom_visualization" name="drone_1_odom_visualization"
+    <node if="$(arg enable_rviz)"
+          pkg="odom_visualization" name="drone_1_odom_visualization"
           type="odom_visualization" output="screen">
         <remap from="~odom" to="$(arg odom_topic)"/>
         <remap from="~cmd" to="$(arg position_cmd_topic)"/>

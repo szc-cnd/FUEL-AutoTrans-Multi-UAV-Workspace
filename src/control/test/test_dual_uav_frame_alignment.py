@@ -10,6 +10,11 @@ CONFIG = ROOT / "config" / "dual_uav_frame_alignment.yaml"
 LAUNCH = ROOT / "launch" / "leader_safe_path_follower.launch"
 FOLLOWER = ROOT / "src" / "leader_safe_path_follower.cpp"
 PUBLISHER = ROOT / "src" / "dual_uav_frame_alignment.cpp"
+RELAY_LAUNCH = (
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_uav1_relay_diff.launch"
+)
+FAST_LIO_LAUNCH = ROOT.parent / "FAST_LIO/launch/mapping_mid360.launch"
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -95,3 +100,36 @@ def test_uav1_dynamic_obstacle_detection_is_disabled_by_default():
     assert "if (enable_dynamic_obstacle_detection_)" in source
     assert "if (!enable_dynamic_obstacle_detection_) return;" in source
     assert "bool enable_dynamic_obstacle_detection_{false};" in source
+
+
+def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
+    root = ET.parse(LAUNCH).getroot()
+    args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
+    assert args["follower_odom_topic"] == "/UAV1/fast_lio/Odom_high_freq"
+
+    relay_include = next(
+        item for item in root.findall("include")
+        if "run_uav1_relay_diff.launch" in item.attrib.get("file", "")
+    )
+    include_args = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in relay_include.findall("arg")
+    }
+    assert include_args["publish_world_to_follower_tf"] == "false"
+    assert include_args["enable_rviz"] == "false"
+
+    relay_args = {
+        item.attrib["name"]: item.attrib["default"]
+        for item in ET.parse(RELAY_LAUNCH).getroot().findall("arg")
+    }
+    assert "publish_world_to_follower_tf" in relay_args
+    assert "enable_rviz" in relay_args
+
+
+def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
+    root = ET.parse(FAST_LIO_LAUNCH).getroot()
+    adapter = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "livox_imu_to_body.py"
+    )
+    assert adapter.attrib["name"] == "$(arg vehicle_ns)_livox_imu_to_body"

@@ -50,7 +50,7 @@ usage() {
 作用：
   打开一个 Terminator 六分屏窗口并依次等待、启动：
   1 MAVROS、2 MID360、3 FAST-LIO、4 高频视觉位姿回传、
-  5 Diff-Planner/RViz、6 AutoTrans 控制器/桥接/日志/自动 rosbag。
+  5 航点接力管理器/UAV1 Diff、6 AutoTrans 控制器/桥接/日志/自动 rosbag。
 
 说明：
   - 不自动解锁、不切换 OFFBOARD、不发送目标点。
@@ -256,12 +256,14 @@ run_pose_pane() {
 }
 
 run_planner_pane() {
-  pane_init 5 Diff-Planner
+  pane_init 5 双机航点接力与UAV1 Diff
   wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
   wait_for_topic_message "${CLOUD_TOPIC}" || keep_pane_open
-  printf '[启动] UAV1 Diff-Planner 和 RViz\n'
-  roslaunch diff_planner run_swarm.launch
-  printf '[退出] Diff-Planner 分屏，返回码=%s\n' "$?"
+  wait_for_topic_message /UAV0/fast_lio/Odom_high_freq || keep_pane_open
+  printf '[启动] UAV1 航点接力管理器、坐标对齐、Diff-Planner与搜索降落节点\n'
+  printf '[安全] 不执行预设航点，只接收前机满足1m间距门槛后发布的接力目标。\n'
+  roslaunch exploration_control leader_safe_path_follower.launch
+  printf '[退出] 双机航点接力分屏，返回码=%s\n' "$?"
   keep_pane_open
 }
 
@@ -272,6 +274,7 @@ run_controller_pane() {
   # 等周期心跳而不是 planning/status；后者要等目标触发并成功出轨迹才会发布。
   wait_for_topic_message "${PLANNER_HEARTBEAT_TOPIC}" || keep_pane_open
   wait_for_topic_message "${VISION_POSE_TOPIC}" || keep_pane_open
+  wait_for_topic_message /UAV1/landing/control_owner || keep_pane_open
   printf '[等待] 已收到外部视觉位姿，等待 PX4 EKF 稳定融合 %ss\n' \
     "${VISION_STABILIZE_SECONDS}"
   sleep "${VISION_STABILIZE_SECONDS}"
@@ -279,7 +282,8 @@ run_controller_pane() {
   wait_for_topic_message "${VISION_POSE_TOPIC}" || keep_pane_open
   printf '[启动] UAV1 轨迹桥接、AutoTrans、日志和自动 rosbag\n'
   printf '[说明] uav1_diff_autotrans.launch 默认不重复启动 Diff-Planner\n'
-  roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch
+  roslaunch autotrans_reference_bridge uav1_diff_autotrans.launch \
+    setpoint_topic:=/UAV1/control/attitude_setpoint
   printf '[退出] AutoTrans 分屏，返回码=%s\n' "$?"
   keep_pane_open
 }

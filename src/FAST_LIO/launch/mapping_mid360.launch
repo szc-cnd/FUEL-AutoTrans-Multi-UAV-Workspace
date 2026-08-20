@@ -32,7 +32,8 @@
   <arg name="world_frame" default="$(arg vehicle_ns)/camera_init" />
   <arg name="body_frame" default="$(arg vehicle_ns)/body" />
 
-  <node pkg="fast_lio" type="livox_imu_to_body.py" name="livox_imu_to_body"
+  <node pkg="fast_lio" type="livox_imu_to_body.py"
+        name="$(arg vehicle_ns)_livox_imu_to_body"
         output="screen" required="true">
     <param name="input_topic" value="$(arg raw_imu_topic)" />
     <param name="output_topic" value="$(arg imu_topic)" />
