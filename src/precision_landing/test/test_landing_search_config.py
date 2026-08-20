@@ -67,14 +67,14 @@ def test_competition_entries_explicitly_share_search_extrinsic():
             assert args["landing_search_config"] == expected
 
 
-def test_competition_search_landing_is_disabled_until_manually_enabled():
+def test_competition_search_landing_waits_for_uav0_rc_trigger():
     uav0_root = ET.parse(
         (PACKAGE / "../uav0_competition_bringup/launch/uav0_detection_landing_stack.launch").resolve()
     ).getroot()
     uav0_args = {
         arg.attrib["name"]: arg.attrib["default"] for arg in uav0_root.findall("arg")
     }
-    assert uav0_args["enable_search_landing"] == "$(optenv UAV0_ENABLE_SEARCH_LANDING false)"
+    assert uav0_args["enable_search_landing"] == "$(optenv UAV0_ENABLE_SEARCH_LANDING true)"
     search_group = next(
         group for group in uav0_root.findall("group")
         if group.attrib.get("if") == "$(arg enable_search_landing)"
@@ -93,7 +93,7 @@ def test_competition_search_landing_is_disabled_until_manually_enabled():
     uav1_args = {
         arg.attrib["name"]: arg.attrib["default"] for arg in uav1_root.findall("arg")
     }
-    assert uav1_args["enable_search_landing"] == "$(optenv UAV1_ENABLE_SEARCH_LANDING false)"
+    assert uav1_args["enable_search_landing"] == "$(optenv UAV1_ENABLE_SEARCH_LANDING true)"
     precision_include = next(
         item for item in uav1_root.findall("include")
         if "precision_landing.launch" in item.attrib.get("file", "")

@@ -299,6 +299,21 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            landing_column_bottom_clearance_, 0.20);
   nh.param("mission/task_search/exit/landing_column_step", landing_column_step_, 0.10);
 
+  nh.param("mission/task_search/exit/rc_trigger/enabled",
+           rc_search_landing_enabled_, false);
+  nh.param("mission/task_search/exit/rc_trigger/topic",
+           rc_search_landing_topic_, std::string("/UAV0/mavros/rc/in"));
+  nh.param("mission/task_search/exit/rc_trigger/channel_index",
+           rc_search_landing_channel_, 8);
+  nh.param("mission/task_search/exit/rc_trigger/low_pwm",
+           rc_search_landing_low_pwm_, 1300);
+  nh.param("mission/task_search/exit/rc_trigger/high_pwm",
+           rc_search_landing_high_pwm_, 1800);
+  nh.param("mission/task_search/exit/rc_trigger/hold_sec",
+           rc_search_landing_hold_sec_, 0.5);
+  rc_search_landing_channel_ = std::max(0, rc_search_landing_channel_);
+  rc_search_landing_hold_sec_ = std::max(0.1, rc_search_landing_hold_sec_);
+
   std::string color_topic, qrcode_topic, thermal_topic, final_landing_marker_topic;
   nh.param("mission/task_search/color_topic", color_topic, std::string("/mission/detection/color"));
   nh.param("mission/task_search/qrcode_topic", qrcode_topic,
@@ -319,6 +334,11 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   if (radar_exit_detection_enabled_) {
     body_cloud_sub_ = nh.subscribe(radar_exit_body_cloud_topic_, 5,
                                    &TaskSearchManager::bodyCloudCallback, this);
+  }
+  if (rc_search_landing_enabled_) {
+    rc_search_landing_sub_ = nh.subscribe(
+        rc_search_landing_topic_, 10,
+        &TaskSearchManager::rcSearchLandingCallback, this);
   }
   marker_pub_ = nh.advertise<visualization_msgs::Marker>("/mission/search_markers", 10, true);
   status_pub_ = nh.advertise<std_msgs::String>("/mission/task_status", 2, true);
@@ -355,6 +375,117 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   // 2026-07-23: 明确启动后的证据优先级，防止误以为body雷达仍可否决RViz累计地图里的清晰双墙断面。
   ROS_WARN("[exit_mission] evidence priority=LOCAL_OCCUPANCY_XY_THEN_BODY_RADAR; "
            "local map uses current_z+/-0.40m and requires bilateral wall end + >=60%% known FREE.");
+  ROS_WARN("[exit_mission] RC search-landing trigger enabled=%d topic=%s CH%d "
+           "low<=%d high>=%d hold=%.2fs; startup requires LOW before HIGH.",
+           static_cast<int>(rc_search_landing_enabled_),
+           rc_search_landing_topic_.c_str(), rc_search_landing_channel_ + 1,
+           rc_search_landing_low_pwm_, rc_search_landing_high_pwm_,
+           rc_search_landing_hold_sec_);
+}
+
+void TaskSearchManager::rcSearchLandingCallback(
+    const mavros_msgs::RCInConstPtr& msg) {
+  if (!enabled_ || !rc_search_landing_enabled_ ||
+      rc_search_landing_triggered_) {
+    return;
+  }
+  if (msg->channels.size() <=
+      static_cast<std::size_t>(rc_search_landing_channel_)) {
+    ROS_WARN_THROTTLE(2.0,
+                      "[exit_mission] RC trigger waiting for CH%d; received only %zu channels.",
+                      rc_search_landing_channel_ + 1, msg->channels.size());
+    rc_search_landing_high_since_ = ros::Time(0);
+    return;
+  }
+
+  const int pwm = static_cast<int>(msg->channels[rc_search_landing_channel_]);
+  if (pwm <= rc_search_landing_low_pwm_) {
+    if (!rc_search_landing_armed_) {
+      ROS_WARN("[exit_mission] RC CH%d LOW observed (%d us); search-landing trigger armed.",
+               rc_search_landing_channel_ + 1, pwm);
+    }
+    rc_search_landing_armed_ = true;
+    rc_search_landing_high_since_ = ros::Time(0);
+    return;
+  }
+
+  if (pwm < rc_search_landing_high_pwm_) {
+    rc_search_landing_high_since_ = ros::Time(0);
+    return;
+  }
+  if (!rc_search_landing_armed_) {
+    ROS_WARN_THROTTLE(2.0,
+                      "[exit_mission] ignore RC CH%d HIGH (%d us): move switch LOW first.",
+                      rc_search_landing_channel_ + 1, pwm);
+    return;
+  }
+
+  const ros::Time now = msg->header.stamp.isZero() ? ros::Time::now()
+                                                    : msg->header.stamp;
+  if (rc_search_landing_high_since_.isZero()) {
+    rc_search_landing_high_since_ = now;
+    return;
+  }
+  if ((now - rc_search_landing_high_since_).toSec() <
+      rc_search_landing_hold_sec_) {
+    return;
+  }
+  activateRcSearchLanding(now);
+}
+
+void TaskSearchManager::activateRcSearchLanding(const ros::Time& stamp) {
+  if (mission_stage_ != SEARCH_CORRIDOR) {
+    ROS_WARN("[exit_mission] ignore RC search-landing trigger: mission stage is already %d.",
+             static_cast<int>(mission_stage_));
+    rc_search_landing_triggered_ = true;
+    rc_search_landing_armed_ = false;
+    return;
+  }
+  if (!latest_robot_pose_valid_) {
+    ROS_ERROR_THROTTLE(1.0,
+                       "[exit_mission] reject RC search-landing trigger: robot pose unavailable.");
+    rc_search_landing_high_since_ = ros::Time(0);
+    return;
+  }
+
+  const ros::Time now = stamp.isZero() ? ros::Time::now() : stamp;
+  const Eigen::Vector2d outward(std::cos(latest_robot_yaw_),
+                               std::sin(latest_robot_yaw_));
+  mission_stage_ = SEARCH_OUTSIDE_LANDING;
+  mission_stage_start_ = now;
+  active_goal_valid_ = false;
+  search_exhausted_since_ = ros::Time(0);
+  outside_search_anchor_ = latest_robot_pos_;
+  outside_search_anchor_.z() = cruise_height_;
+
+  // 人工拨杆表示 UAV0 已经位于出口外：当前位置兼作双机接力的最终出口锚点。
+  exit_candidate_ = latest_robot_pos_;
+  exit_portal_center_ = latest_robot_pos_;
+  exit_outward_direction_ = outward;
+  exit_candidate_confirmed_ = true;
+  exit_portal_locked_ = true;
+  exit_portal_outside_verified_ = true;
+
+  geometry_msgs::PoseStamped final_exit_pose;
+  final_exit_pose.header.stamp = now;
+  final_exit_pose.header.frame_id = world_frame_;
+  final_exit_pose.pose.position.x = latest_robot_pos_.x();
+  final_exit_pose.pose.position.y = latest_robot_pos_.y();
+  final_exit_pose.pose.position.z = latest_robot_pos_.z();
+  final_exit_pose.pose.orientation.w = std::cos(0.5 * latest_robot_yaw_);
+  final_exit_pose.pose.orientation.z = std::sin(0.5 * latest_robot_yaw_);
+  final_exit_pose_pub_.publish(final_exit_pose);
+  exit_pose_pub_.publish(final_exit_pose);
+
+  rc_search_landing_triggered_ = true;
+  rc_search_landing_armed_ = false;
+  rc_search_landing_high_since_ = ros::Time(0);
+  publishSearchState();
+  ROS_ERROR("[exit_mission] RC CH%d TRIGGERED search landing at current outside pose "
+            "(%.2f, %.2f, %.2f), yaw=%.1fdeg; automatic exit detection bypassed.",
+            rc_search_landing_channel_ + 1, latest_robot_pos_.x(),
+            latest_robot_pos_.y(), latest_robot_pos_.z(),
+            latest_robot_yaw_ * 180.0 / M_PI);
 }
 
 void TaskSearchManager::setMap(const std::shared_ptr<SDFMap>& map) {

@@ -4,6 +4,7 @@
 
 #include <Eigen/Eigen>
 #include <geometry_msgs/PoseStamped.h>
+#include <mavros_msgs/RCIn.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <exploration_manager/motion_direction_rules.h>
@@ -106,6 +107,8 @@ private:
   void qrcodeDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void thermalDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void finalLandingMarkerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
+  void rcSearchLandingCallback(const mavros_msgs::RCInConstPtr& msg);
+  void activateRcSearchLanding(const ros::Time& stamp);
   // 2026-07-23: 用短时机体系 Mid360 点云检测通道双墙共同终止，出口判断不再依赖会随 z 漂移失真的绝对高度切片。
   void bodyCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg);
   void registerDetection(int type, const geometry_msgs::PoseStamped& msg);
@@ -179,6 +182,7 @@ private:
   ros::Subscriber thermal_detection_sub_;
   ros::Subscriber final_landing_marker_sub_;
   ros::Subscriber body_cloud_sub_;
+  ros::Subscriber rc_search_landing_sub_;
   ros::Publisher marker_pub_;
   ros::Publisher status_pub_;
   ros::Publisher exit_pose_pub_;
@@ -227,6 +231,17 @@ private:
   TargetRecord targets_[3];
   TargetRecord final_landing_marker_;
   MissionStage mission_stage_{SEARCH_CORRIDOR};
+
+  // CH9 仅由 UAV0 读取。必须先见低位再持续高位，避免上电时拨杆已在高位而误触发。
+  bool rc_search_landing_enabled_{false};
+  std::string rc_search_landing_topic_{"/UAV0/mavros/rc/in"};
+  int rc_search_landing_channel_{8};
+  int rc_search_landing_low_pwm_{1300};
+  int rc_search_landing_high_pwm_{1800};
+  double rc_search_landing_hold_sec_{0.5};
+  bool rc_search_landing_armed_{false};
+  bool rc_search_landing_triggered_{false};
+  ros::Time rc_search_landing_high_since_;
 
   // 2026-07-13: 出口候选需要跨多次地图更新稳定，不能由单帧噪声直接触发第三阶段。
   bool exit_candidate_confirmed_{false};

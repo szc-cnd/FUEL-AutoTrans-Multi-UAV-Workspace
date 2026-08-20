@@ -56,6 +56,7 @@
   <build_depend>visualization_msgs</build_depend>
   <!-- 2026-07-23: 短时机体系雷达出口检测读取PointCloud2。 -->
   <build_depend>sensor_msgs</build_depend>
+  <build_depend>mavros_msgs</build_depend>
   
   <!-- 2026-07-07: exploration_manager 改依赖 fuel_* 栈，避免和 Diff-Planner 的 plan_env/path_searching/traj_utils 同名冲突。 -->
   <build_depend>fuel_plan_env</build_depend>
@@ -70,6 +71,7 @@
 
   <build_export_depend>roscpp</build_export_depend>
   <build_export_depend>std_msgs</build_export_depend>
+  <build_export_depend>mavros_msgs</build_export_depend>
 
   <exec_depend>roscpp</exec_depend>
   <exec_depend>std_msgs</exec_depend>
@@ -78,6 +80,7 @@
   <exec_depend>visualization_msgs</exec_depend>
   <!-- 2026-07-23: 运行时订阅FAST-LIO机体系点云。 -->
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>mavros_msgs</exec_depend>
 
   <exec_depend>fuel_plan_env</exec_depend>
   <exec_depend>fuel_path_searching</exec_depend>

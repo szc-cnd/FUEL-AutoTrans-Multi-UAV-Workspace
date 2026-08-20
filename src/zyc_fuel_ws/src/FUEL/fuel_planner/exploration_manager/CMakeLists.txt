@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   # 2026-07-23: 任务出口检测直接读取FAST-LIO机体系PointCloud2水平射线。
   sensor_msgs
+  mavros_msgs
   # 2026-07-13: 第二阶段任务搜索发布覆盖和三类作业目标的 RViz 标记。
   visualization_msgs
   quadrotor_msgs
@@ -34,7 +35,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES exploration_manager
- CATKIN_DEPENDS fuel_plan_env fuel_path_searching bspline bspline_opt active_perception fuel_traj_utils lkh_tsp_solver plan_manage
+ CATKIN_DEPENDS roscpp std_msgs geometry_msgs sensor_msgs mavros_msgs visualization_msgs fuel_plan_env fuel_path_searching bspline bspline_opt active_perception fuel_traj_utils lkh_tsp_solver plan_manage
 #  DEPENDS system_lib
 )
 
