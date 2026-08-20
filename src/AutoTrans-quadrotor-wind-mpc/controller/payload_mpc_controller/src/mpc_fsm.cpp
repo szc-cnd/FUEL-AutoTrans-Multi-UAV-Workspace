@@ -16,7 +16,6 @@ namespace
 	constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 	constexpr double safe_output_hold_time = 0.3;
 	constexpr double kLastValidMpcHoldSeconds = 0.2;
-	constexpr double kMpcRecoveryAutoLandSeconds = 0.30;
 
 	PayloadMPC::ForceAttitudeAlignmentConfig makeForceAttitudeAlignmentConfig(
 		const PayloadMPC::MpcParams &params)
@@ -491,9 +490,7 @@ namespace PayloadMPC
 		{
 			if (!mpc_recovery_active_ && !controller_.lastMpcSolveSuccessful())
 				beginMpcRecovery(now_time);
-			if (mpc_recovery_active_)
-				publishMpcRecoveryAttitude(now_time);
-			else if (!controller_.lastMpcSolveSuccessful() &&
+			if (!controller_.lastMpcSolveSuccessful() &&
 				controller_.hasRecentValidControl(now_time, kLastValidMpcHoldSeconds))
 				publish_bodyrate_ctrl(controller_.lastValidControlInput(), now_time);
 			else
@@ -1330,43 +1327,12 @@ namespace PayloadMPC
 		}
 
 		const double elapsed = std::max((now - mpc_recovery_start_time_).toSec(), 0.0);
-		if (elapsed >= kMpcRecoveryAutoLandSeconds)
+		if (elapsed >= params_.safety_.mpc_recovery_timeout)
 		{
-			beginDirectAutoLand(now, "NMPC 恢复超时");
+			ROS_WARN_THROTTLE(5.0,
+				"[安全] NMPC 恢复超过 %.2f s，继续锁点重试，不因求解失败请求 AUTO.LAND。",
+				params_.safety_.mpc_recovery_timeout);
 		}
-	}
-
-	void MPCFSM::publishMpcRecoveryAttitude(const ros::Time &now)
-	{
-		mavros_msgs::AttitudeTarget msg;
-		msg.header.stamp = now;
-		msg.header.frame_id = "FCU";
-		msg.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ROLL_RATE |
-			mavros_msgs::AttitudeTarget::IGNORE_PITCH_RATE |
-			mavros_msgs::AttitudeTarget::IGNORE_YAW_RATE;
-		// NMPC 不可用时不能发送零角速度：零角速度会保持故障瞬间的倾斜姿态并持续横飞。
-		// 改由 PX4 姿态环把机体拉回水平，并保持进入恢复时锁存的航向。
-		msg.orientation.w = std::cos(0.5 * hover_yaw_);
-		msg.orientation.x = 0.0;
-		msg.orientation.y = 0.0;
-		msg.orientation.z = std::sin(0.5 * hover_yaw_);
-		const double hover_thrust = params_.dyn_params_.mass_q * params_.gravity_;
-		msg.thrust = params_.use_simulation_
-			? hover_thrust
-			: controller_.convertThrust(hover_thrust, bat_data.volt);
-		if (!std::isfinite(msg.thrust))
-		{
-			ROS_ERROR_THROTTLE(1.0, "[安全] NMPC 恢复姿态的悬停推力无效，立即请求 AUTO.LAND。");
-			beginDirectAutoLand(now, "NMPC 恢复推力无效");
-			return;
-		}
-		msg.thrust = std::max(0.0F, std::min(msg.thrust, 1.0F));
-		ctrl_FCU_pub.publish(msg);
-		last_safe_setpoint_ = msg;
-		have_last_safe_setpoint_ = true;
-		ROS_ERROR_THROTTLE(1.0,
-			"[安全] NMPC 恢复中：PX4 水平姿态接管，yaw=%.2f rad，thrust=%.3f。",
-			hover_yaw_, msg.thrust);
 	}
 
 	void MPCFSM::beginDirectAutoLand(const ros::Time &now, const char *reason)

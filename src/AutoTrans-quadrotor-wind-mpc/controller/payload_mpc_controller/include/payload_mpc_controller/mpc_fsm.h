@@ -229,7 +229,6 @@ namespace PayloadMPC
 		bool mpcControlStateValid(const ros::Time &now) const;
 		void beginMpcRecovery(const ros::Time &now);
 		void processMpcRecovery(const ros::Time &now);
-		void publishMpcRecoveryAttitude(const ros::Time &now);
 		void beginDirectAutoLand(const ros::Time &now, const char *reason);
 		void processDirectAutoLand(const ros::Time &now);
 		ThrustModelGateReason thrustModelGate(const ros::Time &now) const;

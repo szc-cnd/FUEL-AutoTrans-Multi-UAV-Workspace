@@ -46,8 +46,7 @@ safety:
   image_timeout_sec: 0.30
   max_header_future_sec: 0.05
   tf_timeout_sec: 0.05
-  # 与下视识别使用相同的实测图像/FAST-LIO时间容差。
-  max_image_odom_delta_sec: 0.12
+  max_image_odom_delta_sec: 0.08
 
 mission:
   require_stage_gate: true

@@ -89,7 +89,7 @@ class FrontArucoHintNode {
                         0.05);
     private_node_.param("safety/tf_timeout_sec", tf_timeout_sec_, 0.05);
     private_node_.param("safety/max_image_odom_delta_sec",
-                        max_image_odom_delta_sec_, 0.12);
+                        max_image_odom_delta_sec_, 0.08);
     private_node_.param("depth_validation/required", require_depth_, true);
     private_node_.param("depth_validation/scale_16uc1", depth_scale_16uc1_,
                         0.001);
@@ -454,7 +454,7 @@ class FrontArucoHintNode {
   double image_timeout_sec_{0.30};
   double max_header_future_sec_{0.05};
   double tf_timeout_sec_{0.05};
-  double max_image_odom_delta_sec_{0.12};
+  double max_image_odom_delta_sec_{0.08};
   double depth_scale_16uc1_{0.001};
   double max_depth_time_delta_sec_{0.10};
   double min_depth_m_{0.25};
