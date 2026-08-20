@@ -71,3 +71,27 @@ def test_relay_waypoints_require_one_meter_actual_separation():
     assert 'relayWaypointSeparationReady("DOOR")' in source
     assert 'relayWaypointSeparationReady("INTERNAL")' in source
     assert 'relayWaypointSeparationReady("EXIT")' in source
+
+
+def test_uav1_dynamic_obstacle_detection_is_disabled_by_default():
+    root = ET.parse(LAUNCH).getroot()
+    args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
+    assert args["enable_dynamic_obstacle_detection"] == (
+        "$(optenv UAV1_ENABLE_DYNAMIC_OBSTACLE_DETECTION false)"
+    )
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["enable_dynamic_obstacle_detection"] == (
+        "$(arg enable_dynamic_obstacle_detection)"
+    )
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    assert "if (enable_dynamic_obstacle_detection_)" in source
+    assert "if (!enable_dynamic_obstacle_detection_) return;" in source
+    assert "bool enable_dynamic_obstacle_detection_{false};" in source

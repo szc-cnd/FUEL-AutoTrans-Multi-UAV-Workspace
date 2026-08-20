@@ -194,6 +194,8 @@ class LeaderSafePathFollower {
     pnh_.param("dynamic_obstacle_retention", dynamic_obstacle_retention_, 0.80);
     pnh_.param("dynamic_obstacle_safety_radius", dynamic_obstacle_safety_radius_, 0.35);
     pnh_.param("dynamic_obstacle_z_margin", dynamic_obstacle_z_margin_, 0.18);
+    pnh_.param("enable_dynamic_obstacle_detection",
+               enable_dynamic_obstacle_detection_, false);
     // 2026-07-28: 比赛动态物只在通道中部往复；墙边框不进入跨帧保留，预测越出中心安全带也不参与阻挡。
     pnh_.param("dynamic_retention_route_half_width", dynamic_retention_route_half_width_, 0.70);
     // 2026-07-28: 0.5m/s指令下FAST-LIO若出现数m/s跳变，立即请求控制器用MAVROS坐标锁点，禁止错误目标继续外推。
@@ -245,8 +247,11 @@ class LeaderSafePathFollower {
                                        &LeaderSafePathFollower::followerOdomCallback, this);
     follower_cloud_sub_ = nh_.subscribe(follower_cloud_topic_, 1,
                                         &LeaderSafePathFollower::cloudCallback, this);
-    dynamic_obstacle_sub_ = nh_.subscribe(dynamic_obstacle_topic_, 5,
-                                          &LeaderSafePathFollower::dynamicObstacleCallback, this);
+    if (enable_dynamic_obstacle_detection_) {
+      dynamic_obstacle_sub_ = nh_.subscribe(
+          dynamic_obstacle_topic_, 5,
+          &LeaderSafePathFollower::dynamicObstacleCallback, this);
+    }
     leader_landing_target_sub_ = nh_.subscribe(
         leader_landing_target_topic_, 2,
         &LeaderSafePathFollower::leaderLandingTargetCallback, this);
@@ -857,6 +862,7 @@ class LeaderSafePathFollower {
   // 跟随器自行生成1秒匀速预测，使避障时域仍由控制侧决定。
   void dynamicObstacleCallback(
       const ldop::DynamicObjectArray::ConstPtr& msg) {
+    if (!enable_dynamic_obstacle_detection_) return;
     dynamic_obstacle_receive_stamp_ = ros::Time::now();
     std::vector<DynamicObstacleSample> corridor_obstacles;
     for (const auto& object : msg->objects) {
@@ -1170,7 +1176,8 @@ class LeaderSafePathFollower {
   bool dynamicSegmentBlocked(const geometry_msgs::Point& current_local,
                              const geometry_msgs::Point& target_local,
                              uint32_t* obstacle_id) const {
-    if (retained_dynamic_obstacles_.empty() ||
+    if (!enable_dynamic_obstacle_detection_ ||
+        retained_dynamic_obstacles_.empty() ||
         retained_dynamic_obstacle_stamp_.isZero() ||
         (ros::Time::now() - retained_dynamic_obstacle_stamp_).toSec() >
             dynamic_obstacle_retention_) {
@@ -2174,6 +2181,7 @@ class LeaderSafePathFollower {
   bool follower_landing_requested_{false};
   bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
   bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。
+  bool enable_dynamic_obstacle_detection_{false};
   bool diff_wait_hold_active_{false};  // 2026-07-28: 接力点之间使用MAVROS位置闭环锁点，区别于动态临时HOLD。
   bool diff_plan_response_received_{false}, diff_accepted_goal_valid_{false}; // 2026-07-28: Diff应答与实际落点。
   bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 2026-07-28: 已验证路线短子目标恢复。
