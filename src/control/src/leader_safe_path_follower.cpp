@@ -70,7 +70,7 @@ class LeaderSafePathFollower {
   LeaderSafePathFollower() : nh_(), pnh_("~") {
     // 2026-07-27: 所有双机默认话题前缀统一为 UAV0/UAV1；公共坐标偏移和安全阈值仍可由 launch 标定。
     pnh_.param<std::string>("leader_odom_topic", leader_odom_topic_,
-                            "/UAV0/fast_lio/Odometry");
+                            "/UAV0/fast_lio/Odom_high_freq");
     pnh_.param<std::string>("follower_odom_topic", follower_odom_topic_,
                             "/UAV1/fast_lio/Odometry");
     pnh_.param<std::string>("follower_cloud_topic", follower_cloud_topic_,
@@ -131,10 +131,13 @@ class LeaderSafePathFollower {
     }
     follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
     follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
-    // 2026-07-24: 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留0.70m路径间距。
-    pnh_.param("follow_distance", follow_distance_, 0.70);
-    pnh_.param("release_path_length", release_path_length_, 0.70);
+    // 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留1.00m路径间距。
+    pnh_.param("follow_distance", follow_distance_, 1.00);
+    pnh_.param("release_path_length", release_path_length_, 1.00);
     pnh_.param("min_separation", min_separation_, 0.50);
+    // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证1m净距。
+    pnh_.param("waypoint_release_min_separation",
+               waypoint_release_min_separation_, 1.00);
     pnh_.param("fixed_follow_height", fixed_follow_height_, 0.65);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
@@ -208,9 +211,9 @@ class LeaderSafePathFollower {
     pnh_.param("blocked_recovery_timeout", blocked_recovery_timeout_, 1.00);
     pnh_.param("waypoint_unreachable_timeout", waypoint_unreachable_timeout_, 6.00);
     // 2026-07-16: 后机采用门点+滚动内部点+真实终点的任务接力；0表示内部点数量不限。
-    pnh_.param("relay_release_distance", relay_release_distance_, 0.70);
-    // 2026-07-24: 门点和内部点都等前机清空0.70m再放行，避免两机在门口压缩间距。
-    pnh_.param("door_release_inside_distance", door_release_inside_distance_, 0.70);
+    pnh_.param("relay_release_distance", relay_release_distance_, 1.00);
+    // 门点和内部点都等前机沿路线清空1.00m，再叠加实时双机1m净距门槛。
+    pnh_.param("door_release_inside_distance", door_release_inside_distance_, 1.00);
     pnh_.param("relay_waypoint_spacing", relay_waypoint_spacing_, 2.50);
     pnh_.param("relay_arrive_radius", relay_arrive_radius_, 0.25);
     pnh_.param("relay_arrive_z_tolerance", relay_arrive_z_tolerance_, 0.20);
@@ -294,10 +297,12 @@ class LeaderSafePathFollower {
     ROS_INFO("[safe_follower] relay ready: executor=%s continuous_before_exit=%d follow=%.2fm, "
              "door + rolling internal + terminal, "
              "internal_limit=%d (0=unlimited), "
-             "release=%.2fm spacing=%.2fm alignment=(%.2f,%.2f,%.2f, yaw=%.3f)",
+             "release=%.2fm actual_separation_gate=%.2fm spacing=%.2fm "
+             "alignment=(%.2f,%.2f,%.2f, yaw=%.3f)",
              use_diff_planner_ ? "UAV1_DIFF" : "LEGACY_POSITION_COMMAND",
              static_cast<int>(continuous_follow_before_exit_), follow_distance_,
-             max_internal_relay_points_, relay_release_distance_, relay_waypoint_spacing_,
+             max_internal_relay_points_, relay_release_distance_,
+             waypoint_release_min_separation_, relay_waypoint_spacing_,
              follower_alignment_x_, follower_alignment_y_, follower_alignment_z_,
              follower_alignment_yaw_);
   }
@@ -343,6 +348,30 @@ class LeaderSafePathFollower {
                       std::cos(world_yaw - follower_alignment_yaw_));
   }
 
+  bool relayWaypointSeparationReady(const char* label) const {
+    if (!have_leader_odom_ || !have_follower_odom_) {
+      ROS_WARN_THROTTLE(1.0,
+                        "[safe_follower] HOLD %s waypoint release: dual odometry unavailable.",
+                        label);
+      return false;
+    }
+    const geometry_msgs::Point leader_world =
+        leaderToWorld(leader_odom_.pose.pose.position);
+    const geometry_msgs::Point follower_world =
+        followerToWorld(follower_odom_.pose.pose.position);
+    const double separation = std::hypot(leader_world.x - follower_world.x,
+                                         leader_world.y - follower_world.y);
+    if (separation + 1e-6 < waypoint_release_min_separation_) {
+      ROS_WARN_THROTTLE(
+          0.5,
+          "[safe_follower] HOLD %s waypoint release: actual UAV0-UAV1 XY separation "
+          "%.2fm < %.2fm.",
+          label, separation, waypoint_release_min_separation_);
+      return false;
+    }
+    return true;
+  }
+
   // 2026-07-24: 前机里程计z不再通过接力路线传给后机；普通任务点只复用XY，
   // 后机在自身局部坐标系使用固定巡航高度，终点下降仍由专用terminal高度控制。
   geometry_msgs::Point useFollowerCruiseHeight(const geometry_msgs::Point& local) const {
@@ -378,6 +407,7 @@ class LeaderSafePathFollower {
     if (!have_final_exit_ || !leader_outside_exit_ || exit_waypoint_released_ ||
         terminal_mode_active_)
       return;
+    if (!relayWaypointSeparationReady("EXIT")) return;
     pending_relay_valid_ = false;
     confirmed_exit_.progress = nearestRouteProgress(confirmed_exit_.position);
     exit_waypoint_index_ = relay_waypoints_.size();
@@ -728,7 +758,7 @@ class LeaderSafePathFollower {
 
     if (!door_waypoint_released_) {
       if (inside_progress < door_release_inside_distance_) return;
-      // 2026-07-16: 门不再套用内部点的1m释放条件，前机越过门平面后立即启动后机入场。
+      if (!relayWaypointSeparationReady("DOOR")) return;
       confirmed_door_.progress = std::max(0.0, point.progress - inside_progress);
       appendRelayWaypoint(confirmed_door_, "DOOR");
       door_waypoint_released_ = true;
@@ -756,6 +786,7 @@ class LeaderSafePathFollower {
     }
     if (pending_relay_valid_ &&
         point.progress - pending_relay_.progress >= relay_release_distance_) {
+      if (!relayWaypointSeparationReady("INTERNAL")) return;
       appendRelayWaypoint(pending_relay_, "INTERNAL");
       last_relay_selection_progress_ = pending_relay_.progress;
       pending_relay_valid_ = false;
@@ -908,12 +939,12 @@ class LeaderSafePathFollower {
       leader_outside_exit_ = false;
       return;
     }
-    // task_status首字段为阶段名。前机真正越过出口后停止0.5m动态跟距，恢复离散任务点/终点执行。
+    // task_status首字段为阶段名。前机真正越过出口后停止动态跟距，恢复离散任务点/终点执行。
     leader_outside_exit_ = msg->data.find("SEARCH_OUTSIDE_LANDING") == 0 ||
                            msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
                            msg->data.find("APPROACH_LANDING") == 0 ||
                            msg->data.find("LANDING") == 0;
-    // 2026-07-28: 前机越过出口确认距离后才像入口清空0.70m一样放行后机，避免两机挤在门框。
+    // 前机越过出口后仍需满足实时1m双机净距才放行后机，避免两机挤在门框。
     if (leader_outside_exit_)
       tryReleaseFinalExitWaypoint("leader task stage is outside final exit");
   }
@@ -1825,6 +1856,9 @@ class LeaderSafePathFollower {
       return;
     }
 
+    // 出口阶段消息可能只到达一次；若当时不足1m，在定时器中持续按实时间距重试。
+    tryReleaseFinalExitWaypoint("periodic separation recheck");
+
     // UAV1 reaches the verified exit waypoint, then waits there until UAV0 has
     // completed the far-platform landing and the coordinator releases it.
     if (leader_outside_exit_ && exit_waypoint_released_ &&
@@ -1838,7 +1872,7 @@ class LeaderSafePathFollower {
 
     if (handleContinuousFollowBeforeExit(now)) return;
 
-    // 2026-07-24: 出口前由0.70m连续滞后模式执行；出口外及终点阶段恢复离散任务点顺序控制。
+    // 出口前由1.00m连续滞后模式执行；出口外及终点阶段恢复离散任务点顺序控制。
     if (active_relay_index_ >= relay_waypoints_.size()) {
       hold(have_confirmed_door_ ? "waiting for leader to release next relay waypoint"
                                 : "waiting for confirmed door");
@@ -2164,8 +2198,9 @@ class LeaderSafePathFollower {
   double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
   double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.5}, follower_start_height_{0.5};
-  // 2026-07-24: 默认0.70m路径间隔、0.50m硬间隔；普通路线高度由后机独立固定为0.65m。
-  double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.50};
+  // 默认1.00m路径间隔、1.00m航点发布门槛、0.50m紧急硬间隔。
+  double follow_distance_{1.00}, release_path_length_{1.00}, min_separation_{0.50};
+  double waypoint_release_min_separation_{1.00};
   double fixed_follow_height_{0.65}, follow_height_min_{0.60}, follow_height_max_{0.70};
   double continuous_follow_speed_{0.42};
   double separation_recovery_distance_{1.15}, separation_release_distance_{1.35};
@@ -2200,7 +2235,7 @@ class LeaderSafePathFollower {
   double blocked_recovery_timeout_{1.00}, waypoint_unreachable_timeout_{6.00};
   double last_command_dx_{0.0}, last_command_dy_{0.0}, recovery_yaw_{0.0};
   int obstacle_min_points_{3};
-  double relay_release_distance_{0.70}, door_release_inside_distance_{0.70};
+  double relay_release_distance_{1.00}, door_release_inside_distance_{1.00};
   double relay_waypoint_spacing_{2.50};
   double relay_arrive_radius_{0.25}, relay_arrive_z_tolerance_{0.20};
   // 终点仍使用较大停驻净空；普通接力点只查落点小体素并允许安全附件到达。

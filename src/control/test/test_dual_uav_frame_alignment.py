@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import yaml
 
@@ -41,3 +42,32 @@ def test_waypoint_conversion_uses_rigid_transform_and_inverse():
     publisher = PUBLISHER.read_text(encoding="utf-8")
     assert 'prefix + "/follower/x"' in publisher
     assert "StaticTransformBroadcaster" in publisher
+
+
+def test_relay_waypoints_require_one_meter_actual_separation():
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["follow_distance"] == "1.00"
+    assert params["release_path_length"] == "1.00"
+    assert params["waypoint_release_min_separation"] == "1.00"
+    assert params["door_release_inside_distance"] == "1.00"
+    assert params["relay_release_distance"] == "1.00"
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    gate = source.split("bool relayWaypointSeparationReady", 1)[1].split(
+        "geometry_msgs::Point useFollowerCruiseHeight", 1
+    )[0]
+    assert "have_leader_odom_" in gate
+    assert "have_follower_odom_" in gate
+    assert "followerToWorld" in gate
+    assert "waypoint_release_min_separation_" in gate
+    assert 'relayWaypointSeparationReady("DOOR")' in source
+    assert 'relayWaypointSeparationReady("INTERNAL")' in source
+    assert 'relayWaypointSeparationReady("EXIT")' in source

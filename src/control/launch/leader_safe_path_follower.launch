@@ -21,7 +21,7 @@
     </include>
     <!-- 2026-07-16: 后机不运行第二套FUEL；执行门点、持续滚动内部接力点和真实终点。 -->
     <!-- 2026-07-27: 后机接力链路的全部双机话题前缀统一为 UAV0/UAV1。 -->
-    <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odometry"/>
+    <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odometry"/>
     <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
     <arg name="frame_alignment_config"
@@ -66,7 +66,7 @@
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
         <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
-        <!-- 2026-07-24: 出口前沿前机实飞XY折线保持0.70m滞后；后机高度独立固定0.65m。 -->
+        <!-- 出口前沿前机实飞XY折线保持1.00m滞后；后机高度独立固定0.65m。 -->
         <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
         <param name="continuous_follow_before_exit" value="false"/>
         <!-- 2026-07-27: 后机通道连续跟随速度上限与前机 FUEL 的 0.5m/s 对齐，避免长期速度差持续放大跟随滞后。 -->
@@ -75,9 +75,11 @@
         <param name="leader_task_status_topic" value="/UAV0/mission/task_status"/>
         <!-- 后机在入门目标释放后独立开启LDOP。 -->
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
-        <param name="follow_distance" value="0.70"/>
-        <param name="release_path_length" value="0.70"/>
+        <param name="follow_distance" value="1.00"/>
+        <param name="release_path_length" value="1.00"/>
         <param name="min_separation" value="0.50"/>
+        <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到1m后，才向UAV1释放普通航点。 -->
+        <param name="waypoint_release_min_separation" value="1.00"/>
         <!-- 2026-07-24: 不接收前机z；默认0.65m，只有自身点云线段受阻才在0.60至0.70m内调整。 -->
         <param name="fixed_follow_height" value="0.65"/>
         <param name="follow_height_min" value="0.60"/>
@@ -106,10 +108,9 @@
         <param name="route_resume_radius" value="0.45"/>
         <!-- 2026-07-21: U形转弯负投影轨迹离开旧路线0.5m后确认为新分支，恢复接力且保留完整弯曲路径。 -->
         <param name="turn_branch_confirm_distance" value="0.50"/>
-        <!-- 2026-07-24: 门点及内部接力点都等前机清空0.70m再释放，防止门口追尾。 -->
-        <param name="door_release_inside_distance" value="0.70"/>
-        <!-- 2026-07-24: 连续跟随和出口前接力发布统一使用0.70m安全间距。 -->
-        <param name="relay_release_distance" value="0.70"/>
+        <!-- 门点及内部接力点都等前机沿路线清空1m，并通过上方实时双机距离检查。 -->
+        <param name="door_release_inside_distance" value="1.00"/>
+        <param name="relay_release_distance" value="1.00"/>
         <param name="relay_waypoint_spacing" value="2.50"/>
         <param name="relay_arrive_radius" value="0.25"/>
         <param name="relay_arrive_z_tolerance" value="0.20"/>
