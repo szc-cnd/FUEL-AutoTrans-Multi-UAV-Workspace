@@ -6,15 +6,15 @@
     <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
     <arg name="drone_id" default="1"/>
     <arg name="enable_rviz" default="true"/>
-    <arg name="enable_ldop" default="true"/>
+    <arg name="enable_ldop" default="false"/>
     <arg name="flight_type" default="2"/>
     <arg name="point_num" default="5"/>
     <arg name="max_tracking_error" default="0.20"/>
     <arg name="enable_occupied_recovery" default="true"/>
-    <arg name="enable_swing_obstacle_guard" default="true"/>
+    <arg name="enable_swing_obstacle_guard" default="false"/>
     <arg name="enable_swing_harmonic_prediction" default="true"/>
     <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
-    <arg name="record_dynamic_debug" default="true"/>
+    <arg name="record_dynamic_debug" default="false"/>
     <arg name="dynamic_bag_prefix" default="/home/oem/bags/corridor_debug"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
