@@ -87,6 +87,13 @@ class BatteryLoggingTest(unittest.TestCase):
         logger = self.make_logger()
         self.assertEqual(logger.extract_battery_values(), ["", ""])
 
+    def test_rosbag_topics_are_trimmed_and_deduplicated_in_order(self):
+        self.assertEqual(
+            self.module.normalize_rosbag_topics(
+                [" /odom ", "/imu", "/odom", "", "/state"]),
+            ["/odom", "/imu", "/state"],
+        )
+
 
 class ForceAttitudeAlignmentLoggingTest(unittest.TestCase):
     @classmethod

@@ -161,8 +161,15 @@ public:
   int exec_traj = 0; // use for aborting the trajectory, 0 means no trajectory is executing
                      // -1 means the trajectory is aborting, 1 means the trajectory is executing
   std::deque<oneTraj_Data_t> traj_queue;
+  std::uint32_t last_trajectory_id{0};
+  ros::Time last_trajectory_stamp{0};
+  bool have_last_trajectory_id{false};
+  bool trajectory_acceptance_enabled{true};
+  ros::Time accept_trajectory_after{0};
 
   Trajectory_Data_t();
+  void blockTrajectoryAcceptance();
+  void allowTrajectoryAcceptanceAfter(const ros::Time &stamp);
   void adjust_end_time()
   {
     if (traj_queue.size() < 2)

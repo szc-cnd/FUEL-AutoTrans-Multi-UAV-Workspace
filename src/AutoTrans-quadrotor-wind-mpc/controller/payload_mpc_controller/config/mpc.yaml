@@ -5,7 +5,7 @@ use_fix_yaw: false   # using fix yaw.
 
 # Cost on states
 # 当前先保留源码权重；首次室内悬停若响应过激，后续优先降低 Q_pos/Q_attitude 或增大 R。
-Q_pos_xy:   250.0    # Cost for horizontal positon error //default: 200     0.5
+Q_pos_xy:   220.0    # Cost for horizontal positon error //default: 200     0.5
 Q_pos_z:  250.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # Cost on Inputs
 R_thrust:    0.75  # Cost on thrust input            //default: 1
-R_pitchroll:  2     # Cost on pitch and roll rate
+R_pitchroll:  6    # Cost on pitch and roll rate
 R_yaw:        0.75      # Cost on yaw ratte
 
 # Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
@@ -30,15 +30,15 @@ input_cost_exponential: 0.5     # scaling for input costs
 
 # Limits for inputs
 # body_rate.x/y 是发给 MAVROS/PX4 的机体系角速度命令，单位 rad/s；源码值先保留，首飞前建议按内环能力复查。
-max_bodyrate_xy:    3.0       # ~ pi [rad/s]
+max_bodyrate_xy:    1.5       # ~ pi [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
-max_bodyrate_z:     1.2         # ~ pi*2/3 [rad/s]
+max_bodyrate_z:     0.5         # ~ pi*2/3 [rad/s]
 # NMPC 世界系速度硬约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
 # 该约束直接进入 ACADO 优化器，超过上限的预测速度不会被求解器接受。
-max_velocity_xy:    0.3
-max_velocity_z:     0.3
+max_velocity_xy:    0.5
+max_velocity_z:     0.5
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
-# 对 1.782 kg、g=9.795、hover_percentage=0.47，29.5 N 标称约对应 normalized thrust 0.795。
+# 对实际起飞质量 1.817 kg、g=9.795、hover_percentage=0.54，29.5 N 标称约对应 normalized thrust 0.895。
 min_thrust:         1.0
 max_thrust:         29.5
 
@@ -62,15 +62,10 @@ enable_rc_hover_adjust: false
 # x/y/z 是 /mavros/local_position/odom 对应的 ENU 世界坐标，单位 m；yaw 仍取切入时当前航向。
 # 关闭后恢复为“切换瞬间当前位置悬停”。固定模式下会忽略 enable_rc_hover_adjust。
 fixed_hover:
-    enabled: true
+    enabled: false
     x: 0.0
     y: 0.0
-    z: 0.5
-
-# FUEL 入口 PositionCommand 的渐进参考限制；不改变完整 PolynomialTraj 的规划约束。
-entry_command:
-    max_velocity: 0.20       # 世界系平移参考最大速度，单位 m/s。
-    max_acceleration: 0.30   # 世界系平移参考最大加速度，单位 m/s^2。
+    z: 0.6
 
 max_angle: 30  # Attitude angle limit in degree. A negative value means no limit.
 # 源码值 -0.1 等价于基本关闭低电压保护；实飞前应按你的电池节数和最低安全电压设置。
@@ -100,8 +95,8 @@ filter:
     cutoff_freq_dcable: 20.0
 
 force_estimator: # *
-    # kf 将当前 CAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.865 kg 实机稳定悬停日志标定。
-    kf: 1.735e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    # kf 将当前 CAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.817 kg 实机稳定悬停日志标定。
+    kf: 1.790e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
@@ -112,7 +107,7 @@ force_estimator: # *
     imu_body_length: 0.66844507
     # 只估计模式：计算并记录世界系外力 f_Q（单位 N），但不把它传入 NMPC。
     enable_force_estimation: true
-    enable_disturbance_compensation: false
+    enable_disturbance_compensation: true
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
@@ -128,10 +123,14 @@ force_estimator: # *
     attitude_alignment_max_tilt_error_deg: 5.0 # 两路姿态相对 roll/pitch 最大误差，单位 deg
     attitude_alignment_max_yaw_std_deg: 2.0   # 偏航差圆周标准差上限，单位 deg
     # 外力估计结果的世界系三维模长上限，单位 N；用于保留并记录较大的风扰峰值。
-    max_force: 4.0
+    max_force: 5.0
     # 实际写入 NMPC OnlineData 的世界系三维补偿力模长上限，单位 N。
     # 当前按实机试验选择设为 4 N；它与估计限幅独立，后续可单独降低。
-    max_applied_force: 4.0
+    max_applied_force: 5.0
+    # 写入 NMPC 前的世界系分轴补偿增益；默认 1.0 保持 CAV0 当前行为。
+    force_axis_gain_x: 1.0
+    force_axis_gain_y: 1.0
+    force_axis_gain_z: 1.0
     # 外力观察器每 10 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
     # max_queue/force_observer_freq 决定滑动窗口时长：20/100 = 0.2 s。
     max_queue: 20
@@ -177,6 +176,14 @@ land:
     # AUTO_LAND 持续超过该时间后也会请求 PX4 AUTO.LAND，单位 s；小于等于 0 表示不启用超时。
     timeout: 8.0
 
+safety:
+    # NMPC 失败后锁存当前位置并后台恢复的告警阈值，单位 s；超时不自动降落。
+    mpc_recovery_timeout: 1.0
+    # 连续获得该次数的有限有效解后，才允许规划器从最新高频里程计重新规划。
+    mpc_recovery_success_cycles: 1
+    # 请求 PX4 AUTO.LAND 的最小重试周期，避免在控制频率下反复调用服务。
+    auto_land_retry_period: 1.0
+
 thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 thrust。
     # 初次模式 1 实机验证时以 1 Hz 打印在线 thrustscale、悬停比例和 RPM 推力。
     print_value: true
@@ -185,8 +192,8 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     # 1 means use the scale factor to map thrust to commmand with online calibration(use the rotor speed to calibrate the scale factor)
     # 原工程模式 2 依赖负载/电缆动力学；普通四旋翼版本已禁止该模式，配置为 2 时节点拒绝启动。
     # approximate thrust mapping parameters
-    # CAV0 在 1.865 kg 起飞质量下的实测归一化悬停推力；模式 0 固定使用，模式 1 作为在线学习初值。
-    hover_percentage: 0.53
+    # CAV0 在实际起飞质量 1.817 kg 下的实测归一化悬停推力；模式 0 固定使用，模式 1 作为在线学习初值。
+    hover_percentage: 0.54
     # RLS 新估计对 thrustscale 的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
     filter_factor: 0.2
     # 模式 1 学习门限，单位 rpm；只影响在线推力映射，不改变外力估计器的 1000 rpm 门限。
@@ -200,7 +207,7 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
 msg_timeout:
     odom: 0.5
     # 外力估计专用 PX4 EKF 融合 odom 超时阈值，单位 s；超时后清空估计窗口和补偿量。
-    force_attitude_odom: 0.5
+    force_attitude_odom: 0.1
     rc:   0.5
     cmd:  0.5
     imu:  0.5

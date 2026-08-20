@@ -6,6 +6,9 @@ import json
 import math
 import os
 import re
+import signal
+import subprocess
+import sys
 import threading
 import time
 
@@ -17,6 +20,11 @@ from quadrotor_msgs.msg import PolynomialTraj, PositionCommand
 from rosgraph_msgs.msg import Log
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, Float64
+try:
+    from std_msgs.msg import Empty
+except ImportError:  # 兼容不包含 Empty 的轻量单元测试消息桩。
+    class Empty:
+        pass
 import rostopic
 
 
@@ -106,6 +114,21 @@ def validate_explicit_run_name(run_name):
             "run_name must not contain '/', '\\', ':', or '..': %s" % run_name)
 
 
+def normalize_rosbag_topics(topics):
+    """清理并去重 rosbag 话题，同时保持 launch 中配置的顺序。"""
+    if not isinstance(topics, (list, tuple)):
+        return []
+    normalized = []
+    seen = set()
+    for topic in topics:
+        topic = str(topic).strip()
+        if not topic or topic in seen:
+            continue
+        normalized.append(topic)
+        seen.add(topic)
+    return normalized
+
+
 class AutoTransMpcLogger:
     @staticmethod
     def compose_csv_row(*sections):
@@ -156,6 +179,7 @@ class AutoTransMpcLogger:
         self.log_all_rosout = bool(rospy.get_param("~log_all_rosout", False))
         self.log_rate = float(rospy.get_param("~log_rate", 100.0))
         self.setpoint_timeout = float(rospy.get_param("~setpoint_timeout", 0.2))
+        self.enable_evo_report = bool(rospy.get_param("~enable_evo_report", True))
 
         self.latest_setpoint = None
         self.latest_setpoint_received = rospy.Time(0)
@@ -187,6 +211,11 @@ class AutoTransMpcLogger:
         self.raw_trajectory_subscriber = None
         self.position_cmd_subscriber = None
         self.raw_trajectory_retry_timer = None
+        self.rosbag_process = None
+        self.rosbag_console_file = None
+        self.enable_rosbag = bool(rospy.get_param("~enable_rosbag", True))
+        self.rosbag_topics = normalize_rosbag_topics(
+            rospy.get_param("~rosbag_topics", []))
 
         if not os.path.exists(self.run_dir):
             os.makedirs(self.run_dir)
@@ -274,17 +303,27 @@ class AutoTransMpcLogger:
             "~raw_trajectory_topic", "/drone_1_planning/trajectory")
         position_cmd_topic = rospy.get_param(
             "~position_cmd_topic", "/UAV0/planning/pos_cmd")
+        planning_stop_topic = rospy.get_param(
+            "~planning_stop_topic", "/UAV0/planning_stop_trigger")
+        planning_restart_topic = rospy.get_param(
+            "~planning_restart_topic", "/UAV0/planning_restart_trigger")
         self.write_text("trajectory_topic: %s" % trajectory_topic)
         self.write_text("trajectory_type: quadrotor_msgs/PolynomialTraj")
         self.write_text("raw_trajectory_topic_config: %s" % raw_trajectory_topic)
         self.write_text("raw_trajectory_type_expected: traj_utils/PolyTraj")
         self.write_text("position_cmd_topic: %s" % position_cmd_topic)
+        self.write_text("planning_stop_topic: %s" % planning_stop_topic)
+        self.write_text("planning_restart_topic: %s" % planning_restart_topic)
 
         rospy.Subscriber(setpoint_topic, AttitudeTarget, self.setpoint_cb, queue_size=100)
         rospy.Subscriber(odom_topic, Odometry, self.odom_cb, queue_size=20)
         rospy.Subscriber(goal_topic, PoseStamped, self.goal_cb, queue_size=20)
         self.position_cmd_subscriber = rospy.Subscriber(
             position_cmd_topic, PositionCommand, self.position_cmd_cb, queue_size=100)
+        rospy.Subscriber(
+            planning_stop_topic, Empty, self.planning_stop_cb, queue_size=20)
+        rospy.Subscriber(
+            planning_restart_topic, Empty, self.planning_restart_cb, queue_size=20)
         rospy.Subscriber(reference_topic, Path, self.reference_cb, queue_size=20)
         rospy.Subscriber(state_topic, State, self.state_cb, queue_size=20)
         rospy.Subscriber(extended_state_topic, ExtendedState, self.extended_state_cb, queue_size=20)
@@ -306,8 +345,77 @@ class AutoTransMpcLogger:
         rospy.Subscriber("/rosout", Log, self.rosout_cb, queue_size=200)
         self.log_timer = rospy.Timer(rospy.Duration(1.0 / self.log_rate), self.log_timer_cb)
 
+        self.start_rosbag_recording()
+
         rospy.loginfo("[autotrans_mpc_logger] CSV: %s", self.csv_path)
         rospy.loginfo("[autotrans_mpc_logger] LOG: %s", self.text_log_path)
+
+    def start_rosbag_recording(self):
+        """在本次 CSV 日志目录中启动同名 rosbag。"""
+        if not self.enable_rosbag:
+            self.write_text("rosbag_enabled: false")
+            rospy.loginfo("[autotrans_mpc_logger] 自动 rosbag 已关闭")
+            return
+        if not self.rosbag_topics:
+            self.write_text("rosbag_enabled: true")
+            self.write_text("rosbag_status: not_started_no_topics")
+            rospy.logwarn("[autotrans_mpc_logger] rosbag 已启用，但话题列表为空")
+            return
+
+        bag_path = os.path.join(self.run_dir, "%s.bag" % self.run_name)
+        console_path = os.path.join(
+            self.run_dir, "%s_rosbag.log" % self.run_name)
+        command = ["rosbag", "record", "--lz4", "-O", bag_path]
+        command.extend(self.rosbag_topics)
+        try:
+            self.rosbag_console_file = open(console_path, "a")
+            self.rosbag_process = subprocess.Popen(
+                command,
+                stdout=self.rosbag_console_file,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid,
+            )
+        except (OSError, ValueError) as exc:
+            if self.rosbag_console_file is not None:
+                self.rosbag_console_file.close()
+                self.rosbag_console_file = None
+            self.rosbag_process = None
+            self.write_text("rosbag_enabled: true")
+            self.write_text("rosbag_status: start_failed: %s" % exc)
+            rospy.logerr("[autotrans_mpc_logger] rosbag 启动失败：%s", exc)
+            return
+
+        self.write_text("rosbag_enabled: true")
+        self.write_text("rosbag_file: %s" % bag_path)
+        self.write_text("rosbag_console_file: %s" % console_path)
+        self.write_text("rosbag_topics: %s" % ", ".join(self.rosbag_topics))
+        rospy.loginfo("[autotrans_mpc_logger] BAG: %s", bag_path)
+
+    def stop_rosbag_recording(self):
+        """让 rosbag 正常写入索引并退出，尽量不留下 .bag.active。"""
+        process = self.rosbag_process
+        self.rosbag_process = None
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                rospy.logwarn("[autotrans_mpc_logger] rosbag 未及时退出，发送 SIGTERM")
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    process.wait(timeout=2.0)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except OSError:
+                        pass
+            except OSError as exc:
+                rospy.logwarn("[autotrans_mpc_logger] rosbag 无法正常停止：%s", exc)
+
+        if self.rosbag_console_file is not None:
+            self.rosbag_console_file.flush()
+            self.rosbag_console_file.close()
+            self.rosbag_console_file = None
 
     def odom_cb(self, msg):
         self.latest_odom = msg
@@ -346,6 +454,12 @@ class AutoTransMpcLogger:
             if self.position_cmd_rows_since_flush >= self.flush_every:
                 self.position_cmd_file.flush()
                 self.position_cmd_rows_since_flush = 0
+
+    def planning_stop_cb(self, _msg):
+        self.write_text("%.6f [EVENT] planning_stop" % rospy.Time.now().to_sec())
+
+    def planning_restart_cb(self, _msg):
+        self.write_text("%.6f [EVENT] planning_restart" % rospy.Time.now().to_sec())
 
     def reference_cb(self, msg):
         self.latest_reference = msg
@@ -710,6 +824,8 @@ class AutoTransMpcLogger:
     def close(self):
         if self.closed:
             return
+        # 先让 rosbag 收到 SIGINT，完成索引并移除 .bag.active 后缀。
+        self.stop_rosbag_recording()
         if self.raw_trajectory_retry_timer is not None:
             self.raw_trajectory_retry_timer.shutdown()
             self.raw_trajectory_retry_timer = None
@@ -743,6 +859,17 @@ class AutoTransMpcLogger:
         self.csv_file.close()
         self.text_file.flush()
         self.text_file.close()
+        if self.enable_evo_report:
+            report_script = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "generate_evo_report.py")
+            try:
+                subprocess.run(
+                    [sys.executable, report_script, "--run-dir", self.run_dir],
+                    check=False,
+                    timeout=180.0,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                rospy.logwarn("[autotrans_mpc_logger] Evo 报告生成失败：%s", exc)
 
 
 if __name__ == "__main__":

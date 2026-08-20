@@ -60,6 +60,7 @@ namespace PayloadMPC
                   "MpcController: Wrong model size. Number of inputs does not match.");
 
     MpcController(MpcParams &params);
+    ~MpcController();
 
     void execMPC(const Eigen::Matrix<real_t, kStateSize, kSamples + 1> &reference_state,
                  const Eigen::Matrix<real_t, kInputSize, kSamples + 1> &reference_input,
@@ -85,6 +86,16 @@ namespace PayloadMPC
       {mpc_wrapper_.setDynamicParams(mass_q);}
     void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
       {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
+    bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
+    bool hasRecentValidControl(const ros::Time &now, double max_age) const;
+    const Eigen::Matrix<real_t, kInputSize, 1> &lastValidControlInput() const
+      { return last_valid_control_input_; }
+    void clearLastValidControl();
+    bool resetForHover(
+      const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
+      const Eigen::Ref<const Eigen::Vector3d> hover_position,
+      double hover_yaw);
+    void waitForPreparation();
     // Thrust to control
     std::queue<std::pair<ros::Time, double>> timed_thrust;
     double thr_scale_compensate;
@@ -109,12 +120,15 @@ namespace PayloadMPC
     const MpcParams &param) const;
 
   private:
-    double last_yaw_;
-    double last_yaw_dot_;
+    double last_yaw_{0.0};
+    double last_yaw_dot_{0.0};
+    // 动态偏航只初始化一次；重规划时沿用当前偏航，避免参考突跳。
+    bool yaw_reference_initialized_{false};
     // Internal helper functions.
 
     // void offCallback(const std_msgs::Empty::ConstPtr& msg);
-    void calculate_yaw(Eigen::Vector3d &vel, const double dt, double &yaw, double &yawdot);
+    void calculate_yaw(const Eigen::Vector3d &vel, const double dt,
+                       double &yaw_state, double &yawdot_state);
     double inline rotor2thrust(const double& sqrt_kf, const Eigen::Vector4d& rpm);
     double inline acc2thrust(const double& Ml, const double& Mq,const double& l_length, const double& g, const double& acc_z,
                               const Eigen::Quaterniond& quad, const Eigen::Vector3d& cable, const Eigen::Vector3d& dcable);
@@ -144,6 +158,10 @@ namespace PayloadMPC
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
+    bool mpc_failure_active_{false};
+    Eigen::Matrix<real_t, kInputSize, 1> last_valid_control_input_{
+        Eigen::Matrix<real_t, kInputSize, 1>::Zero()};
+    ros::Time last_valid_control_time_{0};
     
   public:
     Eigen::Matrix<real_t, kStateSize, kSamples + 1> reference_states_;

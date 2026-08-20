@@ -2,7 +2,7 @@ topics:
   image: /camera/color/image_raw
   camera_info: /camera/color/camera_info
   aligned_depth: /camera/aligned_depth_to_color/image_raw
-  odometry: /UAV0/fast_lio/Odometry
+  odometry: /UAV0/fast_lio/Odom_high_freq
   mission_status: /UAV0/mission/task_status
   hint_world: /UAV0/landing/front_aruco_hint
   locked_id: /UAV0/landing/front/locked_id
@@ -46,7 +46,8 @@ safety:
   image_timeout_sec: 0.30
   max_header_future_sec: 0.05
   tf_timeout_sec: 0.05
-  max_image_odom_delta_sec: 0.08
+  # 与下视识别使用相同的实测图像/FAST-LIO时间容差。
+  max_image_odom_delta_sec: 0.12
 
 mission:
   require_stage_gate: true

@@ -271,6 +271,25 @@ Trajectory_Data_t::Trajectory_Data_t()
     exec_traj = 0;
 }
 
+void Trajectory_Data_t::blockTrajectoryAcceptance()
+{
+    trajectory_acceptance_enabled = false;
+    total_traj_start_time = ros::Time(0);
+    total_traj_end_time = ros::Time(0);
+    traj_queue.clear();
+    exec_traj = 0;
+}
+
+void Trajectory_Data_t::allowTrajectoryAcceptanceAfter(const ros::Time &stamp)
+{
+    total_traj_start_time = ros::Time(0);
+    total_traj_end_time = ros::Time(0);
+    traj_queue.clear();
+    exec_traj = 0;
+    accept_trajectory_after = stamp;
+    trajectory_acceptance_enabled = true;
+}
+
 void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
 {
 
@@ -278,14 +297,41 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
     const quadrotor_msgs::PolynomialTraj &traj = *pMsg;
     if (traj.action == quadrotor_msgs::PolynomialTraj::ACTION_ADD)
     {
-        // exec_traj = false;
-        ROS_INFO("[TRAJ] 正在加载规划轨迹。");
-        if ((int)traj.trajectory_id < 1)
+        const ros::Time now = ros::Time::now();
+        if (!trajectory_acceptance_enabled)
         {
-            ROS_ERROR("[TRAJ] 轨迹数据无效：trajectory_id 必须从 1 开始。");
+            ROS_WARN_THROTTLE(1.0, "[TRAJ] NMPC 正在安全恢复或降落，丢弃轨迹 id=%u。",
+                              traj.trajectory_id);
             return;
         }
-        // if ((int)traj.trajectory_id > 1 && (int)traj.trajectory_id < _traj_id) return ;
+        if (traj.header.stamp.isZero() ||
+            (!accept_trajectory_after.isZero() && traj.header.stamp <= accept_trajectory_after))
+        {
+            ROS_WARN_THROTTLE(1.0, "[TRAJ] 拒绝时间戳为空或恢复前生成的轨迹 id=%u。",
+                              traj.trajectory_id);
+            return;
+        }
+        const double age = (now - traj.header.stamp).toSec();
+        if (!std::isfinite(age) || age > 0.8 || age < -0.1)
+        {
+            ROS_WARN_THROTTLE(1.0, "[TRAJ] 拒绝旧轨迹或过早轨迹 id=%u，时间差=%.3f s。",
+                              traj.trajectory_id, age);
+            return;
+        }
+        if (have_last_trajectory_id && traj.header.stamp <= last_trajectory_stamp)
+        {
+            ROS_WARN_THROTTLE(1.0, "[TRAJ] 拒绝时间戳重复或倒退的轨迹 id=%u。",
+                              traj.trajectory_id);
+            return;
+        }
+        if (have_last_trajectory_id && traj.trajectory_id <= last_trajectory_id)
+        {
+            ROS_WARN_THROTTLE(1.0,
+                              "[TRAJ] 检测到 trajectory_id 重新计数：last=%u, new=%u；"
+                              "header.stamp 更新，允许执行。",
+                              last_trajectory_id, traj.trajectory_id);
+        }
+        ROS_INFO("[TRAJ] 正在加载规划轨迹。");
 
         if (traj.header.stamp.isZero() || traj.trajectory.empty())
         {
@@ -300,7 +346,8 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
         {
             const std::size_t expected_size = static_cast<std::size_t>(piece.num_dim) *
                                               static_cast<std::size_t>(piece.num_order + 1);
-            if (piece.num_dim != 3 || piece.duration <= 0.0 ||
+            if (piece.num_dim != 3 || piece.num_order < 0 || piece.num_order > 20 ||
+                piece.duration <= 0.0 ||
                 piece.data.size() != expected_size || !std::isfinite(piece.duration))
             {
             ROS_ERROR("[TRAJ] 轨迹数据无效：位置分段维度或持续时间错误。");
@@ -348,6 +395,11 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
                 traj_data.yaw_traj.emplace_back(yaw_piece.duration, yaw_coefficients);
             }
         }
+        if (!std::isfinite(t_total) || t_total <= 0.0)
+        {
+            ROS_ERROR("[TRAJ] 轨迹数据无效：总持续时间错误。");
+            return;
+        }
         traj_data.traj_end_time = traj_data.traj_start_time + ros::Duration(t_total);
         if (ros::Time::now() < traj_data.traj_start_time) // Future traj
         {
@@ -373,6 +425,9 @@ void Trajectory_Data_t::feed(quadrotor_msgs::PolynomialTrajConstPtr pMsg)
             total_traj_start_time = traj_queue.front().traj_start_time;
         }
         trajectory_id = traj.trajectory_id;
+        last_trajectory_id = traj.trajectory_id;
+        last_trajectory_stamp = traj.header.stamp;
+        have_last_trajectory_id = true;
         exec_traj = 1;
         ROS_INFO("[TRAJ] 收到轨迹：id=%u，piece 数量=%d。",
                  traj.trajectory_id, traj_data.traj.getPieceNum());
@@ -442,7 +497,14 @@ void Battery_Data_t::feed(sensor_msgs::BatteryStateConstPtr pMsg)
     {
         vlotage += pMsg->cell_voltage[i];
     }
-    volt = 0.8 * volt + 0.2 * vlotage; // Naive LPF, cell_voltage has a higher frequency
+    // 首个有效样本直接初始化，避免从 0 V 低通收敛产生伪低电压；后续再平滑。
+    if (std::isfinite(vlotage) && vlotage > 0.0)
+    {
+        if (!std::isfinite(volt) || volt <= 0.0)
+            volt = vlotage;
+        else
+            volt = 0.8 * volt + 0.2 * vlotage;
+    }
 
     // volt = 0.8 * volt + 0.2 * pMsg->voltage; // Naive LPF
     percentage = pMsg->percentage;

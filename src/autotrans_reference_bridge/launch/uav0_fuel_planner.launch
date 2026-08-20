@@ -9,7 +9,7 @@
     <arg name="drone_id" value="0"/>
     <arg name="vehicle_ns" value="UAV0"/>
     <arg name="topic_prefix" value="/UAV0"/>
-    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="cloud_topic" value="/UAV0/fast_lio/cloud_registered"/>
     <arg name="rviz_goal_topic" value="/UAV0/move_base_simple/goal"/>
     <arg name="enable_rviz" value="$(arg enable_rviz)"/>

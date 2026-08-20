@@ -5,7 +5,7 @@
   <arg name="camera_info_topic" default="$(arg topic_prefix)/down_camera/camera_info"/>
   <arg name="local_pose_topic" default="$(arg topic_prefix)/mavros/local_position/pose"/>
   <arg name="mavros_state_topic" default="$(arg topic_prefix)/mavros/state"/>
-  <arg name="odometry_topic" default="$(arg topic_prefix)/fast_lio/Odometry"/>
+  <arg name="odometry_topic" default="$(arg topic_prefix)/fast_lio/Odom_high_freq"/>
   <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
   <arg name="assigned_id_topic" default="$(arg topic_prefix)/landing/assigned_id"/>

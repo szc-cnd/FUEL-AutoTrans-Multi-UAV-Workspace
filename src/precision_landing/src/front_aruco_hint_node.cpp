@@ -89,7 +89,7 @@ class FrontArucoHintNode {
                         0.05);
     private_node_.param("safety/tf_timeout_sec", tf_timeout_sec_, 0.05);
     private_node_.param("safety/max_image_odom_delta_sec",
-                        max_image_odom_delta_sec_, 0.08);
+                        max_image_odom_delta_sec_, 0.12);
     private_node_.param("depth_validation/required", require_depth_, true);
     private_node_.param("depth_validation/scale_16uc1", depth_scale_16uc1_,
                         0.001);
@@ -120,7 +120,7 @@ class FrontArucoHintNode {
     std::string image_topic("/camera/color/image_raw");
     std::string camera_info_topic("/camera/color/camera_info");
     std::string depth_topic("/camera/aligned_depth_to_color/image_raw");
-    std::string odometry_topic("/UAV0/fast_lio/Odometry");
+    std::string odometry_topic("/UAV0/fast_lio/Odom_high_freq");
     std::string mission_status_topic("/UAV0/mission/task_status");
     std::string hint_topic("/UAV0/landing/front_aruco_hint");
     std::string locked_id_topic("/UAV0/landing/front/locked_id");
@@ -454,7 +454,7 @@ class FrontArucoHintNode {
   double image_timeout_sec_{0.30};
   double max_header_future_sec_{0.05};
   double tf_timeout_sec_{0.05};
-  double max_image_odom_delta_sec_{0.08};
+  double max_image_odom_delta_sec_{0.12};
   double depth_scale_16uc1_{0.001};
   double max_depth_time_delta_sec_{0.10};
   double min_depth_m_{0.25};

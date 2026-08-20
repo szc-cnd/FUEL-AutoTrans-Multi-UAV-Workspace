@@ -38,7 +38,7 @@
   <arg name="realsense_enable_pointcloud" default="true" />
   <!-- 当前 FAST-LIO 已发布 UAV0/camera_init -> UAV0/body，默认不重复桥接里程计 TF。 -->
   <arg name="enable_camera_body_odom_tf" default="false" />
-  <arg name="camera_body_tf_odom_topic" default="/Odometry" />
+  <arg name="camera_body_tf_odom_topic" default="/UAV0/fast_lio/Odom_high_freq" />
   <!-- 当前 FAST-LIO/UAV0 使用 UAV0/body；相机驱动仍发布 camera_link。 -->
   <arg name="camera_body_tf_parent_frame" default="UAV0/body" />
   <arg name="camera_body_tf_child_frame" default="camera_link" />

@@ -22,7 +22,6 @@
 #include <mavros_msgs/AttitudeTarget.h>
 #include <mavros_msgs/ESCStatus.h>
 #include "multi_optimization_based_force_estimator.hpp"
-#include "entry_command_reference_limiter.h"
 
 namespace PayloadMPC
 {
@@ -36,8 +35,8 @@ namespace PayloadMPC
 		State_Data_t state_data;
 		ExtendedState_Data_t extended_state_data;
 		Odom_Data_t odom_data;
-		// 外力估计专用的 PX4 EKF 融合里程计；姿态表示机体系到 MAVROS ENU 世界系的旋转。
-		// NMPC 的位置、速度和姿态仍使用 odom_data（UAV0 FAST-LIO），两条状态链路互不替换。
+		// PX4 EKF 融合里程计提供 NMPC 控制姿态和外力估计姿态；
+		// odom_data 只向 NMPC 提供 FAST-LIO 高频位置和线速度。
 		Odom_Data_t force_attitude_odom_data;
 		Imu_Data_t imu_data;
 		Command_Data_t cmd_data;
@@ -67,7 +66,7 @@ namespace PayloadMPC
 
 		enum State_t
 		{
-			MANUAL_CTRL = 1, // 手动状态：不求解 NMPC，正常情况下不发布 MAVROS attitude setpoint。
+				MANUAL_CTRL = 1, // 手动状态：不求解 NMPC；仅在起飞低位且进入 OFFBOARD 前发布安全预流。
 			AUTO_HOVER,		 // 自动悬停：发布 body_rate(rad/s) + MAVROS 归一化 thrust。
 			CMD_CTRL,		 // 指令/轨迹控制：跟踪轨迹或悬停参考，并持续发布 MAVROS setpoint。
 			AUTO_TAKEOFF,	 // 自动起飞：等待 PX4 已进入 OFFBOARD 后平滑爬升，不自动解锁或切 OFFBOARD。
@@ -79,6 +78,7 @@ namespace PayloadMPC
 			HOVER = 10,		// 轨迹子状态：没有有效轨迹时保持悬停参考。
 			POLY_TRAJ = 11, // 轨迹子状态：执行 PolynomialTraj 多项式轨迹。
 			POINTS = 12,	// 轨迹子状态：预留点序列轨迹；当前流程遇到后回到 HOVER。
+			MPC_RECOVERY_HOVER = 13, // NMPC 故障期间锁存固定位置并后台恢复。
 		};
 
 		MPCFSM(const ros::NodeHandle &nh, MpcParams &params, MpcController &controller);
@@ -118,21 +118,24 @@ namespace PayloadMPC
 		std::string last_takeoff_precondition_reason_;
 		bool hover_offboard_wait_reported_{false};
 		bool cmd_offboard_wait_reported_{false};
-		ros::Time takeoff_prestream_start_{0};
-		bool odom_failsafe_active_{false};
-		ros::Time odom_failsafe_start_{0};
+			bool odom_failsafe_active_{false};
+			ros::Time odom_failsafe_start_{0};
+			bool suppress_manual_setpoint_{false};
+			bool manual_setpoint_published_{false};
 		// 最近一次经过有限值检查和限幅的 MAVROS/PX4 控制量；里程计失效后最多保持 0.3 s。
 		mavros_msgs::AttitudeTarget last_safe_setpoint_;
 		bool have_last_safe_setpoint_{false};
+		bool mpc_recovery_active_{false};
+		bool direct_auto_land_active_{false};
+		bool planning_stop_sent_{false};
+		ros::Time mpc_recovery_start_time_{0};
+		int mpc_recovery_success_count_{0};
 		// 最后一条有效入口 PositionCommand 持续作为 NMPC 世界系参考，直到新命令或完整轨迹接管。
 		Command_Data_t latched_entry_command_;
 		ros::Time last_entry_command_stamp_{0};
 		// 入口点飞行忽略规划器 yaw；收到新目标时锁定无人机当前世界系偏航角，单位 rad。
 		double entry_command_yaw_{0.0};
 		bool entry_command_active_{false};
-		bool entry_command_reached_{false};
-		EntryCommandReferenceLimiter entry_command_reference_limiter_;
-		ros::Time entry_command_last_update_time_{0};
 		uint32_t last_reported_trajectory_id_{0};
 		int last_reported_trajectory_piece_{-1};
 		Eigen::Vector3d takeoff_start_pose_{Eigen::Vector3d::Zero()};
@@ -205,7 +208,8 @@ namespace PayloadMPC
 		ThrustModelGateReason last_thrust_model_gate_reason_{
 			ThrustModelGateReason::DISABLED_BY_PARAM};
 
-		void setEstimateState(const Odom_Data_t &odom_est_state);
+		void setEstimateState(const Odom_Data_t &translation_odom,
+						  const Odom_Data_t &attitude_odom);
 		void setForceEstimation();
 		void updateForceAttitudeAlignment(const ros::Time &now);
 		void resetForceAttitudeAlignment(const char *reason);
@@ -219,9 +223,15 @@ namespace PayloadMPC
 		bool odomControlStateValid(const ros::Time &now) const;
 		void startOdomFailsafe(const ros::Time &now);
 		void publishFailsafeHold(const ros::Time &now);
-		void publishTakeoffPrestream(const ros::Time &now);
+			void publish_manual_ctrl(const ros::Time &stamp);
 		// PX4 退出 OFFBOARD 后清除旧轨迹和外力补偿，防止重新进入自动模式时恢复旧控制目标。
 		void handleOffboardLoss();
+		bool mpcControlStateValid(const ros::Time &now) const;
+		void beginMpcRecovery(const ros::Time &now);
+		void processMpcRecovery(const ros::Time &now);
+		void publishMpcRecoveryAttitude(const ros::Time &now);
+		void beginDirectAutoLand(const ros::Time &now, const char *reason);
+		void processDirectAutoLand(const ros::Time &now);
 		ThrustModelGateReason thrustModelGate(const ros::Time &now) const;
 		void reportThrustModelGate(ThrustModelGateReason reason);
 

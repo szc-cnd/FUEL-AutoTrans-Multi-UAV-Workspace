@@ -1,7 +1,7 @@
 topics:
   image: /UAV0/down_camera/image_raw
   camera_info: /UAV0/down_camera/camera_info
-  odometry: /UAV0/fast_lio/Odometry
+  odometry: /UAV0/fast_lio/Odom_high_freq
   mission_status: /UAV0/mission/task_status
   marker_world: /UAV0/mission/detection/final_aruco
   landing_request: /UAV0/mission/landing_request
@@ -37,7 +37,8 @@ world_filter:
   max_spread_m: 0.12
 
 safety:
-  max_image_odom_delta_sec: 0.08
+  # 实测 USB 图像相对 FAST-LIO 时间戳约滞后 0.08--0.10 s。
+  max_image_odom_delta_sec: 0.12
   image_timeout_sec: 0.30
   odom_timeout_sec: 0.30
   target_timeout_sec: 0.40

@@ -35,6 +35,24 @@ class PositionCommandLatchStaticTest(unittest.TestCase):
         self.assertNotIn("cmd_data.yaw, cmd_data.yaw_rate", cmd_ctrl)
         self.assertIn("entry_command_yaw_, 0.0", cmd_ctrl)
 
+    def test_position_command_is_forwarded_without_entry_limiter(self):
+        source = FSM_SOURCE.read_text(encoding="utf-8")
+        header = FSM_HEADER.read_text(encoding="utf-8")
+        config = (PACKAGE / "config" / "mpc.yaml").read_text(encoding="utf-8")
+        params = (
+            PACKAGE / "include" / "payload_mpc_controller" / "mpc_params.h"
+        ).read_text(encoding="utf-8")
+        start = source.index("void MPCFSM::CMD_CTRL_process()")
+        end = source.index("void MPCFSM::setEstimateState", start)
+        cmd_ctrl = source[start:end]
+
+        self.assertIn("latched_entry_command_.p, latched_entry_command_.v", cmd_ctrl)
+        self.assertIn("latched_entry_command_.a, latched_entry_command_.j", cmd_ctrl)
+        self.assertNotIn("EntryCommandReferenceLimiter", header)
+        self.assertNotIn("entry_command_reference_limiter_", source)
+        self.assertNotIn("entry_command:", config)
+        self.assertNotIn("struct EntryCommand", params)
+
 
 if __name__ == "__main__":
     unittest.main()

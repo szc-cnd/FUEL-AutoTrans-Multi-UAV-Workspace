@@ -19,13 +19,24 @@ class AutoTakeoffContractTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         cls.config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
 
-    def test_ch8_low_is_the_only_initial_automatic_entry(self):
+    def test_ch8_three_position_initial_entries_match_cav1(self):
         manual = self.fsm_source.split("case MANUAL_CTRL:", 1)[1]
         manual = manual.split("case AUTO_HOVER:", 1)[0]
         self.assertIn("rc_data.is_takeoff_mode", manual)
-        self.assertIn("publishTakeoffPrestream", manual)
-        self.assertNotIn("rc_data.is_hover_mode", manual)
-        self.assertNotIn("rc_data.is_command_mode", manual)
+        self.assertIn("prestream_allowed", manual)
+        self.assertIn("suppress_manual_setpoint_ = !prestream_allowed", manual)
+        self.assertIn("rc_data.is_hover_mode", manual)
+        self.assertIn("rc_data.is_command_mode", manual)
+        self.assertIn("MANUAL_CTRL -> AUTO_HOVER", manual)
+        self.assertIn("MANUAL_CTRL -> CMD_CTRL", manual)
+        self.assertIn('state_data.current_state.mode != "OFFBOARD"', manual)
+        self.assertNotIn("takeoff_prestream_start_", manual)
+        self.assertIn("controller_.resetThrustMapping();", manual)
+
+        manual_publish = self.fsm_source.split("void MPCFSM::publish_manual_ctrl", 1)[1]
+        manual_publish = manual_publish.split("void MPCFSM::handleOffboardLoss", 1)[0]
+        self.assertIn("manual_setpoint_published_", manual_publish)
+        self.assertIn("msg.thrust = 0.01", manual_publish)
 
     def test_takeoff_parameters_keep_target_and_climb_rate(self):
         for token in ("struct Takeoff", 'takeoff/target_z', 'takeoff/climb_rate'):

@@ -25,7 +25,6 @@ public:
     output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true);
     input_sub_ = nh_.subscribe(input_topic_, 2, &ReferenceBridge::trajectoryCallback, this);
     timeout_timer_ = nh_.createTimer(ros::Duration(0.05), &ReferenceBridge::timeoutCallback, this);
-
     ROS_INFO("[autotrans_reference_bridge] %s -> %s, timeout=%.3f s, frame_id=%s",
              input_topic_.c_str(), output_topic_.c_str(), trajectory_timeout_, frame_id_.c_str());
   }
@@ -133,7 +132,8 @@ private:
 
   void timeoutCallback(const ros::TimerEvent&)
   {
-    if (last_input_time_.isZero() || (ros::Time::now() - last_input_time_).toSec() <= trajectory_timeout_ ||
+    if (last_input_time_.isZero() ||
+        (ros::Time::now() - last_input_time_).toSec() <= trajectory_timeout_ ||
         abort_sent_)
     {
       return;
@@ -146,7 +146,8 @@ private:
     abort_message.action = quadrotor_msgs::PolynomialTraj::ACTION_ABORT;
     output_pub_.publish(abort_message);
     abort_sent_ = true;
-    ROS_ERROR("[autotrans_reference_bridge] Input trajectory timeout; ACTION_ABORT published.");
+    ROS_ERROR("[autotrans_reference_bridge] Input trajectory timeout after %.2f s; ACTION_ABORT published.",
+              trajectory_timeout_);
   }
 
   ros::NodeHandle nh_;

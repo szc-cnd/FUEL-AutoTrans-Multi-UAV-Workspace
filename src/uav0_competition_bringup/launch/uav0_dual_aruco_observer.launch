@@ -5,7 +5,7 @@
     没有 FAST-LIO 里程计时仍显示像素检测框和 ID，但不输出可靠世界坐标。
   -->
   <arg name="open_views" default="true" />
-  <arg name="odometry_topic" default="/UAV0/fast_lio/Odometry" />
+  <arg name="odometry_topic" default="/UAV0/fast_lio/Odom_high_freq" />
 
   <arg name="down_camera_device"
        default="/dev/v4l/by-id/usb-Generic_USB_Camera_20000001-video-index0" />

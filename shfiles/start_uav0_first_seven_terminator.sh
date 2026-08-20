@@ -23,7 +23,7 @@ START_LOCK_FILE="${UAV0_FIRST_SEVEN_START_LOCK_FILE:-/tmp/uav0_first_seven_start
 RUNTIME_CONFIG="${UAV0_FIRST_SEVEN_RUNTIME_CONFIG:-/tmp/uav0_first_seven_terminator_${RUN_ID}.conf}"
 
 THERMAL="${UAV0_FIRST_SEVEN_THERMAL:-true}"
-ODOM_TOPIC="${UAV0_FIRST_SEVEN_ODOM_TOPIC:-/UAV0/fast_lio/Odometry}"
+ODOM_TOPIC="${UAV0_FIRST_SEVEN_ODOM_TOPIC:-/UAV0/fast_lio/Odom_high_freq}"
 PANE=""
 SHOW_HELP=false
 STOP_REQUEST=false
@@ -40,7 +40,7 @@ usage() {
 选项：
   --thermal                 第 5 屏同时启用热成像（默认）
   --no-thermal              第 5 屏关闭热成像
-  --odom-topic TOPIC        FAST-LIO 里程计话题，默认 /UAV0/fast_lio/Odometry
+  --odom-topic TOPIC        FAST-LIO 高频里程计话题，默认 /UAV0/fast_lio/Odom_high_freq
   stop                      只关闭本脚本打开的 Terminator 窗口，不停止 ROS 节点
   -h, --help                显示帮助
 

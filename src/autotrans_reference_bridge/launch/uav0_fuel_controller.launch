@@ -10,7 +10,7 @@
   <include file="$(find diff_planner)/launch/exp/run_swarm_indoor1_fuel_exploration.launch">
     <arg name="vehicle_ns" value="UAV0"/>
     <arg name="topic_prefix" value="/UAV0"/>
-    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="cloud_topic" value="/UAV0/fast_lio/cloud_registered"/>
     <arg name="rviz_goal_topic" value="/UAV0/move_base_simple/goal"/>
     <arg name="enable_rviz" value="$(arg enable_rviz)"/>
@@ -22,7 +22,7 @@
   <node if="$(eval arg('controller_mode') == 'simple')"
         pkg="exploration_control" type="cxr_egoctrl_v1" name="UAV0_controller" output="screen">
     <param name="vehicle_ns" value="/UAV0"/>
-    <param name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <param name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <param name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
     <param name="goal_topic" value="/UAV0/move_base_simple/goal"/>
     <param name="planner_enable_height" value="0.5"/>
@@ -44,8 +44,9 @@
 
   <include if="$(eval arg('controller_mode') == 'autotrans')"
            file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
-    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="imu_topic" value="/UAV0/mavros/imu/data"/>
+    <arg name="force_attitude_odom_topic" value="/UAV0/mavros/local_position/odom"/>
     <arg name="state_topic" value="/UAV0/mavros/state"/>
     <arg name="extended_state_topic" value="/UAV0/mavros/extended_state"/>
     <arg name="rc_topic" value="/UAV0/mavros/rc/in"/>

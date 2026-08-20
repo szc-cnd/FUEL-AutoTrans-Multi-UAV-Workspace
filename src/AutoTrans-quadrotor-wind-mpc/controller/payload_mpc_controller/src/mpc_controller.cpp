@@ -46,6 +46,13 @@ namespace PayloadMPC
     
   }
 
+  MpcController::~MpcController()
+  {
+    // 构造函数会立即启动一次 ACADO preparation。启动安全检查失败等提前退出
+    // 路径也必须回收该线程，否则 std::thread 析构会触发 std::terminate。
+    waitForPreparation();
+  }
+
   void MpcController::execMPC(const Eigen::Matrix<real_t, kStateSize, kSamples + 1> &reference_states,
                               const Eigen::Matrix<real_t, kInputSize, kSamples + 1> &reference_inputs,
                               const Eigen::Matrix<real_t, kStateSize, 1> &estimated_state,
@@ -54,13 +61,12 @@ namespace PayloadMPC
   {
     const clock_t start = clock();
 
-    preparation_thread_.join(); // waiting the preparation_thread_ finished
+    if (preparation_thread_.joinable())
+      preparation_thread_.join(); // waiting the preparation_thread_ finished
 
     // Get the feedback from MPC.
 
     mpc_wrapper_.setTrajectory(reference_states, reference_inputs);
-
-    const bool previous_mpc_solve_success = last_mpc_solve_success_;
 
     if (solve_from_scratch_)
     {
@@ -76,15 +82,34 @@ namespace PayloadMPC
 
     if (!last_mpc_solve_success_)
     {
-		ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，保持上一安全控制量。");
+      mpc_failure_active_ = true;
+      predicted_states = estimated_state.replicate(1, kSamples + 1);
+      control_inputs = hover_input_.leftCols(kSamples);
+      ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，切换到悬停安全输入。");
     }
-    else if (!previous_mpc_solve_success)
+    else
     {
-      ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+      mpc_wrapper_.getStates(predicted_states);
+      mpc_wrapper_.getInputs(control_inputs);
+      if (!predicted_states.allFinite() || !control_inputs.allFinite())
+      {
+        last_mpc_solve_success_ = false;
+        mpc_failure_active_ = true;
+        predicted_states = estimated_state.replicate(1, kSamples + 1);
+        control_inputs = hover_input_.leftCols(kSamples);
+        ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 输出含非有限值，切换到悬停安全输入。");
+      }
+      else
+      {
+        last_valid_control_input_ = control_inputs.col(0);
+        last_valid_control_time_ = ros::Time::now();
+        if (mpc_failure_active_)
+        {
+          ROS_INFO("[OUTPUT] NMPC 恢复正常。");
+          mpc_failure_active_ = false;
+        }
+      }
     }
-
-    mpc_wrapper_.getStates(predicted_states);
-    mpc_wrapper_.getInputs(control_inputs);
 
     // Start a thread to prepare for the next execution.
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);
@@ -97,6 +122,76 @@ namespace PayloadMPC
                       timing_feedback_ * 1000, (timing_feedback_ + timing_preparation_) * 1000);
   }
 
+  bool MpcController::resetForHover(
+      const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
+      const Eigen::Ref<const Eigen::Vector3d> hover_position,
+      double hover_yaw)
+  {
+    if (!estimated_state.allFinite() || !hover_position.allFinite() || !std::isfinite(hover_yaw))
+    {
+      ROS_ERROR("[NMPC恢复] 无法重置求解器：状态或悬停参考不是有限值。");
+      return false;
+    }
+    waitForPreparation();
+
+    const auto &q_gain = params_.q_gain_;
+    const auto &r_gain = params_.r_gain_;
+    const Eigen::Matrix<real_t, kCostSize, kCostSize> Q =
+        (Eigen::Matrix<real_t, kCostSize, 1>()
+             << q_gain.Q_pos_xy, q_gain.Q_pos_xy, q_gain.Q_pos_z,
+             q_gain.Q_attitude_rp, q_gain.Q_attitude_rp, q_gain.Q_attitude_rp,
+             q_gain.Q_attitude_yaw, q_gain.Q_velocity, q_gain.Q_velocity,
+             q_gain.Q_velocity)
+            .finished().asDiagonal();
+    const Eigen::Matrix<real_t, kInputSize, kInputSize> R =
+        (Eigen::Matrix<real_t, kInputSize, 1>()
+             << r_gain.R_thrust, r_gain.R_pitchroll, r_gain.R_pitchroll, r_gain.R_yaw)
+            .finished().asDiagonal();
+    const Eigen::Matrix<real_t, kInputSize, 1> initial_input =
+        (Eigen::Matrix<real_t, kInputSize, 1>()
+             << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0)
+            .finished();
+
+    mpc_wrapper_.setDynamicParams(params_.dyn_params_.mass_q);
+    mpc_wrapper_.initialize(Q, R, estimated_state, initial_input,
+                            params_.state_cost_exponential_, params_.input_cost_exponential_);
+    const bool limits_ok = mpc_wrapper_.setLimits(
+        params_.min_thrust_, params_.max_thrust_, params_.max_bodyrate_xy_,
+        params_.max_bodyrate_z_, params_.max_velocity_xy_, params_.max_velocity_z_);
+    fq_.setZero();
+    mpc_wrapper_.setExternalForce(fq_);
+    hover_input_ = initial_input.replicate(1, kSamples + 1);
+    setHoverReference(hover_position, hover_yaw);
+    const bool reference_ok = mpc_wrapper_.setTrajectory(reference_states_, reference_inputs_);
+    solve_from_scratch_ = false;
+    last_mpc_solve_success_ = false;
+    mpc_failure_active_ = false;
+    preparation_thread_ = std::thread(&MpcController::preparationThread, this);
+    ROS_WARN("[NMPC恢复] 已基于当前状态完整重置 ACADO 求解器。");
+    return limits_ok && reference_ok;
+  }
+
+  void MpcController::waitForPreparation()
+  {
+    if (preparation_thread_.joinable())
+      preparation_thread_.join();
+  }
+
+  bool MpcController::hasRecentValidControl(const ros::Time &now, double max_age) const
+  {
+    if (max_age < 0.0 || last_valid_control_time_.isZero() ||
+        !last_valid_control_input_.allFinite())
+      return false;
+    const double age = (now - last_valid_control_time_).toSec();
+    return age >= 0.0 && age <= max_age;
+  }
+
+  void MpcController::clearLastValidControl()
+  {
+    last_valid_control_time_ = ros::Time(0);
+    last_valid_control_input_.setZero();
+  }
+
   void MpcController::execMPC(const Eigen::Matrix<real_t, kStateSize, 1> &estimated_state,
                               Eigen::Matrix<real_t, kStateSize, kSamples + 1> &predicted_states,
                               Eigen::Matrix<real_t, kInputSize, kSamples> &control_inputs)
@@ -106,6 +201,11 @@ namespace PayloadMPC
   // drone pos
   void MpcController::setHoverReference(const Eigen::Ref<const Eigen::Vector3d> &quad_position, const double yaw)
   {
+    // 悬停、起飞和恢复状态用实际锁存航向重新建立偏航状态；轨迹重规划不会调用此重置。
+    last_yaw_ = angle_limit(yaw);
+    last_yaw_dot_ = 0.0;
+    yaw_reference_initialized_ = true;
+
     Eigen::Matrix<real_t, 3, 1> quad_pos = quad_position.cast<real_t>();
     Eigen::Quaterniond quad_q;
     double thr;
@@ -183,7 +283,16 @@ namespace PayloadMPC
     double thr;
     Eigen::Vector3d omg;
 
-    // last_yaw_ = start_yaw;  // must reset the last_yaw_ 
+    if (!yaw_reference_initialized_)
+    {
+      last_yaw_ = angle_limit(start_yaw);
+      last_yaw_dot_ = 0.0;
+      yaw_reference_initialized_ = true;
+    }
+
+    // 预测窗口使用局部偏航状态，成员状态每个控制周期只在第一个采样点推进一次。
+    double predicted_yaw = last_yaw_;
+    double predicted_yaw_dot = last_yaw_dot_;
 
     for (int i = 0; i < (kSamples + 1); i++)
     {
@@ -235,55 +344,41 @@ namespace PayloadMPC
         {
           yaw = planned_yaw(0);
           yaw_dot = planned_yaw_rate(0);
+          if (i == 0)
+          {
+            last_yaw_ = angle_limit(yaw);
+            last_yaw_dot_ = yaw_dot;
+            predicted_yaw = last_yaw_;
+            predicted_yaw_dot = last_yaw_dot_;
+          }
         }
       }
       else if (params_.use_fix_yaw_)
       {
         yaw = start_yaw;
-        yaw_dot = 0.0; 
+        yaw_dot = 0.0;
+        if (i == 0)
+        {
+          last_yaw_ = angle_limit(yaw);
+          last_yaw_dot_ = 0.0;
+          predicted_yaw = last_yaw_;
+          predicted_yaw_dot = 0.0;
+        }
       }
       else
       {
-        if(i == 0) // reset last_yaw_ from the first point
+        if (i == 0)
         {
-          if(t - t_step <= 0.0)
-          {
-            if (fabs(vel_quad(0))+fabs(vel_quad(1))>0.1)
-            {
-              last_yaw_ = atan2(vel_quad(1), vel_quad(0));
-              last_yaw_dot_ = 0.0;
-            }
-            else
-            {
-              last_yaw_ = start_yaw;
-              last_yaw_dot_ = 0.0;
-            }
-          }
-          else // Get yaw in last step 
-          {
-            Eigen::MatrixXd last_pvajs = traj.getPVAJSC(t-t_step);
-            Eigen::Vector3d last_pos= last_pvajs.col(0);
-            Eigen::Vector3d last_vel = last_pvajs.col(1);
-            Eigen::Vector3d last_acc = last_pvajs.col(2);
-            Eigen::Vector3d last_jerk = last_pvajs.col(3);
-            Eigen::Vector3d last_snap = last_pvajs.col(4);
-            Eigen::Vector3d last_crackle = last_pvajs.col(5); 
-            Eigen::Vector3d last_pos_quad = last_pos;
-            Eigen::Vector3d last_vel_quad = last_vel;
-
-            if (fabs(last_vel_quad(0))+fabs(last_vel_quad(1))>0.1)
-            {
-              last_yaw_ = atan2(last_vel_quad(1), last_vel_quad(0));
-              last_yaw_dot_ = 0.0;
-            }
-            else
-            {
-              last_yaw_ = start_yaw;
-              last_yaw_dot_ = 0.0;
-            }
-          }
+          calculate_yaw(vel_quad, t_step, last_yaw_, last_yaw_dot_);
+          predicted_yaw = last_yaw_;
+          predicted_yaw_dot = last_yaw_dot_;
         }
-        calculate_yaw(vel_quad, t_step,yaw, yaw_dot);  
+        else
+        {
+          calculate_yaw(vel_quad, t_step, predicted_yaw, predicted_yaw_dot);
+        }
+        yaw = predicted_yaw;
+        yaw_dot = predicted_yaw_dot;
       }
       computeQuadrotorFlatness(acc_quad, jerk_quad, yaw, yaw_dot, quat, thr, omg);
 
@@ -335,47 +430,42 @@ namespace PayloadMPC
     else
       return(d2);
   }
-  void MpcController::calculate_yaw(Eigen::Vector3d &vel, const double dt, double &yaw, double &yawdot)
+  void MpcController::calculate_yaw(const Eigen::Vector3d &vel, const double dt,
+                                    double &yaw_state, double &yawdot_state)
   {
     const double YAW_DOT_MAX_PER_SEC = params_.max_bodyrate_z_;
+    constexpr double kYawHoldSpeed = 0.12;
 
     double yaw_temp;
     double max_yaw_change = YAW_DOT_MAX_PER_SEC * dt;
 
     // tangent line
-    if ((fabs(vel(1)) + fabs(vel(0))) < 0.1)
+    if (vel.head<2>().norm() < kYawHoldSpeed)
     {
-      yaw_temp = last_yaw_;
+      yaw_temp = yaw_state;
     }
     else
     {
       yaw_temp = atan2(vel(1), vel(0));     
     }
-    double yaw_diff = angle_diff(yaw_temp, last_yaw_);
+    double yaw_diff = angle_diff(yaw_temp, yaw_state);
     
     if (yaw_diff > max_yaw_change )
     {
       yaw_diff = max_yaw_change;
-      yawdot = YAW_DOT_MAX_PER_SEC;
+      yawdot_state = YAW_DOT_MAX_PER_SEC;
     }
     else if(yaw_diff < -max_yaw_change)
     {
       yaw_diff = -max_yaw_change;
-      yawdot = -YAW_DOT_MAX_PER_SEC;
+      yawdot_state = -YAW_DOT_MAX_PER_SEC;
     }
     else
     {
-      yawdot = yaw_diff / dt;
+      yawdot_state = yaw_diff / dt;
     }
-    
-    yaw = last_yaw_ + yaw_diff;
 
-    // std::cout<<"last_yaw: "<< last_yaw_ << "yaw: " << yaw << " yawdot: " << yawdot << std::endl;
-    
-    // std::cout<< "dt: " << dt << " max_yaw_change: " << max_yaw_change << " vel: " << vel << " last_yaw_: " << last_yaw_ << " yaw: " << yaw << " yawdot: " << yawdot << std::endl;
-
-    last_yaw_ = yaw;
-    last_yaw_dot_ = yawdot;
+    yaw_state = angle_limit(yaw_state + yaw_diff);
   }
 
   void MpcController::computeQuadrotorFlatness(const Eigen::Vector3d &acc,

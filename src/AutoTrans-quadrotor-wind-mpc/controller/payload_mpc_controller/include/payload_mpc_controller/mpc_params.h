@@ -46,6 +46,10 @@ namespace PayloadMPC
 			double max_force;
 			// 实际写入 NMPC OnlineData 的世界系补偿力模长上限，单位 N。
 			double max_applied_force;
+			// 世界系外力补偿分轴增益；仅作用于写入 NMPC 的补偿量。
+			double force_axis_gain_x{1.0};
+			double force_axis_gain_y{1.0};
+			double force_axis_gain_z{1.0};
 			// 是否运行并发布世界系无人机外力 f_Q，单位 N；该开关本身不授权 NMPC 使用补偿。
 			bool enable_force_estimation;
 			// 是否把有效的 f_Q 写入 NMPC OnlineData；关闭时 NMPC 始终接收零外力。
@@ -159,6 +163,16 @@ namespace PayloadMPC
 			double timeout{8.0};
 		};
 
+		struct Safety
+		{
+			// NMPC 首次失败后锁点恢复的告警阈值，单位 s；超时继续重试，不自动降落。
+			double mpc_recovery_timeout{1.0};
+			// 连续获得该次数的有限有效解后才恢复接收规划轨迹。
+			int mpc_recovery_success_cycles{1};
+			// 请求 PX4 AUTO.LAND 的最小重试周期，单位 s。
+			double auto_land_retry_period{1.0};
+		};
+
 		struct Takeoff
 		{
 			// AUTO_TAKEOFF 只在 PX4 已经进入 OFFBOARD 后执行，不自动解锁或切换 OFFBOARD。
@@ -169,14 +183,6 @@ namespace PayloadMPC
 			double climb_rate{0.25};
 			// 固定悬停点启用时，起飞前允许的水平距离，单位 m。
 			double max_initial_xy_error{0.5};
-		};
-
-		struct EntryCommand
-		{
-			// PositionCommand 入口参考的最大世界系平移速度，单位 m/s。
-			double max_velocity{0.20};
-			// PositionCommand 入口参考的最大世界系平移加速度，单位 m/s^2。
-			double max_acceleration{0.30};
 		};
 
 		struct FixedHover
@@ -196,8 +202,8 @@ namespace PayloadMPC
 		RCReverse rc_reverse_;
 		RCMode rc_mode_;
 		Land land_;
+		Safety safety_;
 		Takeoff takeoff_;
-		EntryCommand entry_command_;
 		FixedHover fixed_hover_;
 
 		ForceEstimator force_estimator_param_;
@@ -314,12 +320,23 @@ namespace PayloadMPC
 			read_essential_param(nh, "land/switch_odom_z", land_.switch_odom_z);
 			read_essential_param(nh, "land/timeout", land_.timeout);
 
+			read_essential_param(nh, "safety/mpc_recovery_timeout", safety_.mpc_recovery_timeout);
+			read_essential_param(nh, "safety/mpc_recovery_success_cycles", safety_.mpc_recovery_success_cycles);
+			read_essential_param(nh, "safety/auto_land_retry_period", safety_.auto_land_retry_period);
+			if (!std::isfinite(safety_.mpc_recovery_timeout) ||
+				!std::isfinite(safety_.auto_land_retry_period) ||
+				safety_.mpc_recovery_timeout <= 0.0 ||
+				safety_.auto_land_retry_period <= 0.0 ||
+				safety_.mpc_recovery_success_cycles <= 0)
+			{
+				ROS_ERROR("[参数] safety 恢复参数和 AUTO.LAND 重试周期必须为正值。");
+				ROS_BREAK();
+			}
+
 			read_essential_param(nh, "takeoff/enabled", takeoff_.enabled);
 			read_essential_param(nh, "takeoff/target_z", takeoff_.target_z);
 			read_essential_param(nh, "takeoff/climb_rate", takeoff_.climb_rate);
 			read_essential_param(nh, "takeoff/max_initial_xy_error", takeoff_.max_initial_xy_error);
-			read_essential_param(nh, "entry_command/max_velocity", entry_command_.max_velocity);
-			read_essential_param(nh, "entry_command/max_acceleration", entry_command_.max_acceleration);
 			if (!std::isfinite(takeoff_.target_z) || takeoff_.target_z < 0.0 ||
 				!std::isfinite(takeoff_.climb_rate) || takeoff_.climb_rate <= 0.0 ||
 				!std::isfinite(takeoff_.max_initial_xy_error) || takeoff_.max_initial_xy_error < 0.0)
@@ -327,13 +344,6 @@ namespace PayloadMPC
 				ROS_ERROR("[参数] takeoff 参数无效。");
 				ROS_BREAK();
 			}
-			if (!std::isfinite(entry_command_.max_velocity) || entry_command_.max_velocity <= 0.0 ||
-				!std::isfinite(entry_command_.max_acceleration) || entry_command_.max_acceleration <= 0.0)
-			{
-				ROS_ERROR("[参数] entry_command 参数无效。");
-				ROS_BREAK();
-			}
-
 			read_essential_param(nh, "fixed_hover/enabled", fixed_hover_.enabled);
 			read_essential_param(nh, "fixed_hover/x", fixed_hover_.x);
 			read_essential_param(nh, "fixed_hover/y", fixed_hover_.y);
@@ -452,6 +462,9 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/USE_CONSTANT_MOMENT", force_estimator_param_.USE_CONSTANT_MOMENT);
 			read_essential_param(nh, "force_estimator/max_force", force_estimator_param_.max_force);
 			read_essential_param(nh, "force_estimator/max_applied_force", force_estimator_param_.max_applied_force);
+			read_essential_param(nh, "force_estimator/force_axis_gain_x", force_estimator_param_.force_axis_gain_x);
+			read_essential_param(nh, "force_estimator/force_axis_gain_y", force_estimator_param_.force_axis_gain_y);
+			read_essential_param(nh, "force_estimator/force_axis_gain_z", force_estimator_param_.force_axis_gain_z);
 			if (!std::isfinite(force_estimator_param_.max_force) ||
 				!std::isfinite(force_estimator_param_.max_applied_force) ||
 				force_estimator_param_.max_force <= 0.0 ||
@@ -459,6 +472,16 @@ namespace PayloadMPC
 				force_estimator_param_.max_applied_force > force_estimator_param_.max_force)
 			{
 				ROS_ERROR("[参数] force_estimator 限幅必须满足 0 < max_applied_force <= max_force。");
+				ROS_BREAK();
+			}
+			if (!std::isfinite(force_estimator_param_.force_axis_gain_x) ||
+				!std::isfinite(force_estimator_param_.force_axis_gain_y) ||
+				!std::isfinite(force_estimator_param_.force_axis_gain_z) ||
+				force_estimator_param_.force_axis_gain_x < 0.0 || force_estimator_param_.force_axis_gain_x > 1.0 ||
+				force_estimator_param_.force_axis_gain_y < 0.0 || force_estimator_param_.force_axis_gain_y > 1.0 ||
+				force_estimator_param_.force_axis_gain_z < 0.0 || force_estimator_param_.force_axis_gain_z > 1.0)
+			{
+				ROS_ERROR("[参数] force_axis_gain_x/y/z 必须为 [0, 1] 范围内的有限数值。");
 				ROS_BREAK();
 			}
 			read_essential_param(nh, "force_estimator/max_queue", force_estimator_param_.max_queue);

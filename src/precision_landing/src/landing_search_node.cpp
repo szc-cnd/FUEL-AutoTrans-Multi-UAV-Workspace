@@ -107,7 +107,7 @@ private:
   void loadConfiguration() {
     private_node_.param("marker/requested_id", requested_marker_id_, -1);
     private_node_.param("safety/max_image_odom_delta_sec",
-                        max_image_odom_delta_sec_, 0.08);
+                        max_image_odom_delta_sec_, 0.12);
     private_node_.param("safety/image_timeout_sec", image_timeout_sec_, 0.30);
     private_node_.param("safety/odom_timeout_sec", odom_timeout_sec_, 0.30);
     private_node_.param("safety/target_timeout_sec", target_timeout_sec_, 0.40);
@@ -151,7 +151,7 @@ private:
   void configureInterfaces() {
     std::string image_topic{"/UAV0/down_camera/image_raw"};
     std::string camera_info_topic{"/UAV0/down_camera/camera_info"};
-    std::string odom_topic{"/UAV0/fast_lio/Odometry"};
+    std::string odom_topic{"/UAV0/fast_lio/Odom_high_freq"};
     std::string mission_status_topic{"/UAV0/mission/task_status"};
     std::string landing_request_topic{"/UAV0/mission/landing_request"};
     std::string debug_image_topic{"/UAV0/landing/search/debug_image"};
@@ -674,7 +674,7 @@ private:
     ros::Time last_seen;
   };
   std::map<int, CandidateRecord> candidate_records_;
-  double max_image_odom_delta_sec_{0.08};
+  double max_image_odom_delta_sec_{0.12};
   double image_timeout_sec_{0.30};
   double odom_timeout_sec_{0.30};
   double target_timeout_sec_{0.40};

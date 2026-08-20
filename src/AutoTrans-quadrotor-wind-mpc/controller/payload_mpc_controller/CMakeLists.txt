@@ -118,19 +118,12 @@ catkin_add_nosetests(test/test_velocity_hard_constraint_static.py)
   catkin_add_nosetests(test/test_log_rate_policy_static.py)
   catkin_add_nosetests(test/test_takeoff_timeout_hover_static.py)
   catkin_add_nosetests(test/test_fsm_simplification_static.py)
-  catkin_add_gtest(test_entry_command_reference_limiter
-    test/test_position_command_limiter.cpp
-  )
-  if(TARGET test_entry_command_reference_limiter)
-    target_include_directories(test_entry_command_reference_limiter PRIVATE
-      include/payload_mpc_controller
-      ${EIGEN3_INCLUDE_DIR}
-    )
-  endif()
+  catkin_add_nosetests(test/test_cav0_sync_contract_static.py)
 endif()
 
 catkin_install_python(PROGRAMS
   scripts/autotrans_mpc_logger.py
+  scripts/generate_evo_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

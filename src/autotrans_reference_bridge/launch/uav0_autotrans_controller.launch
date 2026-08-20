@@ -4,7 +4,6 @@
   <!-- 双机入口通过环境变量改接降落仲裁器；单机入口继续直连MAVROS。 -->
   <arg name="setpoint_topic"
        default="$(optenv UAV0_AUTOTRANS_SETPOINT_TOPIC /UAV0/mavros/setpoint_raw/attitude)"/>
-  <arg name="trajectory_timeout" default="2.0"/>
 
   <!-- FUEL 与搜索降落 Diff 先分别转换，再按任务阶段向 AutoTrans 唯一输出。 -->
   <node pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
@@ -12,7 +11,6 @@
     <param name="input_topic" value="/UAV0/planning/bspline"/>
     <param name="output_topic" value="/UAV0/fuel/autotrans_trajectory"/>
     <param name="frame_id" value="UAV0/camera_init"/>
-    <param name="trajectory_timeout" value="$(arg trajectory_timeout)"/>
   </node>
 
   <node pkg="autotrans_reference_bridge" type="reference_bridge_node"
@@ -33,7 +31,7 @@
 
   <!-- AutoTrans 使用 UAV0 FAST-LIO 位姿、UAV0 MAVROS 传感器和控制接口。 -->
   <include file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
-    <arg name="odom_topic" value="/UAV0/fast_lio/Odometry"/>
+    <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="imu_topic" value="/UAV0/mavros/imu/data"/>
     <arg name="force_attitude_odom_topic" value="/UAV0/mavros/local_position/odom"/>
     <arg name="state_topic" value="/UAV0/mavros/state"/>

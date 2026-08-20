@@ -32,10 +32,15 @@ class FsmSimplificationStaticTest(unittest.TestCase):
         self.assertIn("mode_input_valid = true", feed)
         self.assertNotIn("is_manual_mode = true", feed)
 
-    def test_manual_state_does_not_publish_low_thrust_placeholder(self):
-        self.assertNotIn("publish_manual_ctrl", self.fsm_header)
-        self.assertNotIn("publish_manual_ctrl", self.fsm_source)
-        self.assertIn("publishTakeoffPrestream", self.fsm_source)
+    def test_manual_prestream_matches_cav1_suppression_pattern(self):
+        self.assertIn("publish_manual_ctrl", self.fsm_header)
+        self.assertIn("suppress_manual_setpoint_", self.fsm_header)
+        self.assertIn("manual_setpoint_published_", self.fsm_header)
+        self.assertNotIn("publishTakeoffPrestream", self.fsm_source)
+        manual_publish = self.fsm_source.split("void MPCFSM::publish_manual_ctrl", 1)[1]
+        manual_publish = manual_publish.split("void MPCFSM::handleOffboardLoss", 1)[0]
+        self.assertIn("msg.thrust = 0.01", manual_publish)
+        self.assertIn('current_state.mode == "OFFBOARD"', manual_publish)
 
     def test_odom_failure_uses_bounded_last_safe_output(self):
         self.assertIn("startOdomFailsafe", self.fsm_header)
@@ -44,11 +49,11 @@ class FsmSimplificationStaticTest(unittest.TestCase):
         self.assertIn("last_safe_setpoint_", self.fsm_header)
         self.assertNotIn("state_before_offboard", self.input_header)
 
-    def test_px4_offboard_failsafe_parameters_are_checked(self):
-        self.assertIn("mavros_msgs/ParamGet", self.node_source)
-        self.assertIn("COM_OBL_RC_ACT", self.node_source)
-        self.assertIn("COM_OF_LOSS_T", self.node_source)
-        self.assertIn("param_get_service", self.launch)
+    def test_startup_matches_cav1_without_px4_parameter_gate(self):
+        self.assertNotIn("mavros_msgs/ParamGet", self.node_source)
+        self.assertNotIn("COM_OBL_RC_ACT", self.node_source)
+        self.assertNotIn("COM_OF_LOSS_T", self.node_source)
+        self.assertNotIn("param_get_service", self.launch)
 
     def test_auto_land_waits_for_actual_px4_mode(self):
         land_case = self.fsm_source.split("case AUTO_LAND:", 1)[1]
