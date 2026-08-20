@@ -478,6 +478,7 @@ void TaskSearchManager::activateRcSearchLanding(const ros::Time& stamp) {
   exit_pose_pub_.publish(final_exit_pose);
 
   rc_search_landing_triggered_ = true;
+  rc_search_landing_start_requested_ = true;
   rc_search_landing_armed_ = false;
   rc_search_landing_high_since_ = ros::Time(0);
   publishSearchState();
@@ -486,6 +487,12 @@ void TaskSearchManager::activateRcSearchLanding(const ros::Time& stamp) {
             rc_search_landing_channel_ + 1, latest_robot_pos_.x(),
             latest_robot_pos_.y(), latest_robot_pos_.z(),
             latest_robot_yaw_ * 180.0 / M_PI);
+}
+
+bool TaskSearchManager::consumeRcSearchLandingStartRequest() {
+  if (!rc_search_landing_start_requested_) return false;
+  rc_search_landing_start_requested_ = false;
+  return true;
 }
 
 void TaskSearchManager::setMap(const std::shared_ptr<SDFMap>& map) {

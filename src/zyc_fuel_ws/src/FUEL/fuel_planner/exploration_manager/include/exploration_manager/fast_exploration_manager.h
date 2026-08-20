@@ -39,6 +39,7 @@ public:
   void reportTrajectoryCollision();
   // 2026-07-22: 由FSM里程计回调连续更新任务航迹，旧路判断不再只依赖稀疏重规划时刻。
   void updateMissionOdometry(const Vector3d& pos, double yaw);
+  bool consumeRcSearchLandingStartRequest();
   bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
   bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }

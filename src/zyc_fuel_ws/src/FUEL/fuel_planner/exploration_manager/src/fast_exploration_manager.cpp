@@ -2590,6 +2590,11 @@ void FastExplorationManager::updateMissionOdometry(const Vector3d& pos, double y
   if (task_search_manager_) task_search_manager_->updateRobotPose(pos, yaw);
 }
 
+bool FastExplorationManager::consumeRcSearchLandingStartRequest() {
+  return task_search_manager_ &&
+         task_search_manager_->consumeRcSearchLandingStartRequest();
+}
+
 bool FastExplorationManager::detectMappedTurnDuringExecution(
     double yaw, Vector3d& direction) {
   if (!turn_in_place_enabled_ || !mission_entered_search_region_ ||

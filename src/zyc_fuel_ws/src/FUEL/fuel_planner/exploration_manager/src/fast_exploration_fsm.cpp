@@ -193,7 +193,16 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
     }
 
     case WAIT_TRIGGER: {
-      // Do nothing but wait for trigger
+      // CH9 是搜索降落的完整人工入口：无需先发送普通航点。
+      if (expl_manager_->consumeRcSearchLandingStartRequest()) {
+        fd_->trigger_ = true;
+        fd_->static_state_ = true;
+        next_plan_retry_time_ = ros::Time(0);
+        transitState(PLAN_TRAJ, "CH9 search-landing trigger");
+        ROS_ERROR("[exit_mission] CH9 started search landing directly from WAIT_TRIGGER.");
+        break;
+      }
+      // 普通通道搜索仍等待航点触发。
       ROS_WARN_THROTTLE(1.0, "wait for trigger.");
       break;
     }

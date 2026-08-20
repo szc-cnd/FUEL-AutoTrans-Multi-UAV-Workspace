@@ -62,6 +62,8 @@ public:
   // 2026-07-16: 仍有frontier/viewpoint时明确撤销“搜索耗尽”计时，失败冷却不能被误当成终点条件。
   void reportSearchCoverageAvailable();
   bool landingRequested() const { return landing_requested_; }
+  // CH9 已完成低->高确认时，允许 FUEL 在没有外部航点的情况下启动一次规划。
+  bool consumeRcSearchLandingStartRequest();
   bool stage3Active() const { return mission_stage_ != SEARCH_CORRIDOR; }
   // 普通FUEL搜索期间入口始终是单向门，防止开阔的起飞区frontier把飞机吸回门外；
   // 只有最终出口状态机生成的专用穿门轨迹可以临时绕过入口半平面。
@@ -241,6 +243,7 @@ private:
   double rc_search_landing_hold_sec_{0.5};
   bool rc_search_landing_armed_{false};
   bool rc_search_landing_triggered_{false};
+  bool rc_search_landing_start_requested_{false};
   ros::Time rc_search_landing_high_since_;
 
   // 2026-07-13: 出口候选需要跨多次地图更新稳定，不能由单帧噪声直接触发第三阶段。
