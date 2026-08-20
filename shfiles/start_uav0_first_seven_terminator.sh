@@ -13,6 +13,7 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+NETWORK_SETUP="${SCRIPT_DIR}/configure_dual_uav_ros_network.sh"
 ROS_SETUP="${UAV0_FIRST_SEVEN_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
 LAYOUT_CONFIG="${UAV0_FIRST_SEVEN_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav0_first_seven.conf}"
 RUN_ID="${UID:-$(id -u)}"
@@ -75,6 +76,14 @@ source_ros_environment() {
   # shellcheck disable=SC1091
   source "${MATCH_WS}/devel/setup.bash"
   set -u
+
+  if [[ ! -r "${NETWORK_SETUP}" ]]; then
+    log "找不到双机 ROS 网络配置：${NETWORK_SETUP}"
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  source "${NETWORK_SETUP}"
+  configure_dual_uav_ros_network uav0 || return 1
 
   # 与规划器保持一致，使用 ROS 默认的 ~/.ros/log/。
   unset ROS_LOG_DIR
