@@ -1,14 +1,31 @@
 <launch>
     <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
     <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch"/>
+    <!-- UAV1 复用同一套搜索/精降节点；相机驱动和 UAV1/down_camera 话题由机载入口提供。 -->
+    <include file="$(find precision_landing)/launch/precision_landing.launch">
+        <arg name="vehicle_ns" value="UAV1"/>
+        <arg name="image_topic" value="/UAV1/down_camera/image_raw"/>
+        <arg name="camera_info_topic" value="/UAV1/down_camera/camera_info"/>
+        <arg name="odometry_topic" value="/UAV1/fast_lio/Odometry"/>
+        <arg name="mission_status_topic" value="/UAV0/mission/task_status"/>
+        <arg name="landing_marker_world_topic" value="/UAV1/mission/detection/final_aruco"/>
+        <arg name="landing_search_config"
+             value="$(find precision_landing)/config/landing_search.yaml"/>
+        <arg name="enable_front_aruco_hint" value="false"/>
+        <arg name="require_platform_assignment" value="true"/>
+    </include>
     <!-- 2026-07-16: 后机不运行第二套FUEL；执行门点、持续滚动内部接力点和真实终点。 -->
     <!-- 2026-07-27: 后机接力链路的全部双机话题前缀统一为 UAV0/UAV1。 -->
     <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odometry"/>
     <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odometry"/>
     <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
-    <arg name="follower_offset_x" default="-1.0"/>
-    <arg name="follower_offset_y" default="0.0"/>
-    <arg name="follower_offset_z" default="0.0"/>
+    <arg name="frame_alignment_config"
+         default="$(find exploration_control)/config/dual_uav_frame_alignment.yaml"/>
+
+    <!-- TF、跨机航点和双机距离判断只读取这一份对齐配置。 -->
+    <rosparam command="load" file="$(arg frame_alignment_config)"/>
+    <node pkg="exploration_control" type="dual_uav_frame_alignment"
+          name="dual_uav_frame_alignment" output="screen" required="true"/>
 
     <node pkg="exploration_control" type="leader_safe_path_follower"
           name="leader_safe_path_follower" output="screen">
@@ -35,16 +52,14 @@
         <param name="leader_landing_request_topic" value="/UAV0/mission/landing_request"/>
         <param name="follower_landing_target_topic" value="/UAV1/mission/landing_target"/>
         <param name="follower_landing_request_topic" value="/UAV1/mission/landing_request"/>
+        <param name="release_uav1_topic" value="/dual_uav_landing/release_uav1"/>
+        <param name="follower_assigned_target_topic" value="/UAV1/landing/assigned_target"/>
         <!-- 2026-07-15: workspace_lock 只在门确认后锁存发布，比 entry_pose 的搜索期参考点可靠。 -->
         <param name="door_pose_topic" value="/UAV0/corridor_search/workspace_lock"/>
         <!-- 2026-07-28: 仅接收前机达到锁门里程后发布的最终出口；后机在前机出门后按入口式离散点执行。 -->
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
         <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
-        <param name="world_frame" value="world"/>
-        <param name="follower_offset_x" value="$(arg follower_offset_x)"/>
-        <param name="follower_offset_y" value="$(arg follower_offset_y)"/>
-        <param name="follower_offset_z" value="$(arg follower_offset_z)"/>
         <!-- 2026-07-24: 出口前沿前机实飞XY折线保持0.70m滞后；后机高度独立固定0.65m。 -->
         <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
         <param name="continuous_follow_before_exit" value="false"/>
@@ -67,7 +82,7 @@
         <param name="emergency_retreat_speed" value="0.30"/>
         <!-- 2026-07-16: 后机落点取前机安全轨迹末端后方约0.5m；终点模式关闭两机距离条件。 -->
         <param name="terminal_landing_spacing" value="0.50"/>
-        <param name="terminal_approach_height" value="0.60"/>
+        <param name="terminal_approach_height" value="2.00"/>
         <param name="terminal_arrive_radius" value="0.25"/>
         <param name="terminal_arrive_z_tolerance" value="0.15"/>
         <param name="terminal_arrive_dwell" value="1.0"/>
@@ -120,7 +135,7 @@
         <param name="obstacle_z_margin" value="0.25"/>
         <param name="obstacle_min_points" value="3"/>
         <!-- 2026-07-28: 后机订阅LDOT结构化预测；合格摆球跨端点保留1.5s，预测相交时等待而不是随机横移。 -->
-        <param name="dynamic_obstacle_topic" value="/UAV1/ldot_detector/dynamic_obstacles"/>
+        <param name="dynamic_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>
         <param name="dynamic_obstacle_retention" value="1.50"/>
         <param name="dynamic_obstacle_safety_radius" value="0.35"/>
         <param name="dynamic_obstacle_z_margin" value="0.18"/>

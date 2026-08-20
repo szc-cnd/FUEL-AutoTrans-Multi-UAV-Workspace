@@ -1,0 +1,12 @@
+dual_uav_frame_alignment:
+  # UAV0 的 FAST-LIO 初始坐标系作为双机公共任务坐标系。
+  mission_frame: world
+  follower_frame: UAV1/camera_init
+
+  # world -> UAV1/camera_init 的刚体变换。UAV1 在 UAV0 后方时 x 为负。
+  # 修改后需要重启 leader_safe_path_follower.launch。
+  follower:
+    x: -1.20
+    y: 0.0
+    z: 0.0
+    yaw_rad: 0.0

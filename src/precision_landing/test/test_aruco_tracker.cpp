@@ -95,6 +95,18 @@ TEST(ArucoTracker, RequestedIdRejectsDifferentMarker) {
   EXPECT_EQ(tracker.lockedId(), -1);
 }
 
+TEST(ArucoTracker, ExcludedIdIsRejected) {
+  precision_landing::ArucoTrackerConfig config = testConfig();
+  config.stable_frames = 1;
+  precision_landing::ArucoTracker tracker(config);
+
+  const precision_landing::TargetObservation observation = tracker.process(
+      makeMarkerImage(37), cameraMatrix(), distortion(), 0.0, -1, true, 37);
+
+  EXPECT_FALSE(observation.valid);
+  EXPECT_EQ(tracker.lockedId(), -1);
+}
+
 TEST(ArucoTracker, LockedIdIsNotReplacedByAnotherVisibleMarker) {
   precision_landing::ArucoTracker tracker(testConfig());
   processFrames(&tracker, makeMarkerImage(37), 5);

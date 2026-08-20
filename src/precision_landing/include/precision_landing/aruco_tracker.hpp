@@ -17,6 +17,12 @@ struct ArucoTrackerConfig {
   int stable_frames{5};
 };
 
+struct DetectedTarget {
+  int id{-1};
+  Eigen::Vector3d position_camera{Eigen::Vector3d::Zero()};
+  double score{0.0};
+};
+
 bool markerTiltWithinLimit(const cv::Vec3d& rvec,
                            const cv::Vec3d& tvec,
                            double max_tilt_deg);
@@ -30,12 +36,14 @@ class ArucoTracker {
                             const cv::Mat& distortion,
                             double stamp_sec,
                             int requested_id,
-                            bool allow_lock_mutation = true);
+                            bool allow_lock_mutation = true,
+                            int excluded_id = -1);
 
   int lockedId() const;
   void reset();
   void beginReacquisition();
   const cv::Mat& debugImage() const;
+  const std::vector<DetectedTarget>& detectedTargets() const;
 
  private:
   void breakPendingAcquisition();
@@ -50,6 +58,7 @@ class ArucoTracker {
   bool has_last_position_{false};
   Eigen::Vector3d last_position_camera_{Eigen::Vector3d::Zero()};
   cv::Mat debug_image_;
+  std::vector<DetectedTarget> detected_targets_;
 };
 
 }  // namespace precision_landing

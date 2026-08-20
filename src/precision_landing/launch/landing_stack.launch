@@ -7,6 +7,7 @@
        default="file://$(env HOME)/.ros/camera_info/down_camera.yaml"/>
   <arg name="enable_down_camera" default="true"/>
   <arg name="enable_precision_landing" default="true"/>
+  <arg name="enable_front_aruco_hint" default="false"/>
 
   <include if="$(arg enable_down_camera)"
            file="$(find precision_landing)/launch/down_camera.launch">
@@ -18,5 +19,6 @@
   <include if="$(arg enable_precision_landing)"
            file="$(find precision_landing)/launch/precision_landing.launch">
     <arg name="vehicle_ns" value="$(arg vehicle_ns)"/>
+    <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)"/>
   </include>
 </launch>

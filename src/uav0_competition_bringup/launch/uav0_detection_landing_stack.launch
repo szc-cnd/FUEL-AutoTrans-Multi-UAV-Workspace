@@ -8,6 +8,8 @@
   <arg name="enable_color_tag" default="true" />
   <arg name="enable_qr" default="true" />
   <arg name="enable_thermal" default="true" />
+  <!-- 已完成热成像到 D435 单应矩阵标定，默认同时进行深度融合。 -->
+  <arg name="enable_thermal_d435_fusion" default="true" />
   <arg name="enable_camera_body_tf" default="true" />
   <arg name="enable_target_reporting" default="true" />
   <!-- 留空时由 target_reporting 按当天日期生成 onboard_test_YYYYMMDD。 -->
@@ -16,11 +18,18 @@
   <arg name="target_rviz_open_rviz" default="true" />
   <arg name="enable_down_camera" default="false" />
   <arg name="enable_precision_landing" default="false" />
+  <arg name="enable_dual_uav_landing_coordinator" default="true" />
+  <!-- 比赛模式使用D435粗定位加速；最终降落仍只接受下视final_aruco。 -->
+  <arg name="enable_front_aruco_hint" default="true" />
   <arg name="landing_vehicle_ns" default="UAV0" />
 
   <arg name="realsense_align_depth" default="true" />
   <arg name="realsense_enable_color" default="true" />
   <arg name="realsense_enable_depth" default="true" />
+  <arg name="realsense_color_width" default="1280" />
+  <arg name="realsense_color_height" default="720" />
+  <arg name="realsense_depth_width" default="1280" />
+  <arg name="realsense_depth_height" default="720" />
   <!-- D435 点云只用于 RViz 可视化，不参与检测或规划决策。 -->
   <arg name="realsense_enable_pointcloud" default="true" />
   <!-- 当前 FAST-LIO 已发布 UAV0/camera_init -> UAV0/body，默认不重复桥接里程计 TF。 -->
@@ -44,6 +53,10 @@
     <arg name="align_depth" value="$(arg realsense_align_depth)" />
     <arg name="enable_color" value="$(arg realsense_enable_color)" />
     <arg name="enable_depth" value="$(arg realsense_enable_depth)" />
+    <arg name="color_width" value="$(arg realsense_color_width)" />
+    <arg name="color_height" value="$(arg realsense_color_height)" />
+    <arg name="depth_width" value="$(arg realsense_depth_width)" />
+    <arg name="depth_height" value="$(arg realsense_depth_height)" />
     <arg name="enable_pointcloud" value="$(arg realsense_enable_pointcloud)" />
   </include>
 
@@ -55,7 +68,9 @@
 
   <!-- thermal_d435_system 同时启动 UVC 热源检测和 D435 深度融合。 -->
   <include if="$(arg enable_thermal)"
-           file="$(find uvc_ubuntu)/launch/thermal_d435_system.launch" />
+           file="$(find uvc_ubuntu)/launch/thermal_d435_system.launch">
+    <arg name="enable_fusion" value="$(arg enable_thermal_d435_fusion)" />
+  </include>
 
   <!-- 默认只发布机体到相机的静态外参；FAST-LIO 自行提供世界到机体的 TF。 -->
   <include if="$(arg enable_camera_body_tf)"
@@ -91,5 +106,14 @@
     <arg name="image_topic" value="$(arg landing_image_topic)" />
     <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
     <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
+    <arg name="landing_search_config"
+         value="$(find precision_landing)/config/landing_search.yaml" />
+    <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)" />
+    <arg name="require_platform_assignment"
+         value="$(arg enable_dual_uav_landing_coordinator)" />
   </include>
+
+  <!-- 只在前机启动一份；通过 ROS/WiFi 话题协调两机使用不同 ArUco 平台。 -->
+  <include if="$(arg enable_dual_uav_landing_coordinator)"
+           file="$(find precision_landing)/launch/dual_uav_landing_coordinator.launch" />
 </launch>

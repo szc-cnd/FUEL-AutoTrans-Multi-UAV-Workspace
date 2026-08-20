@@ -1,0 +1,52 @@
+topics:
+  image: /camera/color/image_raw
+  camera_info: /camera/color/camera_info
+  aligned_depth: /camera/aligned_depth_to_color/image_raw
+  odometry: /UAV0/fast_lio/Odometry
+  mission_status: /UAV0/mission/task_status
+  hint_world: /UAV0/landing/front_aruco_hint
+  locked_id: /UAV0/landing/front/locked_id
+  status: /UAV0/landing/front/status
+  debug_image: /UAV0/landing/front/debug_image
+
+frames:
+  # 只用静态TF把D435光学点转到FAST-LIO机体原点；世界位姿直接取同步里程计。
+  body: UAV0/body
+  output_world: world
+  camera_optical: camera_color_optical_frame
+
+marker:
+  size_m: 0.60
+  requested_id: -1
+  stable_frames: 5
+  max_reprojection_error_px: 5.0
+  min_distance_m: 0.30
+  max_distance_m: 6.0
+  max_position_jump_m: 0.80
+  # 前视相机斜看地面码，不能沿用下视相机的60度限制。
+  max_tilt_deg: 85.0
+
+world_filter:
+  stable_samples: 5
+  max_sample_gap_sec: 0.25
+  max_position_jump_m: 0.50
+  max_spread_m: 0.30
+
+depth_validation:
+  required: true
+  scale_16uc1: 0.001
+  max_time_delta_sec: 0.10
+  search_radius_px: 5
+  min_depth_m: 0.25
+  max_depth_m: 6.0
+  max_absolute_error_m: 0.35
+  max_relative_error: 0.20
+
+safety:
+  image_timeout_sec: 0.30
+  max_header_future_sec: 0.05
+  tf_timeout_sec: 0.05
+  max_image_odom_delta_sec: 0.08
+
+mission:
+  require_stage_gate: true

@@ -5,14 +5,78 @@
   <arg name="camera_info_topic" default="$(arg topic_prefix)/down_camera/camera_info"/>
   <arg name="local_pose_topic" default="$(arg topic_prefix)/mavros/local_position/pose"/>
   <arg name="mavros_state_topic" default="$(arg topic_prefix)/mavros/state"/>
+  <arg name="odometry_topic" default="$(arg topic_prefix)/fast_lio/Odometry"/>
   <arg name="trigger_topic" default="$(arg topic_prefix)/need_to_land"/>
   <arg name="target_id_topic" default="$(arg topic_prefix)/landing/target_id"/>
+  <arg name="assigned_id_topic" default="$(arg topic_prefix)/landing/assigned_id"/>
+  <arg name="excluded_id_topic" default="$(arg topic_prefix)/landing/excluded_id"/>
+  <arg name="candidates_topic" default="$(arg topic_prefix)/landing/search/candidates"/>
   <arg name="setpoint_topic" default="$(arg topic_prefix)/mavros/setpoint_raw/local"/>
+  <arg name="attitude_setpoint_topic"
+       default="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
   <arg name="set_mode_service" default="$(arg topic_prefix)/mavros/set_mode"/>
   <arg name="enable_setpoint_arbiter" default="true"/>
   <arg name="controller_position_input" default="$(arg topic_prefix)/control/position_setpoint"/>
   <arg name="controller_attitude_input" default="$(arg topic_prefix)/control/attitude_setpoint"/>
   <arg name="landing_setpoint_input" default="$(arg topic_prefix)/landing/setpoint_raw/local"/>
+  <arg name="enable_landing_search" default="true"/>
+  <arg name="require_platform_assignment" default="false"/>
+  <arg name="enable_front_aruco_hint" default="false"/>
+  <arg name="front_image_topic" default="/camera/color/image_raw"/>
+  <arg name="front_camera_info_topic" default="/camera/color/camera_info"/>
+  <arg name="front_depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
+  <arg name="front_aruco_hint_topic" default="$(arg topic_prefix)/landing/front_aruco_hint"/>
+  <arg name="mission_status_topic" default="$(arg topic_prefix)/mission/task_status"/>
+  <arg name="mission_landing_request_topic" default="$(arg topic_prefix)/mission/landing_request"/>
+  <arg name="landing_marker_world_topic" default="$(arg topic_prefix)/mission/detection/final_aruco"/>
+  <!-- UAV0/UAV1 共用同一份下视相机到机体外参；数值文件可由入口统一替换。 -->
+  <arg name="landing_search_config"
+       default="$(find precision_landing)/config/landing_search.yaml"/>
+
+  <!--
+    下视 ArUco 搜索节点只在任务状态进入门外搜索后发布平台世界坐标；
+    规划器到达平台正上方并发布 landing_request 后，它再二次校验并触发精确降落。
+  -->
+  <node if="$(arg enable_landing_search)" pkg="precision_landing"
+        type="landing_search_node" name="landing_search_node"
+        ns="$(arg vehicle_ns)" output="screen" required="true">
+    <rosparam command="load"
+              file="$(arg landing_search_config)"/>
+    <param name="topics/image" value="$(arg image_topic)"/>
+    <param name="topics/camera_info" value="$(arg camera_info_topic)"/>
+    <param name="topics/odometry" value="$(arg odometry_topic)"/>
+    <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
+    <param name="topics/marker_world" value="$(arg landing_marker_world_topic)"/>
+    <param name="topics/landing_request" value="$(arg mission_landing_request_topic)"/>
+    <param name="topics/landing_trigger" value="$(arg trigger_topic)"/>
+    <param name="topics/filtered_target" value="$(arg topic_prefix)/landing/search/target_world"/>
+    <param name="topics/locked_id" value="$(arg topic_prefix)/landing/search/locked_id"/>
+    <param name="topics/target_id" value="$(arg target_id_topic)"/>
+    <param name="topics/assigned_id" value="$(arg assigned_id_topic)"/>
+    <param name="topics/excluded_id" value="$(arg excluded_id_topic)"/>
+    <param name="topics/candidates" value="$(arg candidates_topic)"/>
+    <param name="mission/require_platform_assignment"
+           value="$(arg require_platform_assignment)"/>
+    <param name="topics/status" value="$(arg topic_prefix)/landing/search/status"/>
+    <param name="topics/debug_image" value="$(arg topic_prefix)/landing/search/debug_image"/>
+  </node>
+
+  <!-- 前视D435只发布粗定位提示；它不能写final_aruco，也不能直接触发降落。 -->
+  <node if="$(arg enable_front_aruco_hint)" pkg="precision_landing"
+        type="front_aruco_hint_node" name="front_aruco_hint_node"
+        ns="$(arg vehicle_ns)" output="screen">
+    <rosparam command="load"
+              file="$(find precision_landing)/config/front_aruco_hint.yaml"/>
+    <param name="topics/image" value="$(arg front_image_topic)"/>
+    <param name="topics/camera_info" value="$(arg front_camera_info_topic)"/>
+    <param name="topics/aligned_depth" value="$(arg front_depth_topic)"/>
+    <param name="topics/odometry" value="$(arg odometry_topic)"/>
+    <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
+    <param name="topics/hint_world" value="$(arg front_aruco_hint_topic)"/>
+    <param name="topics/locked_id" value="$(arg topic_prefix)/landing/front/locked_id"/>
+    <param name="topics/status" value="$(arg topic_prefix)/landing/front/status"/>
+    <param name="topics/debug_image" value="$(arg topic_prefix)/landing/front/debug_image"/>
+  </node>
 
   <node if="$(arg enable_setpoint_arbiter)" pkg="precision_landing"
         type="landing_setpoint_arbiter_node" name="landing_setpoint_arbiter"
@@ -22,7 +86,7 @@
     <param name="controller_attitude_input" value="$(arg controller_attitude_input)"/>
     <param name="landing_position_input" value="$(arg landing_setpoint_input)"/>
     <param name="mavros_position_output" value="$(arg setpoint_topic)"/>
-    <param name="mavros_attitude_output" value="$(arg topic_prefix)/mavros/setpoint_raw/attitude"/>
+    <param name="mavros_attitude_output" value="$(arg attitude_setpoint_topic)"/>
     <param name="active_topic" value="$(arg topic_prefix)/landing/control_active"/>
     <param name="owner_topic" value="$(arg topic_prefix)/landing/control_owner"/>
   </node>
@@ -48,5 +112,18 @@
     <param name="topics/error_xy" value="$(arg topic_prefix)/landing/error_xy"/>
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/debug_image"/>
     <param name="topics/success" value="$(arg topic_prefix)/landing/success"/>
+  </node>
+
+  <!-- RViz只订阅统一下视画面：触发精降前显示搜索标注，触发后显示精降标注。 -->
+  <node if="$(arg enable_landing_search)" pkg="precision_landing"
+        type="landing_debug_image_mux_node" name="landing_debug_image_mux"
+        ns="$(arg vehicle_ns)" output="screen">
+    <param name="search_image_topic"
+           value="$(arg topic_prefix)/landing/search/debug_image"/>
+    <param name="precision_image_topic"
+           value="$(arg topic_prefix)/landing/debug_image"/>
+    <param name="trigger_topic" value="$(arg trigger_topic)"/>
+    <param name="output_topic"
+           value="$(arg topic_prefix)/landing/combined_debug_image"/>
   </node>
 </launch>

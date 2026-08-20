@@ -23,12 +23,11 @@
     <param name="timeouts/state_sec" value="2.0"/>
     <param name="state_machine/acquire_stable_sec" value="0.05"/>
     <param name="state_machine/align_stable_sec" value="0.05"/>
-    <param name="state_machine/high_height_m" value="3.0"/>
-    <param name="state_machine/final_height_m" value="2.5"/>
-    <param name="state_machine/mid_align_error_m" value="0.20"/>
-    <param name="state_machine/final_align_error_m" value="0.20"/>
+    <param name="state_machine/high_height_m" value="2.0"/>
+    <param name="state_machine/high_align_error_m" value="0.20"/>
     <param name="state_machine/auto_land_height_m" value="2.0"/>
-    <param name="state_machine/near_ground_loss_height_m" value="2.25"/>
+    <param name="state_machine/auto_land_error_m" value="0.20"/>
+    <param name="stages/fixed_xy_descent/cutoff_height_m" value="0.30"/>
   </node>
 
   <test test-name="precision_landing_node_test" pkg="precision_landing"

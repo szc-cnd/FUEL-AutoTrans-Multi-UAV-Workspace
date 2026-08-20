@@ -1,0 +1,97 @@
+<launch>
+  <!--
+    UAV0 前视/下视 ArUco 纯观察入口。
+    只启动相机、静态外参和检测节点，不启动 MAVROS、Diff、控制仲裁器或精降控制器。
+    没有 FAST-LIO 里程计时仍显示像素检测框和 ID，但不输出可靠世界坐标。
+  -->
+  <arg name="open_views" default="true" />
+  <arg name="odometry_topic" default="/UAV0/fast_lio/Odometry" />
+
+  <arg name="down_camera_device"
+       default="/dev/v4l/by-id/usb-Generic_USB_Camera_20000001-video-index0" />
+  <arg name="down_camera_info_url"
+       default="file://$(env HOME)/.ros/camera_info/down_camera.yaml" />
+  <arg name="camera_body_tf_calibration_file"
+       default="$(env HOME)/handeye_calibration/body_camera_03.yaml" />
+
+  <!-- 前视 D435：彩色图和对齐深度用于 ArUco + 深度一致性检查。 -->
+  <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+    <arg name="align_depth" value="true" />
+    <arg name="enable_color" value="true" />
+    <arg name="enable_depth" value="true" />
+    <arg name="color_width" value="1280" />
+    <arg name="color_height" value="720" />
+    <arg name="depth_width" value="1280" />
+    <arg name="depth_height" value="720" />
+    <arg name="enable_pointcloud" value="false" />
+  </include>
+
+  <include file="$(find target_reporting)/launch/camera_body_tf.launch">
+    <arg name="enable_odom_tf" value="false" />
+    <arg name="calibration_file" value="$(arg camera_body_tf_calibration_file)" />
+    <arg name="parent_frame" value="UAV0/body" />
+    <arg name="child_frame" value="camera_link" />
+  </include>
+
+  <!-- 下视 USB 相机。 -->
+  <include file="$(find precision_landing)/launch/down_camera.launch">
+    <arg name="vehicle_ns" value="UAV0" />
+    <arg name="video_device" value="$(arg down_camera_device)" />
+    <arg name="camera_info_url" value="$(arg down_camera_info_url)" />
+  </include>
+
+  <!-- 下视搜索识别：所有任务输出重映射到 observer，不能触发正式降落。 -->
+  <node pkg="precision_landing" type="landing_search_node"
+        name="down_aruco_observer" ns="UAV0" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find precision_landing)/config/landing_search.yaml" />
+    <param name="mission/require_stage_gate" value="false" />
+    <param name="topics/odometry" value="$(arg odometry_topic)" />
+    <param name="topics/marker_world"
+           value="/UAV0/aruco_observer/down/marker_world" />
+    <param name="topics/landing_request"
+           value="/UAV0/aruco_observer/disabled_landing_request" />
+    <param name="topics/landing_trigger"
+           value="/UAV0/aruco_observer/disabled_landing_trigger" />
+    <param name="topics/filtered_target"
+           value="/UAV0/aruco_observer/down/target_world" />
+    <param name="topics/locked_id"
+           value="/UAV0/aruco_observer/down/locked_id" />
+    <param name="topics/target_id"
+           value="/UAV0/aruco_observer/down/target_id" />
+    <param name="topics/assigned_id"
+           value="/UAV0/aruco_observer/down/assigned_id" />
+    <param name="topics/excluded_id"
+           value="/UAV0/aruco_observer/down/excluded_id" />
+    <param name="topics/candidates"
+           value="/UAV0/aruco_observer/down/candidates" />
+    <param name="topics/status"
+           value="/UAV0/aruco_observer/down/status" />
+    <param name="topics/debug_image"
+           value="/UAV0/aruco_observer/down/debug_image" />
+  </node>
+
+  <!-- 前视粗定位识别：只向 observer 话题发布，不接入正式任务。 -->
+  <node pkg="precision_landing" type="front_aruco_hint_node"
+        name="front_aruco_observer" ns="UAV0" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find precision_landing)/config/front_aruco_hint.yaml" />
+    <param name="mission/require_stage_gate" value="false" />
+    <param name="topics/odometry" value="$(arg odometry_topic)" />
+    <param name="topics/hint_world"
+           value="/UAV0/aruco_observer/front/hint_world" />
+    <param name="topics/locked_id"
+           value="/UAV0/aruco_observer/front/locked_id" />
+    <param name="topics/status"
+           value="/UAV0/aruco_observer/front/status" />
+    <param name="topics/debug_image"
+           value="/UAV0/aruco_observer/front/debug_image" />
+  </node>
+
+  <node if="$(arg open_views)" pkg="rqt_image_view" type="rqt_image_view"
+        name="front_aruco_observer_view"
+        args="/UAV0/aruco_observer/front/debug_image" output="screen" />
+  <node if="$(arg open_views)" pkg="rqt_image_view" type="rqt_image_view"
+        name="down_aruco_observer_view"
+        args="/UAV0/aruco_observer/down/debug_image" output="screen" />
+</launch>

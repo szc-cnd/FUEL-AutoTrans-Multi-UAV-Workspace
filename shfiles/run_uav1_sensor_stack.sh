@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# UAV1 传感器链路启动器：启动 MAVROS、MID360、FAST-LIO 或精确降落。
+# UAV1 传感器链路启动器：启动 MAVROS、MID360、FAST-LIO 或下视相机。
 # 不启动控制器、不自动解锁、不切换 OFFBOARD，也不发布目标点。
 
 set -eu
@@ -27,8 +27,8 @@ usage()
   mavros  启动 /UAV1/mavros，并设置 IMU、姿态、里程计和 ESC 频率。
   mid360  启动 /UAV1/livox/lidar 和 /UAV1/livox/imu。
   fastlio 启动 /UAV1/fast_lio 下的 FAST-LIO 话题。
-  landing 启动 /UAV1/down_camera 和 /UAV1/precision_landing_node；
-          只监听 /UAV1/need_to_land，不会自动触发降落。
+  landing 只启动 /UAV1/down_camera；搜索和精降节点由
+          leader_safe_path_follower.launch 统一启动，避免重复节点。
 EOF
 }
 
@@ -139,11 +139,12 @@ run_landing()
     [ -r "$camera_info" ] || fail "未找到下视相机标定文件：$camera_info。"
 
     echo "[UAV1 Landing] 下视相机：$camera_device"
-    echo "[UAV1 Landing] 触发话题：/UAV1/need_to_land（启动不会自动触发）"
+    echo "[UAV1 Landing] 仅启动下视相机；搜索和精降由后机接力入口启动。"
     exec roslaunch precision_landing landing_stack.launch \
         vehicle_ns:=UAV1 \
         video_device:="$camera_device" \
-        camera_info_url:="file://$camera_info"
+        camera_info_url:="file://$camera_info" \
+        enable_precision_landing:=false
 }
 
 [ "$#" -eq 1 ] || {

@@ -1,0 +1,17 @@
+<launch>
+  <!-- UAV0 先确认两个平台：远平台给 UAV0，近平台给 UAV1；UAV0 成功后释放 UAV1。 -->
+  <node pkg="precision_landing" type="dual_uav_landing_coordinator_node"
+        name="dual_uav_landing_coordinator" output="screen" required="true">
+    <param name="topics/candidates" value="/UAV0/landing/search/candidates"/>
+    <param name="topics/final_exit" value="/UAV0/mission/final_exit"/>
+    <param name="topics/uav0_success" value="/UAV0/landing/success"/>
+    <param name="topics/uav0_assigned" value="/UAV0/landing/assigned_id"/>
+    <param name="topics/uav1_assigned" value="/UAV1/landing/assigned_id"/>
+    <param name="topics/uav0_target" value="/UAV0/mission/detection/final_aruco"/>
+    <param name="topics/uav1_target" value="/UAV1/landing/assigned_target"/>
+    <param name="topics/release_uav1" value="/dual_uav_landing/release_uav1"/>
+    <param name="topics/assignments_ready"
+           value="/dual_uav_landing/assignments_ready"/>
+    <param name="topics/status" value="/dual_uav_landing/status"/>
+  </node>
+</launch>

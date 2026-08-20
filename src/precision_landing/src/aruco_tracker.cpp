@@ -137,9 +137,11 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
                                         const cv::Mat& distortion,
                                         double stamp_sec,
                                         int requested_id,
-                                        bool allow_lock_mutation) {
+                                        bool allow_lock_mutation,
+                                        int excluded_id) {
   TargetObservation observation;
   observation.stamp_sec = stamp_sec;
+  detected_targets_.clear();
 
   if (image.empty()) {
     debug_image_.release();
@@ -200,8 +202,8 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
       continue;
     }
     const int id = ids[i];
-    if ((requested_id >= 0 && id != requested_id) ||
-        (locked_id_ >= 0 && id != locked_id_)) {
+    if (id == excluded_id ||
+        (requested_id >= 0 && id != requested_id)) {
       continue;
     }
 
@@ -228,6 +230,15 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
     if (has_last_position_ && last_position_id_ == id &&
         (position_camera - last_position_camera_).norm() >
             config_.max_position_jump_m) {
+      continue;
+    }
+
+    detected_targets_.push_back(
+        DetectedTarget{id, position_camera, selectionScore(corners[i], image.size())});
+
+    // Keep publishing other stable candidates for the dual-platform
+    // coordinator, while the mission lock itself remains on one ID.
+    if (locked_id_ >= 0 && id != locked_id_) {
       continue;
     }
 
@@ -277,23 +288,33 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
   observation.valid = true;
   observation.id = selected.id;
   observation.position_camera = selected_position;
+  const std::vector<cv::Point2f>& selected_corners =
+      corners[selected.detection_index];
+  if (!selected_corners.empty()) {
+    cv::Point2f center(0.0F, 0.0F);
+    for (const cv::Point2f& corner : selected_corners) {
+      center += corner;
+    }
+    center *= 1.0F / static_cast<float>(selected_corners.size());
+    observation.image_center_px = Eigen::Vector2d(center.x, center.y);
+  }
   observation.reprojection_error_px = selected.reprojection_error_px;
 
-  const cv::Point text_origin =
-      corners[selected.detection_index].empty()
-          ? cv::Point(10, 45)
-          : cv::Point(
-                static_cast<int>(corners[selected.detection_index][0].x),
-                std::max(45, static_cast<int>(
-                                 corners[selected.detection_index][0].y) - 8));
+  // 位姿文字固定在左上角，不能跟随码角点；否则码靠近画面右侧时文字会被裁掉。
   const std::string pose_text =
       "ID " + std::to_string(selected.id) +
-      " XYZ " + fixedValue(selected_position.x()) + " " +
+      "  XYZ[m] " + fixedValue(selected_position.x()) + " " +
       fixedValue(selected_position.y()) + " " +
-      fixedValue(selected_position.z()) +
-      " reproj " + fixedValue(selected.reprojection_error_px) + "px";
-  cv::putText(debug_image_, pose_text, text_origin, cv::FONT_HERSHEY_SIMPLEX,
-              0.45, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+      fixedValue(selected_position.z());
+  const std::string quality_text =
+      "Reprojection error: " + fixedValue(selected.reprojection_error_px) +
+      " px";
+  cv::putText(debug_image_, pose_text, cv::Point(10, 45),
+              cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 255), 1,
+              cv::LINE_AA);
+  cv::putText(debug_image_, quality_text, cv::Point(10, 65),
+              cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 255, 255), 1,
+              cv::LINE_AA);
   drawLockState();
   return observation;
 }
@@ -319,6 +340,10 @@ void ArucoTracker::beginReacquisition() {
 
 const cv::Mat& ArucoTracker::debugImage() const {
   return debug_image_;
+}
+
+const std::vector<DetectedTarget>& ArucoTracker::detectedTargets() const {
+  return detected_targets_;
 }
 
 void ArucoTracker::breakPendingAcquisition() {

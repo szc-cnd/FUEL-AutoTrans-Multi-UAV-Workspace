@@ -50,12 +50,11 @@ def test_conservative_configuration_contract():
     assert cfg["topics"]["image"] == "/usb_cam/image_raw"
     assert cfg["control"]["publish_rate_hz"] >= 20.0
     assert cfg["safety"]["require_camera_info"] is True
-    assert cfg["safety"]["near_ground_loss_height_m"] == 1.20
     assert cfg["stages"]["high"]["min_height_m"] == 1.50
-    assert cfg["stages"]["mid"]["min_height_m"] == 1.30
-    assert cfg["stages"]["final"]["min_height_m"] == 1.20
-    assert cfg["stages"]["auto_land"]["height_m"] == 1.20
+    assert cfg["stages"]["auto_land"]["height_m"] == 1.50
     assert cfg["stages"]["auto_land"]["error_m"] == 0.08
+    assert cfg["stages"]["fixed_xy_descent"]["descent_mps"] == 0.10
+    assert cfg["stages"]["fixed_xy_descent"]["cutoff_height_m"] == 0.30
 
 
 def test_real_vehicle_landing_test_auto_starts_after_safe_readiness_delay():
@@ -72,10 +71,10 @@ def test_real_vehicle_landing_test_auto_starts_after_safe_readiness_delay():
     assert 'serviceClient<mavros_msgs::SetMode>' in node_source
     assert '"/need_to_land"' in node_source
     assert "landingStateOwnsSetpoints" in node_source
-    assert '<arg name="allow_arming" default="true"/>' in launch_source
-    assert '<arg name="auto_start" default="true"/>' in launch_source
+    assert '<arg name="allow_arming" default="false"/>' in launch_source
+    assert '<arg name="auto_start" default="false"/>' in launch_source
     assert '<arg name="auto_start_delay_sec" default="5.0"/>' in launch_source
-    assert '<arg name="takeoff_height_m" default="2.00"/>' in launch_source
+    assert '<arg name="takeoff_height_m" default="2.05"/>' in launch_source
     assert "add_executable(landing_test_mission_node" in cmake_source
     assert "<depend>std_srvs</depend>" in package_source
 
@@ -98,10 +97,10 @@ def test_mavros_state_and_local_pose_use_independent_freshness_limits():
     assert "input_timeout_sec" not in launch_source
 
 
-def test_align_and_descent_near_ground_loss_share_direct_auto_land_branch():
+def test_visual_loss_reacquires_but_fixed_descent_uses_world_height_gate():
     state_source = STATE_MACHINE_SOURCE_PATH.read_text(encoding="utf-8")
     visual_control_branch = state_source.split(
-        "(state_ == LandingState::ALIGN || isDescentState(state_))",
+        "state_ == LandingState::ALIGN ||\n              state_ == LandingState::DESCEND_HIGH",
         maxsplit=1,
     )[1].split(
         "} else if (!entered_precheck && state_ == LandingState::REACQUIRE)",
@@ -109,14 +108,12 @@ def test_align_and_descent_near_ground_loss_share_direct_auto_land_branch():
     )[0]
 
     assert "config_.target_loss_timeout_sec" in visual_control_branch
-    assert "config_.near_ground_loss_height_m" in visual_control_branch
-    assert (
-        "input.marker_height_m <=\n"
-        "            config_.near_ground_loss_height_m"
-        in visual_control_branch
-    )
-    assert "state_ = LandingState::REQUEST_AUTO_LAND;" in visual_control_branch
-    assert "isDescentState(state_) &&" not in visual_control_branch
+    assert "state_ = LandingState::REACQUIRE" in visual_control_branch
+    fixed_branch = state_source.split(
+        "state_ == LandingState::FIXED_XY_DESCENT", maxsplit=1
+    )[1].split("} else if", maxsplit=1)[0]
+    assert "input.landing_contact" in fixed_branch
+    assert "state_ = LandingState::REQUEST_AUTO_LAND" in fixed_branch
 
 
 def test_every_shipped_leaf_is_a_canonical_node_private_parameter():
@@ -156,19 +153,15 @@ def test_every_shipped_leaf_is_a_canonical_node_private_parameter():
         "safety/target_loss_timeout_sec",
         "safety/reacquire_timeout_sec",
         "safety/total_timeout_sec",
-        "safety/near_ground_loss_height_m",
         "stages/high/min_height_m",
         "stages/high/error_m",
         "stages/high/descent_mps",
-        "stages/mid/min_height_m",
-        "stages/mid/error_m",
-        "stages/mid/descent_mps",
-        "stages/final/min_height_m",
-        "stages/final/error_m",
-        "stages/final/descent_mps",
         "stages/auto_land/height_m",
         "stages/auto_land/error_m",
         "stages/auto_land/stable_sec",
+        "stages/fixed_xy_descent/descent_mps",
+        "stages/fixed_xy_descent/cutoff_height_m",
+        "stages/fixed_xy_descent/ground_target_offset_m",
         "camera_to_body/rotation",
         "camera_to_body/translation_m",
     }
@@ -187,15 +180,15 @@ def test_camera_info_requirement_cannot_be_disabled():
     assert "~safety/require_camera_info must be true" in node_source
 
 
-def test_downward_optical_to_body_flu_rotation_has_correct_axes_and_height():
+def test_calibrated_downward_optical_to_body_transform_has_correct_axes_and_height():
     with CONFIG_PATH.open(encoding="utf-8") as config_file:
         cfg = yaml.safe_load(config_file)
     rotation = cfg["camera_to_body"]["rotation"]
 
-    assert rotation == [
-        [0.0, -1.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
+    assert cfg["camera_to_body"]["translation_m"] == [
+        0.07383116536212123,
+        -0.03902001736630811,
+        -0.13346814265233625,
     ]
 
     def rotate(vector):
@@ -207,9 +200,9 @@ def test_downward_optical_to_body_flu_rotation_has_correct_axes_and_height():
     image_right_body = rotate([1.0, 0.0, 1.0])
     image_top_body = rotate([0.0, -1.0, 1.0])
     centered_body = rotate([0.0, 0.0, 2.0])
-    assert image_right_body[1] < 0.0  # FLU negative-Y is aircraft-right.
-    assert image_top_body[0] > 0.0  # FLU positive-X is aircraft-forward.
-    assert -centered_body[2] == 2.0  # Downward distance remains positive.
+    assert image_right_body[1] < -0.95  # FLU negative-Y is aircraft-right.
+    assert image_top_body[0] > 0.95  # FLU positive-X is aircraft-forward.
+    assert -centered_body[2] > 1.95  # Downward distance remains positive.
 
     node_source = NODE_SOURCE_PATH.read_text(encoding="utf-8")
     assert "marker_height_m = -position_body.z();" in node_source
@@ -311,12 +304,11 @@ def test_flight_control_parameters_fail_closed_on_invalid_values():
         "config.align_stable_sec",
         "config.align_error_m",
         "config.high_align_error_m",
-        "config.mid_align_error_m",
-        "config.final_align_error_m",
         "config.auto_land_error_m",
         "config.high_descent_mps",
-        "config.mid_descent_mps",
-        "config.final_descent_mps",
+        "config.fixed_descent_mps",
+        "config.high_height_m",
+        "config.auto_land_height_m",
         "config.target_loss_timeout_sec",
         "config.reacquire_timeout_sec",
         "config.total_timeout_sec",
@@ -396,12 +388,12 @@ def test_rostest_marker_generation_supports_old_and_new_opencv_aruco_apis():
     assert "cv2.aruco.drawMarker(" in test_source
 
 
-def test_rostest_resets_between_cases_and_uses_consistent_final_gate():
+def test_rostest_resets_between_cases_and_uses_fixed_descent_gate():
     test_source = ROSTEST_SOURCE_PATH.read_text(encoding="utf-8")
     state_machine_source = STATE_MACHINE_SOURCE_PATH.read_text(encoding="utf-8")
     launch_source = ROSTEST_LAUNCH_PATH.read_text(encoding="utf-8")
 
     assert 'mode="POSCTL"' in test_source
     assert "state == LandingState::PASSIVE_ABORT" in state_machine_source
-    assert 'name="state_machine/final_align_error_m" value="0.20"' in launch_source
-    assert 'name="state_machine/mid_align_error_m" value="0.20"' in launch_source
+    assert 'name="state_machine/auto_land_error_m" value="0.20"' in launch_source
+    assert 'name="stages/fixed_xy_descent/cutoff_height_m" value="0.30"' in launch_source

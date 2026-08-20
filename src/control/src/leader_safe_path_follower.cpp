@@ -14,7 +14,7 @@
 
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <ldot_detector/DynamicObstacleArray.h>  // 2026-07-28: 后机直接使用LDOT当前框和短期预测做摆球让行。
+#include <ldop/DynamicObjectArray.h>  // LDOP稳定目标状态；跟随器按自身规划时域进行短期预测。
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <quadrotor_msgs/PositionCommand.h>
@@ -33,6 +33,13 @@ struct RoutePoint {
   double yaw{0.0};
   // 2026-07-15: 记录前机从起飞后的累计路程，用于“离开候选点1m后再释放”的离散接力逻辑。
   double progress{0.0};
+};
+
+struct DynamicObstacleSample {
+  uint32_t id{0U};
+  geometry_msgs::Point position;
+  geometry_msgs::Vector3 size;
+  std::vector<geometry_msgs::Point> predicted_positions;
 };
 
 double distance3d(const geometry_msgs::Point& a, const geometry_msgs::Point& b) {
@@ -93,6 +100,10 @@ class LeaderSafePathFollower {
                             "/UAV1/mission/landing_target");
     pnh_.param<std::string>("follower_landing_request_topic", follower_landing_request_topic_,
                             "/UAV1/mission/landing_request");
+    pnh_.param<std::string>("follower_assigned_target_topic", follower_assigned_target_topic_,
+                            "/UAV1/landing/assigned_target");
+    pnh_.param<std::string>("release_uav1_topic", release_uav1_topic_,
+                            "/dual_uav_landing/release_uav1");
     // 2026-07-15: 只接收找门模块已经确认并锁存的门平面，禁止把临时候选门发给后机。
     pnh_.param<std::string>("door_pose_topic", door_pose_topic_,
                             "/UAV0/corridor_search/workspace_lock");
@@ -102,13 +113,23 @@ class LeaderSafePathFollower {
     // 2026-07-16: 接力点使用前机任务命名空间公开，后续实机可直接将该Path桥接给第二架无人机。
     pnh_.param<std::string>("relay_path_topic", relay_path_topic_,
                             "/UAV0/mission/relay_waypoints");
-    pnh_.param<std::string>("world_frame", world_frame_, "world");
-    pnh_.param("leader_offset_x", leader_offset_x_, 0.0);
-    pnh_.param("leader_offset_y", leader_offset_y_, 0.0);
-    pnh_.param("leader_offset_z", leader_offset_z_, 0.0);
-    pnh_.param("follower_offset_x", follower_offset_x_, -1.0);
-    pnh_.param("follower_offset_y", follower_offset_y_, 0.0);
-    pnh_.param("follower_offset_z", follower_offset_z_, 0.0);
+    const std::string alignment_prefix = "/dual_uav_frame_alignment";
+    if (!nh_.getParam(alignment_prefix + "/mission_frame", world_frame_) ||
+        !nh_.getParam(alignment_prefix + "/follower/x", follower_alignment_x_) ||
+        !nh_.getParam(alignment_prefix + "/follower/y", follower_alignment_y_) ||
+        !nh_.getParam(alignment_prefix + "/follower/z", follower_alignment_z_) ||
+        !nh_.getParam(alignment_prefix + "/follower/yaw_rad", follower_alignment_yaw_)) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: incomplete /dual_uav_frame_alignment parameters");
+    }
+    if (world_frame_.empty() || !std::isfinite(follower_alignment_x_) ||
+        !std::isfinite(follower_alignment_y_) ||
+        !std::isfinite(follower_alignment_z_) ||
+        !std::isfinite(follower_alignment_yaw_)) {
+      throw std::runtime_error("leader_safe_path_follower: invalid frame alignment");
+    }
+    follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
+    follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
     // 2026-07-24: 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留0.70m路径间距。
     pnh_.param("follow_distance", follow_distance_, 0.70);
     pnh_.param("release_path_length", release_path_length_, 0.70);
@@ -120,7 +141,7 @@ class LeaderSafePathFollower {
     pnh_.param("continuous_follow_speed", continuous_follow_speed_, 0.42);
     pnh_.param<std::string>("leader_task_status_topic", leader_task_status_topic_,
                             "/mission/task_status");
-    // 2026-07-27: 后机独立发布锁存式LDOT门控，不能复用前机门控而在前机先出通道时提前关闭。
+    // 保留后机检测阶段状态发布，便于LDOP运行状态监控。
     pnh_.param<std::string>("follower_detection_enable_topic",
                             follower_detection_enable_topic_,
                             "/UAV1/corridor_search/dynamic_detection_enable");
@@ -163,9 +184,9 @@ class LeaderSafePathFollower {
     pnh_.param("obstacle_z_margin", obstacle_z_margin_, 0.20);
     pnh_.param("obstacle_ignore_near", obstacle_ignore_near_, 0.18);
     pnh_.param("obstacle_min_points", obstacle_min_points_, 3);
-    // 2026-07-28: 点云稀疏时用结构化LDOT预测补充后机避障；摆球短暂漏检仍保留有限时间，但不会永久留框。
+    // 点云稀疏时用结构化LDOP状态补充后机避障；摆球短暂漏检仍有限保留。
     pnh_.param<std::string>("dynamic_obstacle_topic", dynamic_obstacle_topic_,
-                            "/UAV1/ldot_detector/dynamic_obstacles");
+                            "/UAV1/ldop/dynamic_objects");
     pnh_.param("dynamic_obstacle_retention", dynamic_obstacle_retention_, 0.80);
     pnh_.param("dynamic_obstacle_safety_radius", dynamic_obstacle_safety_radius_, 0.35);
     pnh_.param("dynamic_obstacle_z_margin", dynamic_obstacle_z_margin_, 0.18);
@@ -228,6 +249,11 @@ class LeaderSafePathFollower {
     leader_landing_request_sub_ = nh_.subscribe(
         leader_landing_request_topic_, 2,
         &LeaderSafePathFollower::leaderLandingRequestCallback, this);
+    release_uav1_sub_ = nh_.subscribe(
+        release_uav1_topic_, 1, &LeaderSafePathFollower::releaseUav1Callback, this);
+    follower_assigned_target_sub_ = nh_.subscribe(
+        follower_assigned_target_topic_, 1,
+        &LeaderSafePathFollower::followerAssignedTargetCallback, this);
     door_pose_sub_ = nh_.subscribe(door_pose_topic_, 1,
                                    &LeaderSafePathFollower::doorPoseCallback, this);
     final_exit_pose_sub_ = nh_.subscribe(
@@ -267,15 +293,16 @@ class LeaderSafePathFollower {
     ROS_INFO("[safe_follower] relay ready: executor=%s continuous_before_exit=%d follow=%.2fm, "
              "door + rolling internal + terminal, "
              "internal_limit=%d (0=unlimited), "
-             "release=%.2fm spacing=%.2fm offset=(%.2f,%.2f,%.2f)",
+             "release=%.2fm spacing=%.2fm alignment=(%.2f,%.2f,%.2f, yaw=%.3f)",
              use_diff_planner_ ? "UAV1_DIFF" : "LEGACY_POSITION_COMMAND",
              static_cast<int>(continuous_follow_before_exit_), follow_distance_,
              max_internal_relay_points_, relay_release_distance_, relay_waypoint_spacing_,
-             follower_offset_x_, follower_offset_y_, follower_offset_z_);
+             follower_alignment_x_, follower_alignment_y_, follower_alignment_z_,
+             follower_alignment_yaw_);
   }
 
  private:
-  // 2026-07-27: UAV1检测会话由后机接力阶段控制并锁存，后启动的LDOT也能立即获得正确状态。
+  // UAV1检测阶段状态锁存发布，供运行监控和后续LDOP门控扩展。
   void setFollowerDetectionEnable(bool active, const char* reason, bool force = false) {
     if (!force && follower_detection_enabled_ == active) return;
     follower_detection_enabled_ = active;
@@ -287,27 +314,32 @@ class LeaderSafePathFollower {
   }
 
   geometry_msgs::Point leaderToWorld(const geometry_msgs::Point& local) const {
-    geometry_msgs::Point world = local;
-    world.x += leader_offset_x_;
-    world.y += leader_offset_y_;
-    world.z += leader_offset_z_;
-    return world;
+    return local;
   }
 
   geometry_msgs::Point followerToWorld(const geometry_msgs::Point& local) const {
-    geometry_msgs::Point world = local;
-    world.x += follower_offset_x_;
-    world.y += follower_offset_y_;
-    world.z += follower_offset_z_;
+    geometry_msgs::Point world;
+    world.x = follower_alignment_cos_ * local.x - follower_alignment_sin_ * local.y +
+              follower_alignment_x_;
+    world.y = follower_alignment_sin_ * local.x + follower_alignment_cos_ * local.y +
+              follower_alignment_y_;
+    world.z = local.z + follower_alignment_z_;
     return world;
   }
 
   geometry_msgs::Point worldToFollower(const geometry_msgs::Point& world) const {
-    geometry_msgs::Point local = world;
-    local.x -= follower_offset_x_;
-    local.y -= follower_offset_y_;
-    local.z -= follower_offset_z_;
+    const double dx = world.x - follower_alignment_x_;
+    const double dy = world.y - follower_alignment_y_;
+    geometry_msgs::Point local;
+    local.x = follower_alignment_cos_ * dx + follower_alignment_sin_ * dy;
+    local.y = -follower_alignment_sin_ * dx + follower_alignment_cos_ * dy;
+    local.z = world.z - follower_alignment_z_;
     return local;
+  }
+
+  double worldYawToFollower(double world_yaw) const {
+    return std::atan2(std::sin(world_yaw - follower_alignment_yaw_),
+                      std::cos(world_yaw - follower_alignment_yaw_));
   }
 
   // 2026-07-24: 前机里程计z不再通过接力路线传给后机；普通任务点只复用XY，
@@ -441,8 +473,19 @@ class LeaderSafePathFollower {
 
   void leaderLandingRequestCallback(const std_msgs::Bool::ConstPtr& msg) {
     if (!msg->data || terminal_mode_active_) return;
+    if (!release_uav1_) {
+      pending_leader_landing_request_ = true;
+      ROS_INFO("[safe_follower] leader landing reported; hold terminal until UAV1 release.");
+      return;
+    }
+    queueFollowerTerminalTarget();
+  }
+
+  void queueFollowerTerminalTarget() {
     RoutePoint nearby_target;
-    if (!getRouteTargetBehindEnd(terminal_landing_spacing_, &nearby_target)) {
+    if (have_assigned_follower_target_) {
+      nearby_target = assigned_follower_target_;
+    } else if (!getRouteTargetBehindEnd(terminal_landing_spacing_, &nearby_target)) {
       ROS_ERROR("[safe_follower] leader landed but no accumulated route is available.");
       return;
     }
@@ -470,6 +513,26 @@ class LeaderSafePathFollower {
               "execute after earlier relay points; leader spacing check disabled.",
               terminal_target_world_.position.x, terminal_target_world_.position.y,
               terminal_target_world_.position.z);
+  }
+
+  void followerAssignedTargetCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    assigned_follower_target_.position = msg->pose.position;
+    assigned_follower_target_.yaw = yawFromQuaternion(msg->pose.orientation);
+    have_assigned_follower_target_ = true;
+    ROS_INFO("[safe_follower] assigned UAV1 landing target received (%.2f, %.2f, %.2f).",
+             msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+  }
+
+  void releaseUav1Callback(const std_msgs::Bool::ConstPtr& msg) {
+    release_uav1_ = msg->data;
+    if (release_uav1_) {
+      ROS_ERROR("[safe_follower] UAV1 released to leave exit waiting point.");
+      hold_target_latched_ = false;
+      if (pending_leader_landing_request_) {
+        pending_leader_landing_request_ = false;
+        queueFollowerTerminalTarget();
+      }
+    }
   }
 
   // 2026-07-21: 从最近一段已认可实飞轨迹估计局部前进方向，避免使用与雷达机体框不一致的yaw。
@@ -754,13 +817,23 @@ class LeaderSafePathFollower {
     diff_command_seen_for_goal_ = true;
   }
 
-  // 2026-07-28: 只保留前机已验证通道路线中心带内的动态框；利用“摆球不碰墙”的赛题先验剔除墙边误框。
+  // LDOP输出模型状态；当前比赛小球默认CV3D=[x,y,z,vx,vy,vz]。
+  // 跟随器自行生成1秒匀速预测，使避障时域仍由控制侧决定。
   void dynamicObstacleCallback(
-      const ldot_detector::DynamicObstacleArray::ConstPtr& msg) {
+      const ldop::DynamicObjectArray::ConstPtr& msg) {
     dynamic_obstacle_receive_stamp_ = ros::Time::now();
-    ldot_detector::DynamicObstacleArray corridor_obstacles = *msg;
-    corridor_obstacles.obstacles.clear();
-    for (const auto& obstacle : msg->obstacles) {
+    std::vector<DynamicObstacleSample> corridor_obstacles;
+    for (const auto& object : msg->objects) {
+      if (object.model_state.size() < 3U ||
+          !std::isfinite(object.model_state[0]) ||
+          !std::isfinite(object.model_state[1]) ||
+          !std::isfinite(object.model_state[2])) continue;
+      DynamicObstacleSample obstacle;
+      obstacle.id = object.id;
+      obstacle.position.x = object.model_state[0];
+      obstacle.position.y = object.model_state[1];
+      obstacle.position.z = object.model_state[2];
+      obstacle.size = object.size;
       const geometry_msgs::Point obstacle_world = followerToWorld(obstacle.position);
       const double route_distance = distanceToAcceptedRoute(obstacle_world);
       if (!route_.empty() && route_distance > dynamic_retention_route_half_width_) {
@@ -770,10 +843,44 @@ class LeaderSafePathFollower {
                           obstacle.id, route_distance, dynamic_retention_route_half_width_);
         continue;
       }
-      corridor_obstacles.obstacles.push_back(obstacle);
+      geometry_msgs::Vector3 velocity;
+      bool have_velocity = false;
+      if (object.motion_model_type == ldop::DynamicObject::MOTION_MODEL_CA2D &&
+          object.model_state.size() >= 5U) {
+        velocity.x = object.model_state[3];
+        velocity.y = object.model_state[4];
+        velocity.z = 0.0;
+        have_velocity = true;
+      } else if ((object.motion_model_type == ldop::DynamicObject::MOTION_MODEL_CA3D ||
+                  object.motion_model_type == ldop::DynamicObject::MOTION_MODEL_CV3D) &&
+                 object.model_state.size() >= 6U) {
+        velocity.x = object.model_state[3];
+        velocity.y = object.model_state[4];
+        velocity.z = object.model_state[5];
+        have_velocity = true;
+      } else if (object.motion_model_type == ldop::DynamicObject::MOTION_MODEL_CTRA &&
+                 object.model_state.size() >= 6U) {
+        const double speed = object.model_state[3];
+        const double yaw = object.model_state[5];
+        velocity.x = speed * std::cos(yaw);
+        velocity.y = speed * std::sin(yaw);
+        velocity.z = 0.0;
+        have_velocity = true;
+      }
+      if (have_velocity && std::isfinite(velocity.x) &&
+          std::isfinite(velocity.y) && std::isfinite(velocity.z)) {
+        for (double horizon = 0.2; horizon <= 1.0 + 1e-6; horizon += 0.2) {
+          geometry_msgs::Point predicted = obstacle.position;
+          predicted.x += horizon * velocity.x;
+          predicted.y += horizon * velocity.y;
+          predicted.z += horizon * velocity.z;
+          obstacle.predicted_positions.push_back(predicted);
+        }
+      }
+      corridor_obstacles.push_back(obstacle);
     }
     // 2026-07-28: 合格非空帧刷新缓存；摆球端点和短时遮挡期间沿用上一帧，但只保留有限时长。
-    if (!corridor_obstacles.obstacles.empty()) {
+    if (!corridor_obstacles.empty()) {
       retained_dynamic_obstacles_ = corridor_obstacles;
       retained_dynamic_obstacle_stamp_ = dynamic_obstacle_receive_stamp_;
     }
@@ -793,7 +900,8 @@ class LeaderSafePathFollower {
 
   void leaderTaskStatusCallback(const std_msgs::String::ConstPtr& msg) {
     // task_status首字段为阶段名。前机真正越过出口后停止0.5m动态跟距，恢复离散任务点/终点执行。
-    leader_outside_exit_ = msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
+    leader_outside_exit_ = msg->data.find("SEARCH_OUTSIDE_LANDING") == 0 ||
+                           msg->data.find("SEARCH_OUTSIDE_QR") == 0 ||
                            msg->data.find("APPROACH_LANDING") == 0 ||
                            msg->data.find("LANDING") == 0;
     // 2026-07-28: 前机越过出口确认距离后才像入口清空0.70m一样放行后机，避免两机挤在门框。
@@ -1018,11 +1126,11 @@ class LeaderSafePathFollower {
     return false;
   }
 
-  // 2026-07-28: 检查后机短目标线段与LDOT当前/预测位置的扫掠冲突；窄通道内优先等待摆球让开，不盲目横移脱困。
+  // 检查后机短目标线段与LDOP当前/预测位置的扫掠冲突。
   bool dynamicSegmentBlocked(const geometry_msgs::Point& current_local,
                              const geometry_msgs::Point& target_local,
                              uint32_t* obstacle_id) const {
-    if (retained_dynamic_obstacles_.obstacles.empty() ||
+    if (retained_dynamic_obstacles_.empty() ||
         retained_dynamic_obstacle_stamp_.isZero() ||
         (ros::Time::now() - retained_dynamic_obstacle_stamp_).toSec() >
             dynamic_obstacle_retention_) {
@@ -1033,7 +1141,7 @@ class LeaderSafePathFollower {
     const double length_sq = dx * dx + dy * dy;
     if (length_sq < 1e-6) return false;
 
-    for (const auto& obstacle : retained_dynamic_obstacles_.obstacles) {
+    for (const auto& obstacle : retained_dynamic_obstacles_) {
       const double object_radius =
           0.5 * std::max(obstacle.size.x, obstacle.size.y) +
           dynamic_obstacle_safety_radius_;
@@ -1358,7 +1466,7 @@ class LeaderSafePathFollower {
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_) {
       if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
-      publishCommand(target_local, terminal_target_world_.yaw, false);
+      publishCommand(target_local, worldYawToFollower(terminal_target_world_.yaw), false);
       publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
       if (!follower_landing_requested_ &&
           (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
@@ -1386,7 +1494,8 @@ class LeaderSafePathFollower {
         return;
       }
     }
-    publishCommand(short_target, terminal_target_world_.yaw, true, terminal_approach_speed_);
+    publishCommand(short_target, worldYawToFollower(terminal_target_world_.yaw), true,
+                   terminal_approach_speed_);
     publishTarget(terminal_target_world_.position);
     publishState("TERMINAL_APPROACH_NO_SEPARATION", 0.2, 1.0, 0.2);
     ROS_WARN_THROTTLE(1.0,
@@ -1466,7 +1575,8 @@ class LeaderSafePathFollower {
       }
     }
     continuous_blocked_since_ = ros::Time(0);
-    publishCommand(target_local, tracking_world.yaw, true, continuous_follow_speed_);
+    publishCommand(target_local, worldYawToFollower(tracking_world.yaw), true,
+                   continuous_follow_speed_);
     publishTarget(lagged_world.position);
     publishState("CONTINUOUS_FOLLOW_0P7M_XY", 0.1, 0.85, 1.0);
     ROS_INFO_THROTTLE(1.0,
@@ -1662,8 +1772,9 @@ class LeaderSafePathFollower {
                                  ? world_frame_ : follower_odom_.header.frame_id;
       // 2026-07-28: 恢复期间只给Diff一个位于前机已验证折线上的短目标，避免原远点反复碰撞。
       goal.pose.position = command_local;
-      goal.pose.orientation.w = std::cos(desired_world.yaw * 0.5);
-      goal.pose.orientation.z = std::sin(desired_world.yaw * 0.5);
+      const double local_yaw = worldYawToFollower(desired_world.yaw);
+      goal.pose.orientation.w = std::cos(local_yaw * 0.5);
+      goal.pose.orientation.z = std::sin(local_yaw * 0.5);
       diff_goal_pub_.publish(goal);
       diff_goal_index_ = active_relay_index_;
       diff_goal_published_ = true;
@@ -1702,6 +1813,14 @@ class LeaderSafePathFollower {
     if (handleStuckRecovery(now)) return;
     if (!leader_started_) {
       hold("leader mission not started");
+      return;
+    }
+
+    // UAV1 reaches the verified exit waypoint, then waits there until UAV0 has
+    // completed the far-platform landing and the coordinator releases it.
+    if (leader_outside_exit_ && exit_waypoint_released_ &&
+        active_relay_index_ > exit_waypoint_index_ && !release_uav1_) {
+      hold("UAV1 waiting at exit for UAV0 landing release");
       return;
     }
 
@@ -1787,7 +1906,7 @@ class LeaderSafePathFollower {
       if ((now - relay_arrival_stamp_).toSec() < relay_arrive_dwell_) {
         hold_target_latched_ = false;
         publishCommand(occupied_attachment ? current_local : desired_local,
-                       desired_world.yaw, false);
+                       worldYawToFollower(desired_world.yaw), false);
         publishState(occupied_attachment ? "RELAY_OCCUPIED_ATTACHMENT_DWELL"
                                          : "RELAY_ARRIVAL_DWELL",
                      0.2, 1.0, 0.2);
@@ -1804,7 +1923,7 @@ class LeaderSafePathFollower {
                   active_relay_index_ + 1, relay_waypoints_.size());
         // 2026-07-22: 正常抵达后把已验证接力点锁为等待目标；即使受扰离开，也会主动拉回而不是接受漂移后的位置。
         hold_target_local_ = occupied_attachment ? current_local : desired_local;
-        hold_target_yaw_ = desired_world.yaw;
+        hold_target_yaw_ = worldYawToFollower(desired_world.yaw);
         hold_target_latched_ = true;
         ++active_relay_index_;
         relay_arrival_stamp_ = ros::Time(0);
@@ -1815,7 +1934,7 @@ class LeaderSafePathFollower {
       }
 
       if (terminal_arrival_stamp_.isZero()) terminal_arrival_stamp_ = now;
-      publishCommand(target_local, desired_world.yaw, false);
+      publishCommand(target_local, worldYawToFollower(desired_world.yaw), false);
       publishState("TERMINAL_DWELL", 0.2, 1.0, 0.2);
       if (!follower_landing_requested_ &&
           (now - terminal_arrival_stamp_).toSec() >= terminal_arrive_dwell_) {
@@ -1895,7 +2014,8 @@ class LeaderSafePathFollower {
                                : cruise_speed_;
     if (horizontal_error <= relay_slowdown_radius_)
       command_speed = std::min(command_speed, relay_approach_speed_);
-    publishCommand(target_local, tracking_world.yaw, true, command_speed);
+    publishCommand(target_local, worldYawToFollower(tracking_world.yaw), true,
+                   command_speed);
     publishTarget(desired_world.position);
     publishState(terminal_mode_active_ && active_relay_index_ == terminal_waypoint_index_
                      ? "GO_TERMINAL_RELAY"
@@ -1965,21 +2085,24 @@ class LeaderSafePathFollower {
   ros::NodeHandle pnh_;
   ros::Subscriber leader_odom_sub_, follower_odom_sub_, follower_cloud_sub_;
   ros::Subscriber diff_command_sub_;  // 2026-07-28: UAV1实际轨迹输出存活监测，不参与发布。
-  ros::Subscriber dynamic_obstacle_sub_;  // 2026-07-28: UAV1 LDOT结构化当前框与预测轨迹。
+  ros::Subscriber dynamic_obstacle_sub_;  // UAV1 LDOP结构化目标状态。
   ros::Subscriber leader_landing_target_sub_, leader_landing_request_sub_, door_pose_sub_;
+  ros::Subscriber release_uav1_sub_;
+  ros::Subscriber follower_assigned_target_sub_;
   ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
   ros::Subscriber leader_task_status_sub_;
   ros::Subscriber diff_status_sub_;  // 2026-07-28: UAV1 Diff轨迹成功/失败反馈。
   ros::Publisher command_pub_, traj_started_pub_, diff_goal_pub_, route_pub_, relay_path_pub_, target_pub_, state_pub_;
   ros::Publisher follower_landing_target_pub_, follower_landing_request_pub_;
-  ros::Publisher follower_detection_enable_pub_;  // 2026-07-27: UAV1独立LDOT通道门控。
+  ros::Publisher follower_detection_enable_pub_;  // UAV1独立LDOP阶段状态。
   ros::Publisher follower_safety_hold_pub_;  // 2026-07-28: LIO跳变时请求控制器按MAVROS坐标锁点。
   ros::Timer timer_;
   nav_msgs::Odometry leader_odom_, follower_odom_;
   geometry_msgs::PoseStamped leader_landing_target_;
   RoutePoint terminal_target_world_, confirmed_door_, confirmed_exit_, pending_relay_;
+  RoutePoint assigned_follower_target_;
   sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
-  ldot_detector::DynamicObstacleArray retained_dynamic_obstacles_;  // 2026-07-28: 摆球端点/短暂漏检的有限保留缓存。
+  std::vector<DynamicObstacleSample> retained_dynamic_obstacles_;
   std::deque<RoutePoint> route_;
   // 2026-07-21: 保存尚未判定为“真实回头”或“U形新分支”的负投影实飞折线，确认后原样接入而非直连。
   std::deque<RoutePoint> turn_candidate_route_;
@@ -1992,14 +2115,19 @@ class LeaderSafePathFollower {
   std::string diff_status_topic_;  // 2026-07-28: 默认/drone_1_planning/status。
   std::string traj_started_topic_, world_frame_;
   std::string leader_landing_target_topic_, leader_landing_request_topic_;
+  std::string release_uav1_topic_;
+  std::string follower_assigned_target_topic_;
   std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
   std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
   std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
-  std::string dynamic_obstacle_topic_;  // 2026-07-28: 默认/UAV1/ldot_detector/dynamic_obstacles。
+  std::string dynamic_obstacle_topic_;  // 默认/UAV1/ldop/dynamic_objects。
   bool have_leader_odom_{false}, have_follower_odom_{false};
   bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
   bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
   bool have_leader_landing_target_{false}, terminal_mode_active_{false};
+  bool release_uav1_{false};
+  bool pending_leader_landing_request_{false};
+  bool have_assigned_follower_target_{false};
   bool follower_landing_requested_{false};
   bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
   bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。
@@ -2022,8 +2150,9 @@ class LeaderSafePathFollower {
   bool hold_target_latched_{false};
   geometry_msgs::Point hold_target_local_;
   double hold_target_yaw_{0.0};
-  double leader_offset_x_{0.0}, leader_offset_y_{0.0}, leader_offset_z_{0.0};
-  double follower_offset_x_{-1.0}, follower_offset_y_{0.0}, follower_offset_z_{0.0};
+  double follower_alignment_x_{-1.20}, follower_alignment_y_{0.0};
+  double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
+  double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.5}, follower_start_height_{0.5};
   // 2026-07-24: 默认0.70m路径间隔、0.50m硬间隔；普通路线高度由后机独立固定为0.65m。
   double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.50};
