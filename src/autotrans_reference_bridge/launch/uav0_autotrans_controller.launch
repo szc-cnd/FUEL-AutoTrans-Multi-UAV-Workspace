@@ -4,7 +4,7 @@
   <!-- 双机入口通过环境变量改接降落仲裁器；单机入口继续直连MAVROS。 -->
   <arg name="setpoint_topic"
        default="$(optenv UAV0_AUTOTRANS_SETPOINT_TOPIC /UAV0/mavros/setpoint_raw/attitude)"/>
-  <arg name="trajectory_timeout" default="0.5"/>
+  <arg name="trajectory_timeout" default="2.0"/>
 
   <!-- FUEL 与搜索降落 Diff 先分别转换，再按任务阶段向 AutoTrans 唯一输出。 -->
   <node pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
@@ -20,7 +20,7 @@
     <param name="input_topic" value="/drone_0_planning/trajectory"/>
     <param name="output_topic" value="/UAV0/diff/autotrans_trajectory"/>
     <param name="frame_id" value="UAV0/camera_init"/>
-    <param name="trajectory_timeout" value="0.5"/>
+    <param name="trajectory_timeout" value="2.0"/>
   </node>
 
   <node pkg="autotrans_reference_bridge" type="autotrans_trajectory_arbiter_node"

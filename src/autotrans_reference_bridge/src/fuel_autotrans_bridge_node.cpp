@@ -27,7 +27,7 @@ public:
     private_nh_.param<std::string>("output_topic", output_topic_,
                                    "/UAV0/planning/autotrans_trajectory");
     private_nh_.param<std::string>("frame_id", frame_id_, "UAV0/camera_init");
-    private_nh_.param("trajectory_timeout", trajectory_timeout_, 0.5);
+    private_nh_.param("trajectory_timeout", trajectory_timeout_, 2.0);
 
     output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true);
     input_sub_ = nh_.subscribe(input_topic_, 2, &FuelAutoTransBridge::bsplineCallback, this);

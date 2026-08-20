@@ -14,7 +14,7 @@
   <arg name="reboot_service" default="/UAV1/mavros/cmd/command"/>
   <arg name="cmd_trigger_topic" default="/UAV1/hummingbird/goal"/>
   <arg name="goal_topic" default="/UAV1/planning/goal"/>
-  <arg name="trajectory_timeout" default="0.5"/>
+  <arg name="trajectory_timeout" default="2.0"/>
   <arg name="enable_logger" default="true"/>
 
   <!-- Diff-Planner 继续输出完整 PolyTraj；不启动旧 px4ctrl。 -->

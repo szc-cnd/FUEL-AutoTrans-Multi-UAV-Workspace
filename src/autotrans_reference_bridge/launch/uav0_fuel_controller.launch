@@ -39,7 +39,7 @@
     <param name="input_topic" value="/UAV0/planning/bspline"/>
     <param name="output_topic" value="/UAV0/planning/autotrans_trajectory"/>
     <param name="frame_id" value="UAV0/camera_init"/>
-    <param name="trajectory_timeout" value="0.5"/>
+    <param name="trajectory_timeout" value="2.0"/>
   </node>
 
   <include if="$(eval arg('controller_mode') == 'autotrans')"
