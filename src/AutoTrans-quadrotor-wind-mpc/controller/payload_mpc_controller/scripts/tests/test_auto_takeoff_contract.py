@@ -37,7 +37,7 @@ class AutoTakeoffContractTest(unittest.TestCase):
             self.assertIn(token, self.params_header)
         for token in (
             "takeoff:",
-            "target_z: 0.5",
+            "target_z: 0.6",
             "climb_rate: 0.15",
             "max_initial_xy_error:",
         ):
