@@ -21,7 +21,7 @@
   <arg name="search_depth" default="4.0" />
   <arg name="lane_spacing" default="1.0" />
   <arg name="hover_height" default="0.60" />
-  <arg name="max_vel" default="0.50" />
+  <arg name="max_vel" default="0.30" />
   <arg name="max_acc" default="0.60" />
 
   <!-- 只启动搜索降落需要的两台相机和 D435 到机体的静态外参。 -->
