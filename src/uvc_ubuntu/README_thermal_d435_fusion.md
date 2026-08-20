@@ -78,6 +78,10 @@ README_thermal_d435_fusion.md
 
 /UAV0/thermal/fusion_valid
 True 表示热源像素、深度、内参、TF 全部有效。
+
+/UAV0/thermal/d435_debug_image
+热源框映射到 D435 后的调试画面。首幅彩色图到达后默认等待 5 秒，避开
+D435 自动曝光尚未稳定的偏暗画面；预热只延迟调试图发布，不暂停深度融合。
 ```
 
 ## 启动流程
@@ -185,6 +189,7 @@ shift_x: 0
 shift_y: 0
 roi_margin_x: 30
 roi_margin_y: 20
+d435_exposure_warmup_seconds: 5.0
 
 target_frame: "odom"
 d435_optical_frame: "camera_color_optical_frame"

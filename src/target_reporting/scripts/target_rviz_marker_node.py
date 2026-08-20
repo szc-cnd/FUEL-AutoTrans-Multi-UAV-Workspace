@@ -31,12 +31,12 @@ class TargetRvizMarkerNode:
         "thermal_source": (2, "THERMAL"),
     }
     # RViz 中颜色统一表示目标类型；候选/确认状态由透明度和文字表示。
-    # 这些 RGB 值同时用于目标球、目标文字和三维包围盒，避免同一目标出现
-    # “球是绿色、框是橙色”的歧义。
+    # 三类目标统一使用菱形方块，只用颜色区分；同一类型的标记和
+    # 三维包围盒颜色保持一致，同时避免目标看起来像点云小球。
     TARGET_COLORS = {
         "color_tag": (1.0, 0.35, 0.05),       # 橙色
         "qr_code": (0.1, 1.0, 0.25),          # 绿色
-        "thermal_source": (1.0, 0.1, 0.9),   # 紫红色
+        "thermal_source": (1.0, 0.95, 0.0),  # 亮黄色
     }
     # Display-only alpha values.  Keep the target type color unchanged while
     # making the marker readable through the filtered point cloud.
@@ -388,18 +388,20 @@ class TargetRvizMarkerNode:
             array.markers.append(marker)
         self.box_publisher.publish(array)
 
-    def _sphere_marker(self, marker_id, namespace, state, color):
+    def _target_marker(self, marker_id, namespace, target_type, state, color):
         marker = Marker()
         marker.header.frame_id = self.marker_frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = namespace
         marker.id = marker_id
         marker.action = Marker.ADD
-        marker.type = Marker.SPHERE
+        marker.type = Marker.CUBE
         marker.pose.position.x = state["x"]
         marker.pose.position.y = state["y"]
         marker.pose.position.z = state["z"] + self.sphere_z_offset
-        marker.pose.orientation.w = 1.0
+        # 绕 Z 轴旋转 45°，从常用俯视角看呈菱形。
+        marker.pose.orientation.z = math.sin(math.pi / 8.0)
+        marker.pose.orientation.w = math.cos(math.pi / 8.0)
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
         marker.scale.x = marker.scale.y = marker.scale.z = self.sphere_scale
         return marker
@@ -440,9 +442,10 @@ class TargetRvizMarkerNode:
                     target_type, self.CANDIDATE_ALPHA
                 )
                 array.markers.append(
-                    self._sphere_marker(
+                    self._target_marker(
                         sphere_id,
                         "target_reporting/candidate",
+                        target_type,
                         candidate,
                         candidate_color,
                     )
@@ -454,9 +457,10 @@ class TargetRvizMarkerNode:
                     target_type, self.CONFIRMED_ALPHA
                 )
                 array.markers.append(
-                    self._sphere_marker(
+                    self._target_marker(
                         sphere_id,
                         "target_reporting/confirmed",
+                        target_type,
                         confirmed,
                         confirmed_color,
                     )

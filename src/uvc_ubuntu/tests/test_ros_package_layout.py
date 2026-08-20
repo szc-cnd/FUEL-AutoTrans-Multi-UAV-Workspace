@@ -106,8 +106,30 @@ class RosPackageLayoutTest(unittest.TestCase):
             "stable_max_len: 3",
             "stable_min_hits: 2",
             "stable_max_pixel_jump: 25",
+            "reject_roi_border_touching: false",
         ):
             self.assertIn(expected, config)
+
+    def test_fusion_publishes_d435_mapping_debug_image(self):
+        source = (ROOT / "thermal_d435_fusion_node.py").read_text(encoding="utf-8")
+        config = (ROOT / "config" / "thermal_d435_fusion.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("d435_debug_image_pub", source)
+        self.assertIn("publish_d435_debug_image", source)
+        self.assertIn("d435_exposure_ready", source)
+        self.assertIn("map_thermal_bbox_to_d435", source)
+        self.assertIn("D435 XYZ=", source)
+        self.assertIn(
+            "thermal_candidate_status_topic: /UAV0/thermal/target_candidate_status",
+            config,
+        )
+        self.assertIn("d435_color_topic: /camera/color/image_raw", config)
+        self.assertIn(
+            "d435_debug_image_topic: /UAV0/thermal/d435_debug_image",
+            config,
+        )
+        self.assertIn("d435_exposure_warmup_seconds: 5.0", config)
 
     def test_ros_package_guide_documents_both_workflows(self):
         guide = (ROOT / "README_ROS_PACKAGE.md").read_text(encoding="utf-8")

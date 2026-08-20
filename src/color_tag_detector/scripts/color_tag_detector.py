@@ -147,6 +147,9 @@ class ColorTagDetector(object):
         self.stable_min_count = int(rospy.get_param("~stable_min_count", 8))
         self.max_pixel_jump = float(rospy.get_param("~max_pixel_jump", 40.0))
         self.max_depth_jump = float(rospy.get_param("~max_depth_jump", 0.20))
+        self.max_area_ratio_jump = float(
+            rospy.get_param("~max_area_ratio_jump", 2.0)
+        )
         # Formal-report quality gates. Distant or non-label-like regions still
         # remain visible as local candidates, but cannot be uploaded.
         self.confirmation_depth_max = float(
@@ -169,6 +172,18 @@ class ColorTagDetector(object):
                 "~min_confirmation_rectangularity",
                 rospy.get_param("~min_rectangularity", 0.84),
             )
+        )
+        self.min_confirmation_real_short_side = float(
+            rospy.get_param("~min_confirmation_real_short_side", 0.06)
+        )
+        self.confirmation_aspect_ratio_min = float(
+            rospy.get_param("~confirmation_aspect_ratio_min", 0.30)
+        )
+        self.confirmation_aspect_ratio_max = float(
+            rospy.get_param("~confirmation_aspect_ratio_max", 3.0)
+        )
+        self.min_confirmation_end_width_ratio = float(
+            rospy.get_param("~min_confirmation_end_width_ratio", 0.83)
         )
         self.min_surface_depth_valid_ratio = float(
             rospy.get_param("~min_surface_depth_valid_ratio", 0.60)
@@ -489,6 +504,7 @@ class ColorTagDetector(object):
                 )
             )
             rectangularity = self.contour_rectangularity(contour)
+            end_width_ratio = self.contour_end_width_ratio(contour)
 
             hsv_stats = self.contour_hsv_stats(hsv, contour)
             min_mean_h = color_cfg.get("min_mean_hue", None)
@@ -593,6 +609,38 @@ class ColorTagDetector(object):
                 confirmation_reasons.append("confirmation_distance")
             if rectangularity < min_confirmation_rectangularity:
                 confirmation_reasons.append("rectangularity")
+            min_end_width_ratio = float(
+                color_cfg.get(
+                    "min_confirmation_end_width_ratio",
+                    self.min_confirmation_end_width_ratio,
+                )
+            )
+            if end_width_ratio < min_end_width_ratio:
+                confirmation_reasons.append("tapered_shape")
+            confirmation_reasons.extend(
+                self.physical_shape_confirmation_reasons(
+                    real_width,
+                    real_height,
+                    float(
+                        color_cfg.get(
+                            "min_confirmation_real_short_side",
+                            self.min_confirmation_real_short_side,
+                        )
+                    ),
+                    float(
+                        color_cfg.get(
+                            "confirmation_aspect_ratio_min",
+                            self.confirmation_aspect_ratio_min,
+                        )
+                    ),
+                    float(
+                        color_cfg.get(
+                            "confirmation_aspect_ratio_max",
+                            self.confirmation_aspect_ratio_max,
+                        )
+                    ),
+                )
+            )
             if surface_depth["valid_ratio"] < min_surface_valid:
                 confirmation_reasons.append("surface_depth_ratio")
             if (
@@ -658,6 +706,7 @@ class ColorTagDetector(object):
                     "solidity": solidity,
                     "color_purity": color_purity,
                     "rectangularity": rectangularity,
+                    "end_width_ratio": end_width_ratio,
                     "surface_depth_valid_ratio": surface_depth["valid_ratio"],
                     "surface_plane_residual_std": surface_depth[
                         "plane_residual_std"
@@ -707,6 +756,52 @@ class ColorTagDetector(object):
         if rectangle_area <= 1e-6:
             return 0.0
         return min(max(area / rectangle_area, 0.0), 1.0)
+
+    @staticmethod
+    def contour_end_width_ratio(contour):
+        """Compare top/bottom contour widths to reject cone-like trapezoids."""
+        x, y, w, h = cv2.boundingRect(contour)
+        if w <= 0 or h < 5:
+            return 0.0
+        local_contour = contour - np.array([[[x, y]]], dtype=contour.dtype)
+        filled = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(filled, [local_contour], -1, 255, thickness=-1)
+        widths = np.count_nonzero(filled, axis=1).astype(np.float32)
+        band = max(2, int(round(h * 0.20)))
+        top = widths[:band]
+        bottom = widths[-band:]
+        top = top[top > 0.0]
+        bottom = bottom[bottom > 0.0]
+        if top.size == 0 or bottom.size == 0:
+            return 0.0
+        top_width = float(np.median(top))
+        bottom_width = float(np.median(bottom))
+        return min(top_width, bottom_width) / max(top_width, bottom_width, 1.0)
+
+    @staticmethod
+    def physical_shape_confirmation_reasons(
+        real_width,
+        real_height,
+        min_short_side,
+        aspect_ratio_min,
+        aspect_ratio_max,
+    ):
+        """Reject tiny strokes and long printed bars while allowing rotation."""
+        if (
+            real_width is None
+            or real_height is None
+            or real_width <= 0.0
+            or real_height <= 0.0
+        ):
+            return ["confirmation_real_size"]
+
+        reasons = []
+        if min(real_width, real_height) < min_short_side:
+            reasons.append("confirmation_short_side")
+        aspect_ratio = real_width / real_height
+        if aspect_ratio < aspect_ratio_min or aspect_ratio > aspect_ratio_max:
+            reasons.append("confirmation_real_aspect_ratio")
+        return reasons
 
     def surface_depth_plane_stats(self, depth_raw, depth_encoding, mask, contour):
         """Fit a local depth plane to the complete colored contour surface."""
@@ -860,7 +955,15 @@ class ColorTagDetector(object):
             hist = self.history[color_name]
             obs = best_per_color.get(color_name)
 
-            if obs is None or not obs["depth_valid"] or obs["point_camera"] is None:
+            # Only label-like observations may build confirmation history. A
+            # persistent colored object must not become stable first and then
+            # pass the quality gate on one lucky depth frame.
+            if (
+                obs is None
+                or not obs["depth_valid"]
+                or obs["point_camera"] is None
+                or not obs.get("confirmation_quality", False)
+            ):
                 hist.append(None)
                 stable_info[color_name] = {
                     "stable": False,
@@ -918,6 +1021,7 @@ class ColorTagDetector(object):
             "u": float(np.median([obs["u"] for obs in valid])),
             "v": float(np.median([obs["v"] for obs in valid])),
             "depth": float(np.median([obs["depth"] for obs in valid])),
+            "area": float(np.median([obs["area"] for obs in valid])),
             "point_camera": [
                 float(np.median(points[:, 0])),
                 float(np.median(points[:, 1])),
@@ -928,7 +1032,18 @@ class ColorTagDetector(object):
     def is_jump_too_large(self, previous, current):
         pixel_jump = math.hypot(current["u"] - previous["u"], current["v"] - previous["v"])
         depth_jump = abs(current["depth"] - previous["depth"])
-        return pixel_jump > self.max_pixel_jump or depth_jump > self.max_depth_jump
+        area_ratio = self.area_change_ratio(previous.get("area"), current.get("area"))
+        return (
+            pixel_jump > self.max_pixel_jump
+            or depth_jump > self.max_depth_jump
+            or area_ratio > self.max_area_ratio_jump
+        )
+
+    @staticmethod
+    def area_change_ratio(first, second):
+        if first is None or second is None or first <= 0.0 or second <= 0.0:
+            return float("inf")
+        return max(float(first), float(second)) / min(float(first), float(second))
 
     def candidate_matches_stable_reference(self, candidate, info):
         if not info.get("stable", False):
@@ -939,7 +1054,14 @@ class ColorTagDetector(object):
 
         pixel_jump = math.hypot(candidate["u"] - reference["u"], candidate["v"] - reference["v"])
         depth_jump = abs(candidate["depth"] - reference["depth"])
-        return pixel_jump <= self.max_pixel_jump and depth_jump <= self.max_depth_jump
+        area_ratio = self.area_change_ratio(
+            candidate.get("area"), reference.get("area")
+        )
+        return (
+            pixel_jump <= self.max_pixel_jump
+            and depth_jump <= self.max_depth_jump
+            and area_ratio <= self.max_area_ratio_jump
+        )
 
     def select_best_candidate(self, candidates, stable_info):
         if not candidates:
@@ -1029,7 +1151,11 @@ class ColorTagDetector(object):
             temporal_stable = self.candidate_matches_stable_reference(
                 best, stable_info.get(best["color"], {"stable": False})
             )
-            stable = temporal_stable and bool(best.get("confirmation_quality", False))
+            stable = (
+                not best.get("held", False)
+                and temporal_stable
+                and bool(best.get("confirmation_quality", False))
+            )
 
         if self.debug_draw_mode == 0:
             drawable_candidates = []
@@ -1232,6 +1358,24 @@ class ColorTagDetector(object):
                     "point_camera": None,
                     "area": None,
                     "reason": "no_candidate",
+                }
+            )
+            return
+
+        # Retention only prevents the debug overlay from flickering. A cached
+        # candidate must never be repeated on the formal detection stream.
+        if best.get("held", False):
+            self.publish_result_text(
+                {
+                    "detected": False,
+                    "stable": False,
+                    "color": None,
+                    "u": None,
+                    "v": None,
+                    "depth": None,
+                    "point_camera": None,
+                    "area": None,
+                    "reason": "stale_candidate",
                 }
             )
             return

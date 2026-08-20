@@ -252,6 +252,12 @@ def detect_hotspot(
             cx_roi = int(moments["m10"] / moments["m00"])
             cy_roi = int(moments["m01"] / moments["m00"])
             bx, by, bw, bh = cv2.boundingRect(cnt)
+            touches_roi_border = (
+                bx <= 0
+                or by <= 0
+                or bx + bw >= mask.shape[1]
+                or by + bh >= mask.shape[0]
+            )
             best = {
                 "score": score,
                 "cx": cx_roi + x0,
@@ -259,6 +265,7 @@ def detect_hotspot(
                 "bbox": (bx + x0, by + y0, bw, bh),
                 "area": area,
                 "mean_gray": mean_gray,
+                "touches_roi_border": touches_roi_border,
             }
 
     result = {
@@ -269,6 +276,7 @@ def detect_hotspot(
         "area": 0.0,
         "mean_gray": 0.0,
         "threshold": threshold_value,
+        "touches_roi_border": False,
         "roi_rect": (x0, y0, x1 - x0, y1 - y0),
         "mask": mask,
     }
@@ -281,6 +289,7 @@ def detect_hotspot(
                 "bbox": best["bbox"],
                 "area": best["area"],
                 "mean_gray": best["mean_gray"],
+                "touches_roi_border": best["touches_roi_border"],
             }
         )
 
@@ -315,23 +324,39 @@ def draw_debug(gray, detection, stable_detected=None, stable_count=None, stable_
             markerSize=12,
             thickness=2,
         )
-        status = (
-            f"candidate=True stable={bool(stable_detected)} "
-            f"{int(stable_count)}/{int(stable_window)} pixel=({cx},{cy})"
-        )
+        status_lines = [
+            "cand=%d stable=%d hits=%d/%d"
+            % (
+                1,
+                int(bool(stable_detected)),
+                int(stable_count),
+                int(stable_window),
+            ),
+            "pixel=(%d,%d) border=%d"
+            % (
+                cx,
+                cy,
+                int(bool(detection.get("touches_roi_border", False))),
+            ),
+        ]
     else:
-        status = "candidate=False stable=False pixel=(-1,-1)"
+        status_lines = ["cand=0 stable=0 hits=0/%d" % int(stable_window)]
 
-    cv2.putText(debug, status, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
-    cv2.putText(
-        debug,
-        f"thr={detection['threshold']:.1f} area={detection['area']:.1f}",
-        (8, 44),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (0, 255, 255),
-        1,
+    status_lines.append(
+        "thr=%.1f area=%.1f"
+        % (detection["threshold"], detection["area"])
     )
+    for line_index, line in enumerate(status_lines):
+        cv2.putText(
+            debug,
+            line,
+            (8, 20 + line_index * 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
     return debug
 
 

@@ -107,14 +107,15 @@ class MissionStore:
             events = self._events()
         pending = []
         for event in events:
-            image = event.get("image") or {}
-            image_id = image.get("id")
-            if not image_id or image_id in acked:
-                continue
-            path = os.path.join(self.image_dir, os.path.basename(image_id))
-            if os.path.exists(path):
-                with open(path, "rb") as stream:
-                    pending.append((image_id, stream.read()))
+            for field in ("image", "d435_image"):
+                image = event.get(field) or {}
+                image_id = image.get("id")
+                if not image_id or image_id in acked:
+                    continue
+                path = os.path.join(self.image_dir, os.path.basename(image_id))
+                if os.path.exists(path):
+                    with open(path, "rb") as stream:
+                        pending.append((image_id, stream.read()))
         return pending
 
     def save_image(self, image_id: str, jpeg_bytes: bytes) -> str:

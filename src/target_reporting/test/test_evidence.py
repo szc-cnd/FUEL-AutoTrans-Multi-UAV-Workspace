@@ -13,6 +13,7 @@ from target_reporting.evidence import (
     TimestampedImageCache,
     draw_detection_overlay,
     evidence_overlay_layout,
+    wrap_evidence_lines,
 )
 
 
@@ -27,6 +28,9 @@ class EvidenceLayoutTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertAlmostEqual(10.0, match[0])
         self.assertEqual(image.shape, match[1].shape)
+        self.assertTrue(cache.has_match("color", 10.01, 0.03))
+        self.assertFalse(cache.has_match("color", 10.20, 0.03))
+        self.assertFalse(cache.has_match("thermal_d435", 10.0, 0.10))
 
     def test_overlay_is_reserved_at_bottom_of_image(self):
         y0, panel_height = evidence_overlay_layout((480, 640, 3), line_count=5)
@@ -82,6 +86,27 @@ class EvidenceLayoutTests(unittest.TestCase):
         ):
             jpeg = evidence.build_evidence_jpeg(image, event)
         self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+        import cv2
+        decoded = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(320, decoded.shape[1])
+        self.assertGreater(decoded.shape[0], 240)
+
+    def test_evidence_text_wraps_to_thermal_image_width(self):
+        import cv2
+
+        lines = wrap_evidence_lines(
+            [
+                "thermal_source detected=True, detector_stable=True, "
+                "detector_confirmable=True"
+            ],
+            384 - 24,
+        )
+        self.assertGreater(len(lines), 1)
+        for line in lines:
+            width = cv2.getTextSize(
+                line, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1
+            )[0][0]
+            self.assertLessEqual(width, 384 - 24)
 
 
 if __name__ == "__main__":

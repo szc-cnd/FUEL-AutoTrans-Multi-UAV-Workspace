@@ -67,15 +67,22 @@ class CoreTests(unittest.TestCase):
             second = self.make_event(seq=2).to_dict()
             second["target_id"] = "uav1-color_tag-002"
             second["image"] = {"id": "second.jpg", "encoding": "jpeg", "size": 3}
+            second["d435_image"] = {"id": "second_d435.jpg", "encoding": "jpeg", "size": 4}
             store.append_event(first)
             store.append_event(second)
             store.save_image("second.jpg", b"jpg")
+            store.save_image("second_d435.jpg", b"d435")
             store.mark_event_acked(1)
 
             reopened = MissionStore(tmp, "uav1", mission_id="test")
             self.assertEqual([2], [event["seq"] for event in reopened.pending_events()])
-            self.assertEqual([("second.jpg", b"jpg")], reopened.pending_images())
+            self.assertEqual(
+                [("second.jpg", b"jpg"), ("second_d435.jpg", b"d435")],
+                reopened.pending_images(),
+            )
             reopened.mark_image_acked("second.jpg")
+            self.assertEqual([("second_d435.jpg", b"d435")], reopened.pending_images())
+            reopened.mark_image_acked("second_d435.jpg")
             self.assertEqual([], reopened.pending_images())
 
     def test_stable_false_target_does_not_block_real_target_elsewhere(self):
@@ -213,6 +220,65 @@ class CoreTests(unittest.TestCase):
         )
         self.assertTrue(confirmed)
         self.assertEqual(1, candidate["hits"])
+
+    def test_thermal_source_requires_continuous_world_stability(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits=1,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.25},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        for stamp in (10.0, 10.05):
+            candidate, confirmed = tracker.update(
+                "thermal_source",
+                {"detected": True},
+                position,
+                timestamp=stamp,
+            )
+            self.assertFalse(confirmed)
+        candidate, confirmed = tracker.update(
+            "thermal_source",
+            {"detected": True},
+            position,
+            timestamp=10.10,
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(3, candidate["hits"])
+
+    def test_thermal_confirmation_resets_after_observation_gap(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.25},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        tracker.update("thermal_source", {}, position, timestamp=10.0)
+        tracker.update("thermal_source", {}, position, timestamp=10.05)
+        candidate, confirmed = tracker.update(
+            "thermal_source", {}, position, timestamp=10.50
+        )
+        self.assertFalse(confirmed)
+        self.assertEqual(1, candidate["hits"])
+
+    def test_thermal_confirmation_requires_elapsed_stability_time(self):
+        tracker = CandidateTracker(
+            distance_m=0.3,
+            confirm_hits_by_type={"thermal_source": 3},
+            confirmation_max_gap_s_by_type={"thermal_source": 0.5},
+            confirmation_duration_s_by_type={"thermal_source": 1.0},
+        )
+        position = {"x": 2.0, "y": 0.0, "z": 1.0}
+        for stamp in (10.0, 10.2, 10.5, 10.8):
+            _, confirmed = tracker.update(
+                "thermal_source", {}, position, timestamp=stamp
+            )
+            self.assertFalse(confirmed)
+        candidate, confirmed = tracker.update(
+            "thermal_source", {}, position, timestamp=11.0
+        )
+        self.assertTrue(confirmed)
+        self.assertEqual(5, candidate["hits"])
 
 
 if __name__ == "__main__":

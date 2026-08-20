@@ -110,6 +110,9 @@ class ThermalDetectorNode:
         self.threshold_k = float(rospy.get_param("~threshold_k", 2.0))
         self.min_area = float(rospy.get_param("~min_area", 20))
         self.max_area = float(rospy.get_param("~max_area", 5000))
+        self.reject_roi_border_touching = bool(
+            rospy.get_param("~reject_roi_border_touching", False)
+        )
         self.publish_rate = float(rospy.get_param("~publish_rate", 20))
         self.display = bool(rospy.get_param("~display", False))
         self.uvc_demo_path = str(rospy.get_param("~uvc_demo_path", "./uvc_demo"))
@@ -170,7 +173,17 @@ class ThermalDetectorNode:
 
     def publish_detection(self, gray, debug, detection):
         stamp = rospy.Time.now()
-        stable_detected, stable_cx, stable_cy = self.stable_filter.update(detection)
+        border_rejected = bool(
+            self.reject_roi_border_touching
+            and detection.get("touches_roi_border", False)
+        )
+        confirmation_detection = dict(detection)
+        confirmation_detection["detected"] = bool(
+            detection["detected"] and not border_rejected
+        )
+        stable_detected, stable_cx, stable_cy = self.stable_filter.update(
+            confirmation_detection
+        )
         # Render the same detector-level candidate/stable state that is sent
         # in candidate_status.  The caller's legacy debug argument is kept
         # for API compatibility with older launch wrappers.
@@ -217,7 +230,16 @@ class ThermalDetectorNode:
             "cy": int(detection["cy"]) if candidate_detected else None,
             "bbox": list(detection["bbox"]) if candidate_detected else None,
             "area": float(detection["area"]) if candidate_detected else 0.0,
-            "reason": "stable_candidate" if stable_detected else "raw_candidate",
+            "touches_roi_border": bool(
+                detection.get("touches_roi_border", False)
+            ),
+            "reason": (
+                "stable_candidate"
+                if stable_detected
+                else "roi_border_clipped"
+                if border_rejected
+                else "raw_candidate"
+            ),
         }
         self.candidate_status_pub.publish(
             String(data=json.dumps(candidate_status, ensure_ascii=False))

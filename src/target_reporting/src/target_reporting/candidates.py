@@ -13,9 +13,28 @@ class CandidateTracker:
         "detector_stable", "detector_confirmable",
     }
 
-    def __init__(self, distance_m=0.30, confirm_hits=1):
+    def __init__(
+        self,
+        distance_m=0.30,
+        confirm_hits=1,
+        confirm_hits_by_type=None,
+        confirmation_max_gap_s_by_type=None,
+        confirmation_duration_s_by_type=None,
+    ):
         self.distance_m = float(distance_m)
         self.confirm_hits = max(1, int(confirm_hits))
+        self.confirm_hits_by_type = {
+            str(key): max(1, int(value))
+            for key, value in (confirm_hits_by_type or {}).items()
+        }
+        self.confirmation_max_gap_s_by_type = {
+            str(key): max(0.0, float(value))
+            for key, value in (confirmation_max_gap_s_by_type or {}).items()
+        }
+        self.confirmation_duration_s_by_type = {
+            str(key): max(0.0, float(value))
+            for key, value in (confirmation_duration_s_by_type or {}).items()
+        }
         self._items = []
         self._next = {}
 
@@ -29,7 +48,14 @@ class CandidateTracker:
             )
         )
 
-    def update(self, target_type, result, position, allow_confirmation=True):
+    def update(
+        self,
+        target_type,
+        result,
+        position,
+        allow_confirmation=True,
+        timestamp=None,
+    ):
         key = self._result_key(result)
         qr_content = ""
         if target_type == "qr_code":
@@ -61,6 +87,8 @@ class CandidateTracker:
                 "qr_content": qr_content,
                 "position": dict(position),
                 "hits": 0,
+                "last_confirmation_stamp": None,
+                "first_confirmation_stamp": None,
                 "reported": False,
                 "local_number": number,
             }
@@ -70,15 +98,49 @@ class CandidateTracker:
             # unvalidated observations accumulate toward a confirmation.
             if not best["reported"]:
                 best["hits"] = 0
+                best["last_confirmation_stamp"] = None
+                best["first_confirmation_stamp"] = None
             for axis in ("x", "y", "z"):
                 best["position"][axis] = float(position[axis])
             return best, False
 
+        current_stamp = None if timestamp is None else float(timestamp)
+        max_gap = self.confirmation_max_gap_s_by_type.get(target_type)
+        last_stamp = best.get("last_confirmation_stamp")
+        if (
+            max_gap is not None
+            and current_stamp is not None
+            and last_stamp is not None
+            and (current_stamp < last_stamp or current_stamp - last_stamp > max_gap)
+        ):
+            best["hits"] = 0
+            best["first_confirmation_stamp"] = None
+
         best["hits"] += 1
+        if current_stamp is not None:
+            if best.get("first_confirmation_stamp") is None:
+                best["first_confirmation_stamp"] = current_stamp
+            best["last_confirmation_stamp"] = current_stamp
         alpha = 1.0 / best["hits"]
         for axis in ("x", "y", "z"):
             best["position"][axis] += alpha * (float(position[axis]) - best["position"][axis])
-        newly_confirmed = best["hits"] >= self.confirm_hits and not best["reported"]
+        required_hits = self.confirm_hits_by_type.get(
+            target_type, self.confirm_hits
+        )
+        required_duration = self.confirmation_duration_s_by_type.get(
+            target_type, 0.0
+        )
+        first_stamp = best.get("first_confirmation_stamp")
+        observed_duration = (
+            current_stamp - first_stamp
+            if current_stamp is not None and first_stamp is not None
+            else 0.0
+        )
+        newly_confirmed = (
+            best["hits"] >= required_hits
+            and observed_duration >= required_duration
+            and not best["reported"]
+        )
         if newly_confirmed:
             best["reported"] = True
         return best, newly_confirmed

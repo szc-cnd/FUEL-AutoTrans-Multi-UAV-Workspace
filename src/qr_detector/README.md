@@ -9,7 +9,8 @@ ArUco 码检测器。
 ## 功能
 
 - 订阅 RealSense 彩色图像、对齐深度图和相机内参。
-- 使用 OpenCV `cv2.QRCodeDetector` 检测普通 QR Code。
+- 使用 OpenCV `cv2.QRCodeDetector` 检测普通 QR Code 的四角，并在系统版
+  OpenCV 未链接 QUIRC、只能检测而不能解码时自动调用 `libzbar` 解码。
 - 角点检测结果先作为本机候选显示；只有通过内部二维码真实性校验和深度
   一致性检查后，才允许进入稳定确认和远程上报。二维码内容默认不输出。
 - 根据四个角点计算二维码中心像素坐标。
@@ -26,6 +27,12 @@ ArUco 码检测器。
 - 有效候选会发布到机载候选话题供 target_reporting/RViz 观察，但默认不发送到远程端；只有连续确认后的结果才进入稳定上报链路。
 
 ## 编译
+
+运行时需要系统动态库 `libzbar0`。比赛机当前已安装；新设备可执行：
+
+```bash
+sudo apt install libzbar0
+```
 
 将 `qr_detector` 放到 `catkin_ws/src` 下，然后编译：
 
@@ -112,6 +119,6 @@ Y = (center_v - cy) * Z / fy
 
 ## 后续扩展
 
-当前版本只使用 OpenCV `QRCodeDetector`。如果比赛现场光照、运动模糊或角度
+当前版本使用 OpenCV `QRCodeDetector` 定位、`libzbar` 解码回退。如果比赛现场光照、运动模糊或角度
 导致 OpenCV 检测不稳定，可以在节点中的 QR 检测入口后面加入 YOLO 兜底分支，
 复用现有的深度取值、相机反投影、滤波和发布逻辑。
