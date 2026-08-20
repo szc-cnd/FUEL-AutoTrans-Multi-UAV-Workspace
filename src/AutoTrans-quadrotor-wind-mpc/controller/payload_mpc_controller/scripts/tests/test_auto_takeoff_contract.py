@@ -30,7 +30,7 @@ class AutoTakeoffContractTest(unittest.TestCase):
     def test_takeoff_parameters_keep_target_and_climb_rate(self):
         for token in ("struct Takeoff", 'takeoff/target_z', 'takeoff/climb_rate'):
             self.assertIn(token, self.params_header)
-        self.assertIn("target_z: 0.5", self.config)
+        self.assertIn("target_z: 0.6", self.config)
         self.assertIn("climb_rate: 0.15", self.config)
 
     def test_takeoff_reference_generation_is_unchanged(self):
