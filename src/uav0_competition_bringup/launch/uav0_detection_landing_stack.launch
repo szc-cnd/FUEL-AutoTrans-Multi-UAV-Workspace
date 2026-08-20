@@ -19,6 +19,10 @@
   <arg name="enable_down_camera" default="false" />
   <arg name="enable_precision_landing" default="false" />
   <arg name="enable_dual_uav_landing_coordinator" default="true" />
+  <!-- 出口识别调试期间默认关闭搜索、精降和双机释放。
+       手动恢复：UAV0_ENABLE_SEARCH_LANDING=true 后重新启动。 -->
+  <arg name="enable_search_landing"
+       default="$(optenv UAV0_ENABLE_SEARCH_LANDING false)" />
   <!-- 比赛模式使用D435粗定位加速；最终降落仍只接受下视final_aruco。 -->
   <arg name="enable_front_aruco_hint" default="true" />
   <arg name="landing_vehicle_ns" default="UAV0" />
@@ -101,19 +105,21 @@
     <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
   </include>
 
-  <include if="$(arg enable_precision_landing)"
-           file="$(find precision_landing)/launch/precision_landing.launch">
-    <arg name="image_topic" value="$(arg landing_image_topic)" />
-    <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
-    <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
-    <arg name="landing_search_config"
-         value="$(find precision_landing)/config/landing_search.yaml" />
-    <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)" />
-    <arg name="require_platform_assignment"
-         value="$(arg enable_dual_uav_landing_coordinator)" />
-  </include>
+  <group if="$(arg enable_search_landing)">
+    <include if="$(arg enable_precision_landing)"
+             file="$(find precision_landing)/launch/precision_landing.launch">
+      <arg name="image_topic" value="$(arg landing_image_topic)" />
+      <arg name="camera_info_topic" value="$(arg landing_camera_info_topic)" />
+      <arg name="vehicle_ns" value="$(arg landing_vehicle_ns)" />
+      <arg name="landing_search_config"
+           value="$(find precision_landing)/config/landing_search.yaml" />
+      <arg name="enable_front_aruco_hint" value="$(arg enable_front_aruco_hint)" />
+      <arg name="require_platform_assignment"
+           value="$(arg enable_dual_uav_landing_coordinator)" />
+    </include>
 
-  <!-- 只在前机启动一份；通过 ROS/WiFi 话题协调两机使用不同 ArUco 平台。 -->
-  <include if="$(arg enable_dual_uav_landing_coordinator)"
-           file="$(find precision_landing)/launch/dual_uav_landing_coordinator.launch" />
+    <!-- 只在前机启动一份；通过 ROS/WiFi 话题协调两机使用不同 ArUco 平台。 -->
+    <include if="$(arg enable_dual_uav_landing_coordinator)"
+             file="$(find precision_landing)/launch/dual_uav_landing_coordinator.launch" />
+  </group>
 </launch>
