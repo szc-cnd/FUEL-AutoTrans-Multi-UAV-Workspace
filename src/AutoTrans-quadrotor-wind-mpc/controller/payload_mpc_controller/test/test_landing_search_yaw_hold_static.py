@@ -26,6 +26,17 @@ def test_front_scan_states_activate_autotrans_yaw_hold():
     assert "landing_search_yaw_active_ = active" in FSM
 
 
+def test_forward_approach_keeps_locked_yaw_without_enabling_position_hold():
+    yaw_states = FSM.split(
+        "bool isLandingSearchYawState", maxsplit=1
+    )[1].split("bool isLandingSearchMissionState", maxsplit=1)[0]
+    mission_states = FSM.split(
+        "bool isLandingSearchMissionState", maxsplit=1
+    )[1].split("double wrapYaw", maxsplit=1)[0]
+    assert 'state == "FRONT_ARUCO_FORWARD_APPROACH"' not in yaw_states
+    assert 'state == "FRONT_ARUCO_FORWARD_APPROACH"' in mission_states
+
+
 def test_yaw_hold_discards_old_translation_and_locks_current_xyz():
     hold = FSM.split("void MPCFSM::processLandingSearchYawHold", maxsplit=1)[1].split(
         "void MPCFSM::clearAutonomousState", maxsplit=1

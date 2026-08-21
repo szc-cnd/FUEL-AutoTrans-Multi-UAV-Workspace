@@ -88,6 +88,8 @@ class FrontArucoHintNode {
     private_node_.param("frames/camera_optical", camera_optical_frame_,
                         std::string("camera_color_optical_frame"));
     private_node_.param("mission/require_stage_gate", require_stage_gate_, true);
+    private_node_.param("mission/require_search_state_gate",
+                        require_search_state_gate_, true);
     private_node_.param("safety/image_timeout_sec", image_timeout_sec_, 0.30);
     private_node_.param("safety/max_header_future_sec", max_header_future_sec_,
                         0.05);
@@ -126,6 +128,7 @@ class FrontArucoHintNode {
     std::string depth_topic("/camera/aligned_depth_to_color/image_raw");
     std::string odometry_topic("/UAV0/fast_lio/Odom_high_freq");
     std::string mission_status_topic("/UAV0/mission/task_status");
+    std::string search_state_topic("/landing_diff_search_manager/state");
     std::string hint_topic("/UAV0/landing/front_aruco_hint");
     std::string candidates_topic("/UAV0/landing/front/candidates");
     std::string locked_id_topic("/UAV0/landing/front/locked_id");
@@ -138,6 +141,8 @@ class FrontArucoHintNode {
     private_node_.param("topics/odometry", odometry_topic, odometry_topic);
     private_node_.param("topics/mission_status", mission_status_topic,
                         mission_status_topic);
+    private_node_.param("topics/search_state", search_state_topic,
+                        search_state_topic);
     private_node_.param("topics/hint_world", hint_topic, hint_topic);
     private_node_.param("topics/candidates", candidates_topic,
                         candidates_topic);
@@ -157,6 +162,8 @@ class FrontArucoHintNode {
     mission_status_subscriber_ = node_.subscribe(
         mission_status_topic, 5, &FrontArucoHintNode::missionStatusCallback,
         this);
+    search_state_subscriber_ = node_.subscribe(
+        search_state_topic, 5, &FrontArucoHintNode::searchStateCallback, this);
     hint_publisher_ =
         node_.advertise<geometry_msgs::PoseStamped>(hint_topic, 3);
     candidates_publisher_ =
@@ -171,8 +178,38 @@ class FrontArucoHintNode {
   }
 
   bool stageAllowsHint() const {
-    return !require_stage_gate_ || mission_stage_ == "SEARCH_OUTSIDE_LANDING" ||
-           mission_stage_ == "SEARCH_OUTSIDE_QR";
+    const bool mission_ready =
+        !require_stage_gate_ || mission_stage_ == "SEARCH_OUTSIDE_LANDING" ||
+        mission_stage_ == "SEARCH_OUTSIDE_QR";
+    const bool scan_ready = !require_search_state_gate_ || front_scan_active_;
+    return mission_ready && scan_ready;
+  }
+
+  static bool isFrontScanState(const std::string& state) {
+    return state == "FRONT_ARUCO_INITIAL_WAIT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_LEFT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RIGHT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RETURN";
+  }
+
+  void searchStateCallback(const std_msgs::StringConstPtr& message) {
+    const std::string next_state = firstToken(message->data);
+    if (next_state == landing_search_state_) return;
+    const bool next_active = isFrontScanState(next_state);
+    landing_search_state_ = next_state;
+    if (next_active != front_scan_active_) {
+      front_scan_active_ = next_active;
+      tracker_.reset();
+      target_filter_.reset();
+      candidate_filters_.clear();
+      stable_candidates_.clear();
+      std_msgs::Header header;
+      header.stamp = ros::Time::now();
+      publishCandidates(header);
+      publishLockedId();
+    }
+    ROS_INFO("front_aruco_hint: landing search state -> %s, scan_active=%s",
+             landing_search_state_.c_str(), front_scan_active_ ? "true" : "false");
   }
 
   void missionStatusCallback(const std_msgs::StringConstPtr& message) {
@@ -544,6 +581,7 @@ class FrontArucoHintNode {
   ros::Subscriber depth_subscriber_;
   ros::Subscriber odometry_subscriber_;
   ros::Subscriber mission_status_subscriber_;
+  ros::Subscriber search_state_subscriber_;
   ros::Publisher hint_publisher_;
   ros::Publisher candidates_publisher_;
   ros::Publisher locked_id_publisher_;
@@ -560,6 +598,8 @@ class FrontArucoHintNode {
   std::map<int, precision_landing::LandingPlatform> stable_candidates_;
   bool camera_info_received_{false};
   bool require_stage_gate_{true};
+  bool require_search_state_gate_{true};
+  bool front_scan_active_{false};
   bool require_depth_{true};
   int requested_marker_id_{-1};
   int depth_search_radius_{5};
@@ -577,6 +617,7 @@ class FrontArucoHintNode {
   std::string output_world_frame_;
   std::string camera_optical_frame_;
   std::string mission_stage_;
+  std::string landing_search_state_;
 };
 
 }  // namespace

@@ -75,6 +75,7 @@
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
         <!-- 前视不足两码并切换下视后，等UAV0实测升高再让UAV1前往前视扫描锚点。 -->
         <param name="landing_search_state_topic" value="/landing_diff_search_manager/state"/>
+        <param name="front_scan_anchor_topic" value="/UAV0/landing/front_scan_anchor"/>
         <param name="down_search_release_height" value="1.80"/>
         <param name="down_search_min_vertical_separation" value="1.00"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->

@@ -6,6 +6,7 @@
     <param name="topics/front_candidates" value="/UAV0/landing/front/candidates"/>
     <param name="topics/final_exit" value="/UAV0/mission/final_exit"/>
     <param name="topics/uav0_success" value="/UAV0/landing/success"/>
+    <param name="topics/search_state" value="/landing_diff_search_manager/state"/>
     <param name="topics/uav0_assigned" value="/UAV0/landing/assigned_id"/>
     <param name="topics/uav1_assigned" value="/UAV1/landing/assigned_id"/>
     <param name="topics/uav0_target" value="/UAV0/landing/assigned_target"/>

@@ -77,6 +77,7 @@
     <param name="topics/aligned_depth" value="$(arg front_depth_topic)"/>
     <param name="topics/odometry" value="$(arg odometry_topic)"/>
     <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
+    <param name="topics/search_state" value="/landing_diff_search_manager/state"/>
     <param name="topics/hint_world" value="$(arg front_aruco_hint_topic)"/>
     <param name="topics/candidates" value="$(arg front_aruco_candidates_topic)"/>
     <param name="topics/locked_id" value="$(arg topic_prefix)/landing/front/locked_id"/>
@@ -111,6 +112,7 @@
               /dual_uav_landing/release_uav1
               /dual_uav_landing/status
               /landing_diff_search_manager/state
+              /UAV0/landing/front_scan_anchor
               /tf /tf_static /rosout_agg"/>
 
   <node if="$(arg enable_setpoint_arbiter)" pkg="precision_landing"

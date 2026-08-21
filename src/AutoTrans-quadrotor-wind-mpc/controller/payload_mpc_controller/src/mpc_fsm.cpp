@@ -33,7 +33,8 @@ namespace
 
 	bool isLandingSearchMissionState(const std::string &state)
 	{
-		return isLandingSearchYawState(state) ||
+		return state == "FRONT_ARUCO_FORWARD_APPROACH" ||
+			isLandingSearchYawState(state) ||
 			state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
 			state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
 			state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||

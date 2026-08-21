@@ -15,6 +15,11 @@
 
 namespace {
 
+std::string firstToken(const std::string& text) {
+  const std::size_t end = text.find_first_of(" \t\r\n");
+  return text.substr(0, end);
+}
+
 class DualUavLandingCoordinator {
  public:
   DualUavLandingCoordinator() : private_node_("~") {
@@ -22,11 +27,14 @@ class DualUavLandingCoordinator {
     std::string front_candidates_topic{"/UAV0/landing/front/candidates"};
     std::string exit_topic{"/UAV0/mission/final_exit"};
     std::string success_topic{"/UAV0/landing/success"};
+    std::string search_state_topic{"/landing_diff_search_manager/state"};
     private_node_.param("topics/candidates", candidates_topic, candidates_topic);
     private_node_.param("topics/front_candidates", front_candidates_topic,
                         front_candidates_topic);
     private_node_.param("topics/final_exit", exit_topic, exit_topic);
     private_node_.param("topics/uav0_success", success_topic, success_topic);
+    private_node_.param("topics/search_state", search_state_topic,
+                        search_state_topic);
     private_node_.param("topics/uav0_assigned", uav0_assigned_topic_, std::string("/UAV0/landing/assigned_id"));
     private_node_.param("topics/uav1_assigned", uav1_assigned_topic_, std::string("/UAV1/landing/assigned_id"));
     private_node_.param("topics/uav0_target", uav0_target_topic_, std::string("/UAV0/landing/assigned_target"));
@@ -48,6 +56,9 @@ class DualUavLandingCoordinator {
         &DualUavLandingCoordinator::frontCandidatesCallback, this);
     exit_sub_ = node_.subscribe(exit_topic, 1, &DualUavLandingCoordinator::exitCallback, this);
     success_sub_ = node_.subscribe(success_topic, 2, &DualUavLandingCoordinator::successCallback, this);
+    search_state_sub_ = node_.subscribe(
+        search_state_topic, 5,
+        &DualUavLandingCoordinator::searchStateCallback, this);
     target_timer_ = node_.createTimer(
         ros::Duration(0.20), &DualUavLandingCoordinator::targetTimerCallback, this);
     publishId(uav0_assigned_pub_, -1);
@@ -73,9 +84,36 @@ class DualUavLandingCoordinator {
     updateCandidates(*message, false);
   }
 
+  static bool frontCandidatesAllowed(const std::string& state) {
+    return state == "FRONT_ARUCO_INITIAL_WAIT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_LEFT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RIGHT" ||
+           state == "FRONT_ARUCO_YAW_SCAN_RETURN";
+  }
+
+  static bool downwardCandidatesAllowed(const std::string& state) {
+    return state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
+           state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||
+           state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
+           state == "FRONT_HINT_REACHED_WAIT_DOWN_CAMERA" ||
+           state == "FRONT_HINT_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "FINAL_ARUCO_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "ARUCO_LOCKED_DIFF_APPROACH";
+  }
+
+  void searchStateCallback(const std_msgs::StringConstPtr& message) {
+    landing_search_state_ = firstToken(message->data);
+  }
+
   void updateCandidates(const precision_landing::LandingPlatformArray& message,
                         bool downward_source) {
     if (assignments_ready_ || uav0_success_) return;
+    if ((downward_source &&
+         !downwardCandidatesAllowed(landing_search_state_)) ||
+        (!downward_source &&
+         !frontCandidatesAllowed(landing_search_state_))) {
+      return;
+    }
     for (const auto& platform : message.platforms) {
       const auto& point = platform.pose.pose.position;
       if (platform.id < 0 || !std::isfinite(point.x) ||
@@ -160,7 +198,8 @@ class DualUavLandingCoordinator {
   }
 
   ros::NodeHandle node_, private_node_;
-  ros::Subscriber candidates_sub_, front_candidates_sub_, exit_sub_, success_sub_;
+  ros::Subscriber candidates_sub_, front_candidates_sub_, exit_sub_, success_sub_,
+      search_state_sub_;
   ros::Timer target_timer_;
   ros::Publisher uav0_assigned_pub_, uav1_assigned_pub_, uav0_target_pub_, uav1_target_pub_;
   ros::Publisher release_pub_, ready_pub_, status_pub_;
@@ -173,6 +212,7 @@ class DualUavLandingCoordinator {
   bool have_exit_{false}, uav0_success_{false}, assignments_ready_{false};
   int uav0_id_{-1}, uav1_id_{-1};
   std::string last_status_;
+  std::string landing_search_state_{"WAIT_EXIT_SWITCH"};
 };
 
 }  // namespace

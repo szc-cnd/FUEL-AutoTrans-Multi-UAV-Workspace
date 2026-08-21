@@ -44,6 +44,8 @@ target_link_libraries(landing_search_node
   landing_search_core aruco_tracker ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
 add_executable(front_aruco_hint_node src/front_aruco_hint_node.cpp)
+add_dependencies(front_aruco_hint_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS})
 target_link_libraries(front_aruco_hint_node
   landing_search_core aruco_tracker ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 

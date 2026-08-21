@@ -92,6 +92,9 @@ def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
     assert params["landing_search_state_topic"] == (
         "/landing_diff_search_manager/state"
     )
+    assert params["front_scan_anchor_topic"] == (
+        "/UAV0/landing/front_scan_anchor"
+    )
     assert params["down_search_release_height"] == "1.80"
     assert params["down_search_min_vertical_separation"] == "1.00"
 
@@ -110,7 +113,8 @@ def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
     assert "down_search_release_height_" in release
     assert "down_search_min_vertical_separation_" in release
     assert 'relayWaypointSeparationReady("OUTSIDE_WAIT")' in release
-    assert 'appendRelayWaypoint(confirmed_exit_, "OUTSIDE_WAIT")' in release
+    assert "have_front_scan_anchor_" in release
+    assert 'appendRelayWaypoint(front_scan_anchor_, "OUTSIDE_WAIT")' in release
     assert "exit_waypoint_released_ = true" in release
 
     timer = source.split("void timerCallback", 1)[1].split(

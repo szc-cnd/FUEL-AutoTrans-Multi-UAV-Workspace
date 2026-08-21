@@ -4,6 +4,7 @@ topics:
   aligned_depth: /camera/aligned_depth_to_color/image_raw
   odometry: /UAV0/fast_lio/Odom_high_freq
   mission_status: /UAV0/mission/task_status
+  search_state: /landing_diff_search_manager/state
   hint_world: /UAV0/landing/front_aruco_hint
   candidates: /UAV0/landing/front/candidates
   locked_id: /UAV0/landing/front/locked_id
@@ -51,3 +52,5 @@ safety:
 
 mission:
   require_stage_gate: true
+  # CH9后先让UAV0保持航向前移1m；只有搜索管理器确认到达后才处理前视图像。
+  require_search_state_gate: true
