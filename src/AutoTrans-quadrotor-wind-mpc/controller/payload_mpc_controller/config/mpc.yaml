@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # 输入代价
 R_thrust:    0.75  # 推力输入代价。
-R_pitchroll:  6.0   # 提高横滚/俯仰角速度动作代价。
+R_pitchroll:  10.0   # 提高横滚/俯仰角速度动作代价。
 R_yaw:        0.75      # 偏航角速度输入代价。
 
 # 指数缩放：W_i = W * exp(-i/N * cost_scaling)。
