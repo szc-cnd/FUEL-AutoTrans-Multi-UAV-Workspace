@@ -118,6 +118,7 @@
     <arg name="require_pre_agent_trajectory" value="false" />
     <arg name="enable_random_global_init" value="false" />
     <arg name="search_subgoal_topic" value="/UAV0/landing_diff/subgoal" />
+    <arg name="search_subgoal_update_distance" value="0.15" />
     <arg name="search_trigger_topic" value="/UAV0/landing_diff/trigger" />
     <arg name="search_goal_trigger_topic" value="/UAV0/landing_diff/manual_trigger" />
   </include>
