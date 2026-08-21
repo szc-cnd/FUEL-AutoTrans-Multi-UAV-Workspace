@@ -11,6 +11,7 @@ ROS 发行版（当前为 Ubuntu/ROS Noetic）。
 - `src/precision_landing/`：搜索、平台识别、候选平台发布、双机平台分配、精确降落、消息和配置
 - `src/control/`：UAV1 接力、等待/释放逻辑、分配目标接收、双机坐标转换和安全跟随
 - `src/Diff-Planner`：UAV1 接收分配平台后生成搜索/接近轨迹所依赖的子模块版本
+- `shfiles/view_uav1_down_camera.sh`：UAV1 下视搜索/精降统一画面的独立查看入口
 - 上述目录在 `CMakeLists.txt`、`package.xml`、`msg/`、`launch/`、`config/`、`src/`、`include/` 和 `test/` 中的关联修改
 - UAV1 运行所需但不进入 Git 的相机标定文件和本机设备参数
 
@@ -207,6 +208,17 @@ rostopic hz /UAV1/fast_lio/Odometry
 
 确认下视图像、相机内参和里程计均有数据后，再启动双机入口。无桨测试时先使用隔离输出配置，不要直接接通飞控控制输出。
 
+在 UAV1 图形桌面另开一个终端，可独立查看带搜索/精降标注的下视画面：
+
+```bash
+cd ~/match_ws
+bash shfiles/view_uav1_down_camera.sh
+```
+
+该脚本只启动 `rqt_image_view`，默认等待
+`/UAV1/landing/combined_debug_image`，不会重复启动相机或降落节点。使用 `raw` 参数可查看
+`/UAV1/down_camera/image_raw` 原始画面。
+
 ## 8. 启动后验证
 
 ```bash
@@ -247,6 +259,7 @@ ssh <uav1_user>@<uav1_ip> \
 - 两台电脑均已 `source /opt/ros/noetic/setup.bash` 和 `source ~/match_ws/devel/setup.bash`
 - UAV1 已加载 `source ~/match_ws/src/Diff-Planner/devel/setup.bash`
 - UAV1 下视图像、相机内参、FAST-LIO 里程计均有数据
+- UAV1 独立下视窗口能显示 `/UAV1/landing/combined_debug_image`
 - `landing_search.yaml` 的相机到机体外参一致
 - `body_camera_03.yaml` 存在且内容为已确认的标定结果
 - `/UAV0`、`/UAV1` 话题命名空间没有串线
