@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -17,9 +19,12 @@ class DualUavLandingCoordinator {
  public:
   DualUavLandingCoordinator() : private_node_("~") {
     std::string candidates_topic{"/UAV0/landing/search/candidates"};
+    std::string front_candidates_topic{"/UAV0/landing/front/candidates"};
     std::string exit_topic{"/UAV0/mission/final_exit"};
     std::string success_topic{"/UAV0/landing/success"};
     private_node_.param("topics/candidates", candidates_topic, candidates_topic);
+    private_node_.param("topics/front_candidates", front_candidates_topic,
+                        front_candidates_topic);
     private_node_.param("topics/final_exit", exit_topic, exit_topic);
     private_node_.param("topics/uav0_success", success_topic, success_topic);
     private_node_.param("topics/uav0_assigned", uav0_assigned_topic_, std::string("/UAV0/landing/assigned_id"));
@@ -38,6 +43,9 @@ class DualUavLandingCoordinator {
     ready_pub_ = node_.advertise<std_msgs::Bool>(ready_topic_, 1, true);
     status_pub_ = node_.advertise<std_msgs::String>(status_topic_, 1, true);
     candidates_sub_ = node_.subscribe(candidates_topic, 2, &DualUavLandingCoordinator::candidatesCallback, this);
+    front_candidates_sub_ = node_.subscribe(
+        front_candidates_topic, 2,
+        &DualUavLandingCoordinator::frontCandidatesCallback, this);
     exit_sub_ = node_.subscribe(exit_topic, 1, &DualUavLandingCoordinator::exitCallback, this);
     success_sub_ = node_.subscribe(success_topic, 2, &DualUavLandingCoordinator::successCallback, this);
     target_timer_ = node_.createTimer(
@@ -53,12 +61,45 @@ class DualUavLandingCoordinator {
   void exitCallback(const geometry_msgs::PoseStampedConstPtr& message) {
     exit_position_ = message->pose.position;
     have_exit_ = true;
+    tryAssignPlatforms();
   }
 
   void candidatesCallback(const precision_landing::LandingPlatformArrayConstPtr& message) {
+    updateCandidates(*message, true);
+  }
+
+  void frontCandidatesCallback(
+      const precision_landing::LandingPlatformArrayConstPtr& message) {
+    updateCandidates(*message, false);
+  }
+
+  void updateCandidates(const precision_landing::LandingPlatformArray& message,
+                        bool downward_source) {
+    if (assignments_ready_ || uav0_success_) return;
+    for (const auto& platform : message.platforms) {
+      const auto& point = platform.pose.pose.position;
+      if (platform.id < 0 || !std::isfinite(point.x) ||
+          !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        continue;
+      }
+      if (downward_source) {
+        downward_ids_.insert(platform.id);
+        candidates_by_id_[platform.id] = platform;
+      } else if (downward_ids_.count(platform.id) == 0U) {
+        candidates_by_id_[platform.id] = platform;
+      }
+    }
+    tryAssignPlatforms();
+  }
+
+  void tryAssignPlatforms() {
     if (assignments_ready_ || uav0_success_ || !have_exit_ ||
-        message->platforms.size() < 2U) return;
-    std::vector<precision_landing::LandingPlatform> candidates = message->platforms;
+        candidates_by_id_.size() < 2U) return;
+    std::vector<precision_landing::LandingPlatform> candidates;
+    candidates.reserve(candidates_by_id_.size());
+    for (const auto& item : candidates_by_id_) {
+      candidates.push_back(item.second);
+    }
     std::sort(candidates.begin(), candidates.end(), [this](const auto& lhs, const auto& rhs) {
       const auto distance = [this](const auto& item) {
         const auto& p = item.pose.pose.position;
@@ -75,8 +116,8 @@ class DualUavLandingCoordinator {
     assignments_ready_ = true;
     uav0_target_ = far_platform.pose;
     uav1_target_ = near_platform.pose;
-    uav0_target_.header = message->header;
-    uav1_target_.header = message->header;
+    uav0_target_.header = far_platform.pose.header;
+    uav1_target_.header = near_platform.pose.header;
     publishTargets();
     publishId(uav0_assigned_pub_, uav0_id_);
     publishId(uav1_assigned_pub_, uav1_id_);
@@ -119,7 +160,7 @@ class DualUavLandingCoordinator {
   }
 
   ros::NodeHandle node_, private_node_;
-  ros::Subscriber candidates_sub_, exit_sub_, success_sub_;
+  ros::Subscriber candidates_sub_, front_candidates_sub_, exit_sub_, success_sub_;
   ros::Timer target_timer_;
   ros::Publisher uav0_assigned_pub_, uav1_assigned_pub_, uav0_target_pub_, uav1_target_pub_;
   ros::Publisher release_pub_, ready_pub_, status_pub_;
@@ -127,6 +168,8 @@ class DualUavLandingCoordinator {
   std::string release_topic_, ready_topic_, status_topic_;
   geometry_msgs::Point exit_position_;
   geometry_msgs::PoseStamped uav0_target_, uav1_target_;
+  std::map<int, precision_landing::LandingPlatform> candidates_by_id_;
+  std::set<int> downward_ids_;
   bool have_exit_{false}, uav0_success_{false}, assignments_ready_{false};
   int uav0_id_{-1}, uav1_id_{-1};
   std::string last_status_;

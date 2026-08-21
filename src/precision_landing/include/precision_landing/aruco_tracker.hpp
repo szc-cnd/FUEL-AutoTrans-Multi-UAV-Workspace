@@ -20,6 +20,7 @@ struct ArucoTrackerConfig {
 struct DetectedTarget {
   int id{-1};
   Eigen::Vector3d position_camera{Eigen::Vector3d::Zero()};
+  Eigen::Vector2d image_center_px{Eigen::Vector2d::Zero()};
   double score{0.0};
 };
 

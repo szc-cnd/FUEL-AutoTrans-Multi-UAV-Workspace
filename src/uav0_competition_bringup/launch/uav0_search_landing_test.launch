@@ -150,6 +150,8 @@
     <param name="stage_topic" value="/UAV0/mission/task_status" />
     <param name="marker_topic" value="/UAV0/mission/detection/final_aruco" />
     <param name="front_hint_topic" value="/UAV0/landing/front_aruco_hint" />
+    <param name="assigned_target_topic" value="/UAV0/landing/assigned_target" />
+    <param name="enable_single_front_hint_approach" value="false" />
     <param name="subgoal_topic" value="/UAV0/landing_diff/subgoal" />
     <param name="trigger_topic" value="/UAV0/landing_diff/trigger" />
     <param name="yaw_topic" value="/UAV0/landing_diff/yaw" />
@@ -171,6 +173,7 @@
     <param name="target_frame" value="world" />
     <param name="marker_timeout_sec" value="0.50" />
     <param name="front_hint_timeout_sec" value="0.50" />
+    <param name="assigned_target_timeout_sec" value="0.50" />
     <param name="max_header_future_sec" value="0.05" />
   </node>
 

@@ -233,8 +233,16 @@ TargetObservation ArucoTracker::process(const cv::Mat& image,
       continue;
     }
 
-    detected_targets_.push_back(
-        DetectedTarget{id, position_camera, selectionScore(corners[i], image.size())});
+    Eigen::Vector2d image_center_px = Eigen::Vector2d::Zero();
+    if (!corners[i].empty()) {
+      cv::Point2f center(0.0F, 0.0F);
+      for (const cv::Point2f& corner : corners[i]) center += corner;
+      center *= 1.0F / static_cast<float>(corners[i].size());
+      image_center_px = Eigen::Vector2d(center.x, center.y);
+    }
+    detected_targets_.push_back(DetectedTarget{
+        id, position_camera, image_center_px,
+        selectionScore(corners[i], image.size())});
 
     // Keep publishing other stable candidates for the dual-platform
     // coordinator, while the mission lock itself remains on one ID.

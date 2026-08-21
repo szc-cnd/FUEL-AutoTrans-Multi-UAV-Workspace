@@ -26,6 +26,7 @@
   <arg name="front_camera_info_topic" default="/camera/color/camera_info"/>
   <arg name="front_depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
   <arg name="front_aruco_hint_topic" default="$(arg topic_prefix)/landing/front_aruco_hint"/>
+  <arg name="front_aruco_candidates_topic" default="$(arg topic_prefix)/landing/front/candidates"/>
   <arg name="mission_status_topic" default="$(arg topic_prefix)/mission/task_status"/>
   <arg name="mission_landing_request_topic" default="$(arg topic_prefix)/mission/landing_request"/>
   <arg name="landing_marker_world_topic" default="$(arg topic_prefix)/mission/detection/final_aruco"/>
@@ -73,6 +74,7 @@
     <param name="topics/odometry" value="$(arg odometry_topic)"/>
     <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
     <param name="topics/hint_world" value="$(arg front_aruco_hint_topic)"/>
+    <param name="topics/candidates" value="$(arg front_aruco_candidates_topic)"/>
     <param name="topics/locked_id" value="$(arg topic_prefix)/landing/front/locked_id"/>
     <param name="topics/status" value="$(arg topic_prefix)/landing/front/status"/>
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/front/debug_image"/>

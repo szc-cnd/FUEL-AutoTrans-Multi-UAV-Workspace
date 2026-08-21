@@ -19,10 +19,12 @@
 ```text
 SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
 -> 出口原地前视：静看 1 s，缓慢扫描 -30° 到 +30° 并回正
--> 未发现时升至 2 m 做 Diff 蛇形搜索（前视发现时优先飞向粗定位）
--> 下视相机稳定确认平台 -> APPROACH_LANDING
+-> 前视跨扫描累计两个不同 ID；不足两个时升至 2 m 做 Diff 下视蛇形补齐
+-> 协调器按出口距离分配：UAV0 远平台、UAV1 近平台
+-> UAV0 到远平台上方等待下视指定 ID 复核 -> APPROACH_LANDING
 -> 规划到平台上方 2.00 m -> /UAVx/mission/landing_request
 -> /UAVx/need_to_land -> 精确降落
+-> /UAV0/landing/success=true 后才释放 UAV1 前往近平台并重复下视复核、精降
 ```
 
 搜索节点只在 `/UAVx/mission/task_status` 进入门外搜索阶段后接受 ArUco，避免通道内
@@ -33,15 +35,16 @@ FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界�
 的接近目标，到达后才申请交接给降落代码。
 
 前视节点读取 D435 彩色图、对齐深度、`body_camera_03.yaml` 静态外参以及与图像同步的
-FAST-LIO 里程计，经多帧稳定后只发布
-`/UAVx/landing/front_aruco_hint`。该话题是有搜索边界约束的粗略提示，不能发布
-`final_aruco`、`landing_request` 或 `/need_to_land`。Diff 到达粗定位上方后等待下视相机
-确认；若两秒内没有确认，则废弃本次前视提示并回到最近的蛇形搜索航点。同一提示不会
-反复吸引无人机。
+FAST-LIO 里程计。每个 ID 分别经过连续帧、深度一致性和世界坐标稳定过滤，并跨完整
+偏航扫描累计到 `/UAV0/landing/front/candidates`。双机模式不再响应单个
+`front_aruco_hint`；两个不同 ID 由协调器合并去重，下视坐标优先覆盖同 ID 的前视粗
+坐标。协调器只把远平台粗目标发布到 `/UAV0/landing/assigned_target`，它不能写入
+`final_aruco`、`landing_request` 或 `/need_to_land`。UAV0 到达粗目标后若下视一直未
+复核指定 ID，则保持悬停，不下降也不改去另一平台。
 
 通道内及常规 FUEL 探索的水平速度上限保持 `0.20 m/s`。进入门外搜索后，降落专用
-Diff 与简单控制器按搜索状态同时切换为 `0.50 m/s`，Diff 加速度上限为
-`0.60 m/s²`；发布降落请求后不再使用搜索阶段高速，由视觉精降节点独立控制下降。
+Diff 的速度上限为 `0.30 m/s`、加速度上限为 `0.60 m/s²`；发布降落请求后不再使用
+搜索阶段速度，由视觉精降节点独立控制下降。
 
 规划器到达后，搜索节点仍会复核目标和里程计新鲜度、水平误差以及接近高度；只有全部
 通过才发布 `/UAVx/need_to_land=true`。该触发是锁存的，之后由
