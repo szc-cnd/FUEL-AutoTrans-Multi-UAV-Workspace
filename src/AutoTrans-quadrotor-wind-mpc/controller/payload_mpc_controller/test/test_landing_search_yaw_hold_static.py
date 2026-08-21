@@ -69,6 +69,6 @@ def test_downward_search_trajectory_keeps_ch9_locked_yaw():
     command = FSM.split("void MPCFSM::CMD_CTRL_process", maxsplit=1)[1].split(
         "void MPCFSM::publish_trigger", maxsplit=1
     )[0]
-    assert command.count("landingSearchYawReference(hover_yaw_)") >= 4
+    assert command.count("landingSearchYawReference(hover_yaw_)") >= 5
     assert "entry_command_yaw_ = landingSearchYawReference(" in command
     assert "traj_info->traj, traj_time, reference_yaw" in command
