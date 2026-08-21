@@ -738,11 +738,11 @@ namespace PayloadMPC
 			{
 				update_hover_pose();
 				oneTraj_Data_t *traj_info = &trajectory_data.traj_queue.front();
-					if (now_time < (traj_info->traj_start_time))
-					{ // the start time of first trajectory should be whole trajectory start time
-						trajectory_data.total_traj_start_time = traj_info->traj_start_time;
-						hover_yaw_ = landingSearchYawReference(hover_yaw_);
-						controller_.setHoverReference(hover_pose_, hover_yaw_);
+				if (now_time < (traj_info->traj_start_time))
+				{ // the start time of first trajectory should be whole trajectory start time
+					trajectory_data.total_traj_start_time = traj_info->traj_start_time;
+					hover_yaw_ = landingSearchYawReference(hover_yaw_);
+					controller_.setHoverReference(hover_pose_, hover_yaw_);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				}
 				else
