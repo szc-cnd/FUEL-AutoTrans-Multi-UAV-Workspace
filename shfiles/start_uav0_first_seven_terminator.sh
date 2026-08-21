@@ -222,7 +222,7 @@ run_mid360_pane() {
   roslaunch livox_ros_driver2 msg_MID360.launch \
     vehicle_ns:=UAV0 \
     msg_frame_id:=UAV0/livox_frame \
-    publish_freq:=30.0
+    publish_freq:=10.0
   printf '[退出] MID360 分屏，返回码=%s\n' "$?"
   keep_pane_open
 }
