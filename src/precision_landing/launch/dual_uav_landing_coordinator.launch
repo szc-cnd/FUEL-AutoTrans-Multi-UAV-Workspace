@@ -1,5 +1,5 @@
 <launch>
-  <!-- UAV0 先确认两个平台：远平台给 UAV0，近平台给 UAV1；UAV0 成功后释放 UAV1。 -->
+  <!-- UAV0 完成左右扫描后确认两个平台：第一个给 UAV1，第二个给 UAV0；UAV0 成功后释放 UAV1。 -->
   <node pkg="precision_landing" type="dual_uav_landing_coordinator_node"
         name="dual_uav_landing_coordinator" output="screen" required="true">
     <param name="topics/candidates" value="/UAV0/landing/search/candidates"/>

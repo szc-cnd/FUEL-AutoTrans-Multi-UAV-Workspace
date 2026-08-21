@@ -19,12 +19,13 @@
 ```text
 SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
 -> 出口原地前视：静看 1 s，缓慢扫描 -30° 到 +30° 并回正
--> 前视跨扫描累计两个不同 ID；不足两个时升至 2 m 做 Diff 下视蛇形补齐
--> 协调器按出口距离分配：UAV0 远平台、UAV1 近平台
--> UAV0 到远平台上方等待下视指定 ID 复核 -> APPROACH_LANDING
+-> 前视跨扫描累计两个不同 ID，但左右扫描和回正完成前只保留粗候选、不发布分配
+-> 不足两个时升至 2 m 做 Diff 下视蛇形补齐
+-> 协调器按稳定确认顺序分配：第一个平台给 UAV1，第二个平台给 UAV0
+-> UAV0 到第二个平台上方等待下视指定 ID 复核 -> APPROACH_LANDING
 -> 规划到平台上方 2.00 m -> /UAVx/mission/landing_request
 -> /UAVx/need_to_land -> 精确降落
--> /UAV0/landing/success=true 后才释放 UAV1 前往近平台并重复下视复核、精降
+-> /UAV0/landing/success=true 后才释放 UAV1 前往第一个平台并重复下视复核、精降
 ```
 
 搜索节点只在 `/UAVx/mission/task_status` 进入门外搜索阶段后接受 ArUco，避免通道内
@@ -38,7 +39,8 @@ FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界�
 FAST-LIO 里程计。每个 ID 分别经过连续帧、深度一致性和世界坐标稳定过滤，并跨完整
 偏航扫描累计到 `/UAV0/landing/front/candidates`。双机模式不再响应单个
 `front_aruco_hint`；两个不同 ID 由协调器合并去重，下视坐标优先覆盖同 ID 的前视粗
-坐标。协调器只把远平台粗目标发布到 `/UAV0/landing/assigned_target`，它不能写入
+坐标。协调器在完整左右扫描和回正结束后，才把第二个平台的粗目标发布到
+`/UAV0/landing/assigned_target`，它不能写入
 `final_aruco`、`landing_request` 或 `/need_to_land`。UAV0 到达粗目标后若下视一直未
 复核指定 ID，则保持悬停，不下降也不改去另一平台。
 

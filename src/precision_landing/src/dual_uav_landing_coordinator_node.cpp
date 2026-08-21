@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,13 @@ class DualUavLandingCoordinator {
     private_node_.param("topics/release_uav1", release_topic_, std::string("/dual_uav_landing/release_uav1"));
     private_node_.param("topics/assignments_ready", ready_topic_, std::string("/dual_uav_landing/assignments_ready"));
     private_node_.param("topics/status", status_topic_, std::string("/dual_uav_landing/status"));
+    private_node_.param("candidate_message_timeout_sec",
+                        candidate_message_timeout_sec_, 0.50);
+    private_node_.param("max_header_future_sec", max_header_future_sec_, 0.05);
+
+    if (candidate_message_timeout_sec_ <= 0.0 || max_header_future_sec_ < 0.0) {
+      throw std::runtime_error("dual_uav_landing: invalid candidate freshness parameters");
+    }
 
     uav0_assigned_pub_ = node_.advertise<std_msgs::Int32>(uav0_assigned_topic_, 1, true);
     uav1_assigned_pub_ = node_.advertise<std_msgs::Int32>(uav1_assigned_topic_, 1, true);
@@ -101,8 +109,37 @@ class DualUavLandingCoordinator {
            state == "ARUCO_LOCKED_DIFF_APPROACH";
   }
 
+  static bool frontScanCompleted(const std::string& state) {
+    return state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
+           state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||
+           state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
+           state == "FRONT_HINT_REACHED_WAIT_DOWN_CAMERA" ||
+           state == "FRONT_HINT_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "FINAL_ARUCO_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+           state == "ARUCO_LOCKED_DIFF_APPROACH" ||
+           state == "ASSIGNED_TARGET_REACHED_WAIT_DOWN_CONFIRMATION";
+  }
+
+  void resetSearchCandidates() {
+    candidates_by_id_.clear();
+    candidate_order_.clear();
+    downward_ids_.clear();
+    front_scan_completed_ = false;
+  }
+
   void searchStateCallback(const std_msgs::StringConstPtr& message) {
-    landing_search_state_ = firstToken(message->data);
+    const std::string next_state = firstToken(message->data);
+    if (next_state == "FRONT_ARUCO_FORWARD_APPROACH" &&
+        landing_search_state_ != next_state && !assignments_ready_) {
+      // 新一轮 CH9 搜索开始时清空上轮或锁存话题带来的候选。前飞阶段不采集，
+      // 到达扫描点后再保留本轮前视相机给出的粗位置。
+      resetSearchCandidates();
+    }
+    landing_search_state_ = next_state;
+    if (frontScanCompleted(next_state)) {
+      front_scan_completed_ = true;
+      tryAssignPlatforms();
+    }
   }
 
   void updateCandidates(const precision_landing::LandingPlatformArray& message,
@@ -114,11 +151,25 @@ class DualUavLandingCoordinator {
          !frontCandidatesAllowed(landing_search_state_))) {
       return;
     }
+    const double message_age_sec =
+        (ros::Time::now() - message.header.stamp).toSec();
+    if (message.header.stamp.isZero() ||
+        message_age_sec < -max_header_future_sec_ ||
+        message_age_sec > candidate_message_timeout_sec_) {
+      ROS_WARN_THROTTLE(
+          1.0,
+          "dual_uav_landing: reject stale candidate array age=%.3fs",
+          message_age_sec);
+      return;
+    }
     for (const auto& platform : message.platforms) {
       const auto& point = platform.pose.pose.position;
       if (platform.id < 0 || !std::isfinite(point.x) ||
           !std::isfinite(point.y) || !std::isfinite(point.z)) {
         continue;
+      }
+      if (candidates_by_id_.count(platform.id) == 0U) {
+        candidate_order_.push_back(platform.id);
       }
       if (downward_source) {
         downward_ids_.insert(platform.id);
@@ -132,35 +183,29 @@ class DualUavLandingCoordinator {
 
   void tryAssignPlatforms() {
     if (assignments_ready_ || uav0_success_ || !have_exit_ ||
-        candidates_by_id_.size() < 2U) return;
-    std::vector<precision_landing::LandingPlatform> candidates;
-    candidates.reserve(candidates_by_id_.size());
-    for (const auto& item : candidates_by_id_) {
-      candidates.push_back(item.second);
+        !front_scan_completed_ || candidate_order_.size() < 2U) return;
+    const auto first = candidates_by_id_.find(candidate_order_[0]);
+    const auto second = candidates_by_id_.find(candidate_order_[1]);
+    if (first == candidates_by_id_.end() || second == candidates_by_id_.end() ||
+        first->first == second->first) {
+      return;
     }
-    std::sort(candidates.begin(), candidates.end(), [this](const auto& lhs, const auto& rhs) {
-      const auto distance = [this](const auto& item) {
-        const auto& p = item.pose.pose.position;
-        return std::hypot(p.x - exit_position_.x, p.y - exit_position_.y);
-      };
-      return distance(lhs) < distance(rhs);
-    });
-    const auto& near_platform = candidates.front();
-    const auto& far_platform = candidates.back();
-    if (near_platform.id == far_platform.id) return;
-    if (uav0_id_ == far_platform.id && uav1_id_ == near_platform.id) return;
-    uav0_id_ = far_platform.id;
-    uav1_id_ = near_platform.id;
+    // 前机负责完成双码搜索：第一个稳定确认的平台交给后机，前机在确认
+    // 第二个平台后前往其粗位置，并由下视相机完成最终定位与精降。
+    const auto& uav1_platform = first->second;
+    const auto& uav0_platform = second->second;
+    uav0_id_ = uav0_platform.id;
+    uav1_id_ = uav1_platform.id;
     assignments_ready_ = true;
-    uav0_target_ = far_platform.pose;
-    uav1_target_ = near_platform.pose;
-    uav0_target_.header = far_platform.pose.header;
-    uav1_target_.header = near_platform.pose.header;
+    uav0_target_ = uav0_platform.pose;
+    uav1_target_ = uav1_platform.pose;
+    uav0_target_.header = uav0_platform.pose.header;
+    uav1_target_.header = uav1_platform.pose.header;
     publishTargets();
     publishId(uav0_assigned_pub_, uav0_id_);
     publishId(uav1_assigned_pub_, uav1_id_);
     publishBool(ready_pub_, true);
-    publishStatus("已找到两个平台：UAV0 远平台，UAV1 近平台；等待 UAV0 降落");
+    publishStatus("左右扫描完成并确认两个平台：UAV1 第一个，UAV0 第二个；等待 UAV0 降落");
   }
 
   void successCallback(const std_msgs::BoolConstPtr& message) {
@@ -208,9 +253,13 @@ class DualUavLandingCoordinator {
   geometry_msgs::Point exit_position_;
   geometry_msgs::PoseStamped uav0_target_, uav1_target_;
   std::map<int, precision_landing::LandingPlatform> candidates_by_id_;
+  std::vector<int> candidate_order_;
   std::set<int> downward_ids_;
   bool have_exit_{false}, uav0_success_{false}, assignments_ready_{false};
+  bool front_scan_completed_{false};
   int uav0_id_{-1}, uav1_id_{-1};
+  double candidate_message_timeout_sec_{0.50};
+  double max_header_future_sec_{0.05};
   std::string last_status_;
   std::string landing_search_state_{"WAIT_EXIT_SWITCH"};
 };

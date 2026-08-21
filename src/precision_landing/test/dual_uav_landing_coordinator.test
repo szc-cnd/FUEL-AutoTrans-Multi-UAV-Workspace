@@ -1,0 +1,23 @@
+<launch>
+  <node pkg="precision_landing" type="dual_uav_landing_coordinator_node"
+        name="dual_uav_landing_coordinator" output="screen">
+    <param name="topics/candidates" value="/test/down_candidates"/>
+    <param name="topics/front_candidates" value="/test/front_candidates"/>
+    <param name="topics/final_exit" value="/test/final_exit"/>
+    <param name="topics/uav0_success" value="/test/uav0_success"/>
+    <param name="topics/search_state" value="/test/search_state"/>
+    <param name="topics/uav0_assigned" value="/test/uav0_assigned"/>
+    <param name="topics/uav1_assigned" value="/test/uav1_assigned"/>
+    <param name="topics/uav0_target" value="/test/uav0_target"/>
+    <param name="topics/uav1_target" value="/test/uav1_target"/>
+    <param name="topics/release_uav1" value="/test/release_uav1"/>
+    <param name="topics/assignments_ready" value="/test/assignments_ready"/>
+    <param name="topics/status" value="/test/status"/>
+    <param name="candidate_message_timeout_sec" value="0.5"/>
+  </node>
+
+  <test test-name="dual_uav_landing_coordinator_test"
+        pkg="precision_landing"
+        type="test_dual_uav_landing_coordinator.py"
+        time-limit="15.0"/>
+</launch>
