@@ -70,6 +70,9 @@ target_link_libraries(goal_height_bridge ${catkin_LIBRARIES})
 add_executable(corridor_search_manager src/corridor_search_manager.cpp)
 target_link_libraries(corridor_search_manager ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+add_executable(landing_diff_search_manager src/landing_diff_search_manager.cpp)
+target_link_libraries(landing_diff_search_manager ${catkin_LIBRARIES})
+
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_swing_obstacle_guard
     test/test_swing_obstacle_guard.cpp

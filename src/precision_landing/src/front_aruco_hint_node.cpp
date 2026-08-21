@@ -3,6 +3,8 @@
 #include <deque>
 #include <iomanip>
 #include <limits>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -25,6 +27,7 @@
 
 #include "precision_landing/aruco_tracker.hpp"
 #include "precision_landing/landing_search_core.hpp"
+#include "precision_landing/LandingPlatformArray.h"
 
 namespace precision_landing {
 namespace {
@@ -69,6 +72,7 @@ class FrontArucoHintNode {
         tracker_(loadTrackerConfig(private_node_)),
         target_filter_(loadWorldFilterConfig(private_node_)),
         tf_listener_(tf_buffer_) {
+    candidate_filter_config_ = loadWorldFilterConfig(private_node_);
     loadConfiguration();
     configureInterfaces();
     publishStatus("等待出通道后启用前视ArUco粗定位");
@@ -120,9 +124,10 @@ class FrontArucoHintNode {
     std::string image_topic("/camera/color/image_raw");
     std::string camera_info_topic("/camera/color/camera_info");
     std::string depth_topic("/camera/aligned_depth_to_color/image_raw");
-    std::string odometry_topic("/UAV0/fast_lio/Odometry");
+    std::string odometry_topic("/UAV0/fast_lio/Odom_high_freq");
     std::string mission_status_topic("/UAV0/mission/task_status");
     std::string hint_topic("/UAV0/landing/front_aruco_hint");
+    std::string candidates_topic("/UAV0/landing/front/candidates");
     std::string locked_id_topic("/UAV0/landing/front/locked_id");
     std::string status_topic("/UAV0/landing/front/status");
     std::string debug_image_topic("/UAV0/landing/front/debug_image");
@@ -134,6 +139,8 @@ class FrontArucoHintNode {
     private_node_.param("topics/mission_status", mission_status_topic,
                         mission_status_topic);
     private_node_.param("topics/hint_world", hint_topic, hint_topic);
+    private_node_.param("topics/candidates", candidates_topic,
+                        candidates_topic);
     private_node_.param("topics/locked_id", locked_id_topic, locked_id_topic);
     private_node_.param("topics/status", status_topic, status_topic);
     private_node_.param("topics/debug_image", debug_image_topic,
@@ -152,6 +159,9 @@ class FrontArucoHintNode {
         this);
     hint_publisher_ =
         node_.advertise<geometry_msgs::PoseStamped>(hint_topic, 3);
+    candidates_publisher_ =
+        node_.advertise<precision_landing::LandingPlatformArray>(
+            candidates_topic, 2, true);
     locked_id_publisher_ = node_.advertise<std_msgs::Int32>(locked_id_topic, 1,
                                                             true);
     status_publisher_ =
@@ -171,6 +181,11 @@ class FrontArucoHintNode {
     mission_stage_ = next_stage;
     tracker_.reset();
     target_filter_.reset();
+    candidate_filters_.clear();
+    stable_candidates_.clear();
+    std_msgs::Header header;
+    header.stamp = ros::Time::now();
+    publishCandidates(header);
     publishLockedId();
     ROS_INFO("front_aruco_hint: mission stage -> %s", mission_stage_.c_str());
   }
@@ -273,6 +288,87 @@ class FrontArucoHintNode {
     return std::abs(depth_m - observation.position_camera.z()) <= allowed_error;
   }
 
+  void publishCandidates(const std_msgs::Header& source_header) {
+    precision_landing::LandingPlatformArray message;
+    message.header = source_header;
+    message.header.frame_id = output_world_frame_;
+    for (const auto& item : stable_candidates_) {
+      precision_landing::LandingPlatform platform = item.second;
+      platform.header = message.header;
+      platform.pose.header = message.header;
+      message.platforms.push_back(platform);
+    }
+    candidates_publisher_.publish(message);
+  }
+
+  void collectStableCandidates(
+      const std_msgs::Header& image_header,
+      const geometry_msgs::TransformStamped& camera_to_body,
+      const nav_msgs::Odometry& odometry) {
+    const geometry_msgs::Point& body_position = odometry.pose.pose.position;
+    const geometry_msgs::Quaternion& body_attitude =
+        odometry.pose.pose.orientation;
+    Eigen::Quaterniond body_orientation_world(
+        body_attitude.w, body_attitude.x, body_attitude.y, body_attitude.z);
+    if (!body_orientation_world.coeffs().array().isFinite().all() ||
+        body_orientation_world.norm() < 1.0e-6) {
+      return;
+    }
+    body_orientation_world.normalize();
+
+    for (const DetectedTarget& detected : tracker_.detectedTargets()) {
+      TargetObservation observation;
+      observation.valid = true;
+      observation.id = detected.id;
+      observation.position_camera = detected.position_camera;
+      observation.image_center_px = detected.image_center_px;
+      if (!validateDepth(observation, image_header.stamp, nullptr)) continue;
+
+      geometry_msgs::PointStamped point_camera;
+      point_camera.header = image_header;
+      if (point_camera.header.frame_id.empty()) {
+        point_camera.header.frame_id = camera_optical_frame_;
+      }
+      point_camera.point.x = detected.position_camera.x();
+      point_camera.point.y = detected.position_camera.y();
+      point_camera.point.z = detected.position_camera.z();
+      geometry_msgs::PointStamped point_body;
+      tf2::doTransform(point_camera, point_body, camera_to_body);
+      const Eigen::Vector3d body_point(
+          point_body.point.x, point_body.point.y, point_body.point.z);
+      const Eigen::Vector3d world =
+          body_orientation_world * body_point +
+          Eigen::Vector3d(body_position.x, body_position.y, body_position.z);
+
+      auto filter = candidate_filters_.find(detected.id);
+      if (filter == candidate_filters_.end()) {
+        filter = candidate_filters_
+                     .emplace(detected.id,
+                              std::unique_ptr<WorldTargetFilter>(
+                                  new WorldTargetFilter(candidate_filter_config_)))
+                     .first;
+      }
+      if (!filter->second->add(detected.id, world,
+                               image_header.stamp.toSec())) {
+        continue;
+      }
+
+      const Eigen::Vector3d filtered = filter->second->filteredPoint();
+      precision_landing::LandingPlatform platform;
+      platform.header = image_header;
+      platform.header.frame_id = output_world_frame_;
+      platform.id = detected.id;
+      platform.pose.header = platform.header;
+      platform.pose.pose.position.x = filtered.x();
+      platform.pose.pose.position.y = filtered.y();
+      platform.pose.pose.position.z = filtered.z();
+      platform.pose.pose.orientation.w = 1.0;
+      platform.score = detected.score;
+      stable_candidates_[detected.id] = platform;
+    }
+    publishCandidates(image_header);
+  }
+
   void imageCallback(const sensor_msgs::ImageConstPtr& message) {
     const double image_age_sec =
         (ros::Time::now() - message->header.stamp).toSec();
@@ -301,37 +397,19 @@ class FrontArucoHintNode {
         image->image, camera_matrix_, distortion_, message->header.stamp.toSec(),
         requested_marker_id_);
     publishLockedId();
-    if (!observation.valid || tracker_.lockedId() < 0) {
+    if (tracker_.detectedTargets().empty()) {
       target_filter_.reset();
       annotateAndPublish(tracker_.debugImage(), message->header,
                          "SEARCHING FRONT ARUCO");
       return;
     }
-
-    double measured_depth = std::numeric_limits<double>::quiet_NaN();
-    if (!validateDepth(observation, message->header.stamp, &measured_depth)) {
-      target_filter_.reset();
-      publishStatus("前视ArUco等待D435深度一致性验证");
-      annotateAndPublish(tracker_.debugImage(), message->header,
-                         "WAITING FOR DEPTH VALIDATION");
-      return;
-    }
-
-    geometry_msgs::PointStamped point_camera;
-    point_camera.header = message->header;
-    if (point_camera.header.frame_id.empty()) {
-      point_camera.header.frame_id = camera_optical_frame_;
-    }
-    point_camera.point.x = observation.position_camera.x();
-    point_camera.point.y = observation.position_camera.y();
-    point_camera.point.z = observation.position_camera.z();
-
-    geometry_msgs::PointStamped point_body;
+    geometry_msgs::TransformStamped camera_to_body;
     try {
-      const geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
-          body_frame_, point_camera.header.frame_id,
-          point_camera.header.stamp, ros::Duration(tf_timeout_sec_));
-      tf2::doTransform(point_camera, point_body, transform);
+      camera_to_body = tf_buffer_.lookupTransform(
+          body_frame_,
+          message->header.frame_id.empty() ? camera_optical_frame_
+                                           : message->header.frame_id,
+          message->header.stamp, ros::Duration(tf_timeout_sec_));
     } catch (const tf2::TransformException& error) {
       target_filter_.reset();
       ROS_WARN_THROTTLE(1.0, "front_aruco_hint: 等待D435到FAST-LIO机体的静态TF: %s",
@@ -353,6 +431,36 @@ class FrontArucoHintNode {
                          "WAITING FOR SYNCED FAST-LIO ODOM");
       return;
     }
+    collectStableCandidates(message->header, camera_to_body, *odometry);
+
+    // 候选累计与旧的单目标提示彼此独立。即使跟踪器仍锁定先看到的
+    // ID、当前画面只剩另一个 ID，也必须继续把后者跨偏航扫描累计。
+    if (!observation.valid || tracker_.lockedId() < 0) {
+      target_filter_.reset();
+      annotateAndPublish(tracker_.debugImage(), message->header,
+                         "ACCUMULATING FRONT ARUCO CANDIDATES");
+      return;
+    }
+
+    double measured_depth = std::numeric_limits<double>::quiet_NaN();
+    if (!validateDepth(observation, message->header.stamp, &measured_depth)) {
+      target_filter_.reset();
+      publishStatus("前视ArUco等待D435深度一致性验证");
+      annotateAndPublish(tracker_.debugImage(), message->header,
+                         "WAITING FOR DEPTH VALIDATION");
+      return;
+    }
+
+    geometry_msgs::PointStamped point_camera;
+    point_camera.header = message->header;
+    if (point_camera.header.frame_id.empty()) {
+      point_camera.header.frame_id = camera_optical_frame_;
+    }
+    point_camera.point.x = observation.position_camera.x();
+    point_camera.point.y = observation.position_camera.y();
+    point_camera.point.z = observation.position_camera.z();
+    geometry_msgs::PointStamped point_body;
+    tf2::doTransform(point_camera, point_body, camera_to_body);
     const geometry_msgs::Point& body_position = odometry->pose.pose.position;
     const geometry_msgs::Quaternion& body_attitude =
         odometry->pose.pose.orientation;
@@ -437,6 +545,7 @@ class FrontArucoHintNode {
   ros::Subscriber odometry_subscriber_;
   ros::Subscriber mission_status_subscriber_;
   ros::Publisher hint_publisher_;
+  ros::Publisher candidates_publisher_;
   ros::Publisher locked_id_publisher_;
   ros::Publisher status_publisher_;
   image_transport::Publisher debug_image_publisher_;
@@ -446,6 +555,9 @@ class FrontArucoHintNode {
   cv::Mat latest_depth_m_;
   ros::Time latest_depth_stamp_;
   std::deque<nav_msgs::Odometry> odometry_history_;
+  WorldTargetFilterConfig candidate_filter_config_;
+  std::map<int, std::unique_ptr<WorldTargetFilter>> candidate_filters_;
+  std::map<int, precision_landing::LandingPlatform> stable_candidates_;
   bool camera_info_received_{false};
   bool require_stage_gate_{true};
   bool require_depth_{true};

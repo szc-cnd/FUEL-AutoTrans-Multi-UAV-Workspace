@@ -136,7 +136,9 @@ def test_search_runtime_exclusion_clears_conflicting_lock():
 
 def test_dual_uav_coordinator_assigns_unique_ids_with_uav0_priority():
     source = (PACKAGE / "src/dual_uav_landing_coordinator_node.cpp").read_text()
-    assert "message->platforms.size() < 2U" in source
+    assert "candidates_by_id_.size() < 2U" in source
+    assert "downward_ids_.insert(platform.id)" in source
+    assert "downward_ids_.count(platform.id) == 0U" in source
     assert "const auto& far_platform = candidates.back()" in source
     assert "uav0_id_ = far_platform.id" in source
     assert "publishBool(release_pub_, true)" in source
@@ -147,6 +149,13 @@ def test_dual_uav_coordinator_assigns_unique_ids_with_uav0_priority():
     nodes = root.findall("node")
     assert len(nodes) == 1
     assert nodes[0].attrib["type"] == "dual_uav_landing_coordinator_node"
+    params = {
+        param.attrib["name"]: param.attrib["value"]
+        for param in nodes[0].findall("param")
+    }
+    assert params["topics/front_candidates"] == "/UAV0/landing/front/candidates"
+    assert params["topics/uav0_target"] == "/UAV0/landing/assigned_target"
+    assert params["topics/uav0_target"] != "/UAV0/mission/detection/final_aruco"
 
 
 def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():
@@ -159,7 +168,18 @@ def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():
     assert config["frames"]["body"] == "UAV0/body"
     assert config["frames"]["output_world"] == "world"
     assert config["topics"]["hint_world"] == "/UAV0/landing/front_aruco_hint"
+    assert config["topics"]["candidates"] == "/UAV0/landing/front/candidates"
     assert config["topics"]["hint_world"] != config["topics"].get("marker_world")
+
+
+def test_front_candidates_accumulate_distinct_stable_ids_across_scan():
+    source = (PACKAGE / "src/front_aruco_hint_node.cpp").read_text()
+    assert "for (const DetectedTarget& detected : tracker_.detectedTargets())" in source
+    assert "validateDepth(observation, image_header.stamp" in source
+    assert "candidate_filters_.find(detected.id)" in source
+    assert "stable_candidates_[detected.id] = platform" in source
+    assert "stable_candidates_.clear()" in source
+    assert "LandingPlatformArray" in source
 
 
 def test_precision_launch_wires_optional_front_hint_without_final_marker_access():
@@ -177,6 +197,7 @@ def test_precision_launch_wires_optional_front_hint_without_final_marker_access(
     assert params["topics/aligned_depth"] == "$(arg front_depth_topic)"
     assert params["topics/odometry"] == "$(arg odometry_topic)"
     assert params["topics/hint_world"] == "$(arg front_aruco_hint_topic)"
+    assert params["topics/candidates"] == "$(arg front_aruco_candidates_topic)"
     assert "topics/marker_world" not in params
     assert "topics/landing_trigger" not in params
 
