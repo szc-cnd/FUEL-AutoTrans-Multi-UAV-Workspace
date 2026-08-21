@@ -31,6 +31,21 @@ namespace
 			state == "FRONT_ARUCO_YAW_SCAN_RETURN";
 	}
 
+	bool isLandingSearchMissionState(const std::string &state)
+	{
+		return isLandingSearchYawState(state) ||
+			state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
+			state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
+			state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||
+			state == "TWO_ARUCOS_ASSIGNED_APPROACH_FAR_PLATFORM" ||
+			state == "FRONT_HINT_REACHED_WAIT_DOWN_CAMERA" ||
+			state == "FRONT_HINT_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+			state == "ASSIGNED_TARGET_REACHED_WAIT_DOWN_CONFIRMATION" ||
+			state == "FINAL_ARUCO_TIMEOUT_FALLBACK_DOWN_SWEEP" ||
+			state == "ARUCO_LOCKED_DIFF_APPROACH" ||
+			state == "DIFF_APPROACH_REACHED_LANDING_REQUESTED";
+	}
+
 	double wrapYaw(double yaw)
 	{
 		return std::remainder(yaw, 2.0 * M_PI);
@@ -139,10 +154,9 @@ namespace PayloadMPC
 	{
 		const std::string state = firstToken(msg->data);
 		const bool active = isLandingSearchYawState(state);
-		// WAIT_EXIT_SWITCH 和 LANDING_HANDOFF 之外都属于 CH9 搜索任务。
-		// 前视结束后虽然恢复平移轨迹，但 yaw 仍必须固定为管理器持续发布的 CH9 锁定航向。
-		landing_search_yaw_override_active_ =
-			state != "WAIT_EXIT_SWITCH" && state != "LANDING_HANDOFF";
+		// 只允许搜索降落状态启用局部 yaw 覆盖。WAIT_EXIT_SWITCH、LANDING_HANDOFF
+		// 以及未知状态均恢复普通规划器的航向策略。
+		landing_search_yaw_override_active_ = isLandingSearchMissionState(state);
 		if (active == landing_search_yaw_active_)
 			return;
 
@@ -643,7 +657,8 @@ namespace PayloadMPC
 				const double reference_yaw = landingSearchYawReference(hover_yaw_);
 				controller_.setTrajectoyReference(
 					traj_info->traj, traj_time, reference_yaw,
-					traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
+					traj_info->has_yaw ? &traj_info->yaw_traj : nullptr,
+					landing_search_yaw_override_active_);
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 
 				exec_traj_state_ = POLY_TRAJ;
@@ -777,7 +792,8 @@ namespace PayloadMPC
 					const double reference_yaw = landingSearchYawReference(hover_yaw_);
 					controller_.setTrajectoyReference(
 						traj_info->traj, traj_time, reference_yaw,
-						traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
+						traj_info->has_yaw ? &traj_info->yaw_traj : nullptr,
+						landing_search_yaw_override_active_);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				}
 			}

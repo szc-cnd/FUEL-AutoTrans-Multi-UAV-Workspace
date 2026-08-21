@@ -79,8 +79,10 @@ namespace PayloadMPC
                                      double yaw,
                                      double yaw_rate);
     // 根据位置多项式和可选的规划 yaw 生成 NMPC 参考；yaw_rate 单位 rad/s。
+    // force_fixed_yaw 只供搜索降落状态使用，避免修改全局 use_fix_yaw 后影响普通规划。
     void setTrajectoyReference(Trajectory &traj, double tstart, double start_yaw,
-                               const Trajectory* yaw_traj = nullptr);
+                               const Trajectory* yaw_traj = nullptr,
+                               bool force_fixed_yaw = false);
     double getTimeStep(){return mpc_time_step_;}
     void setDynamicParams(const real_t mass_q)
       {mpc_wrapper_.setDynamicParams(mass_q);}

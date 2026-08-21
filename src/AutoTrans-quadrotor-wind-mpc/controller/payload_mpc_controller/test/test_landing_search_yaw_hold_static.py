@@ -7,6 +7,10 @@ import xml.etree.ElementTree as ET
 
 PACKAGE = Path(__file__).resolve().parents[1]
 FSM = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+CONTROLLER = (PACKAGE / "src/mpc_controller.cpp").read_text(encoding="utf-8")
+CONTROLLER_HEADER = (
+    PACKAGE / "include/payload_mpc_controller/mpc_controller.h"
+).read_text(encoding="utf-8")
 NODE = (PACKAGE / "src/mpc_controller_node.cpp").read_text(encoding="utf-8")
 LAUNCH = PACKAGE / "launch/quad_wind_mpc_controller.launch"
 
@@ -64,7 +68,7 @@ def test_downward_search_trajectory_keeps_ch9_locked_yaw():
     callback = FSM.split(
         "void MPCFSM::landingSearchStateCallback", maxsplit=1
     )[1].split("void MPCFSM::landingSearchYawCallback", maxsplit=1)[0]
-    assert 'state != "WAIT_EXIT_SWITCH" && state != "LANDING_HANDOFF"' in callback
+    assert "isLandingSearchMissionState(state)" in callback
 
     command = FSM.split("void MPCFSM::CMD_CTRL_process", maxsplit=1)[1].split(
         "void MPCFSM::publish_trigger", maxsplit=1
@@ -72,3 +76,18 @@ def test_downward_search_trajectory_keeps_ch9_locked_yaw():
     assert command.count("landingSearchYawReference(hover_yaw_)") >= 5
     assert "entry_command_yaw_ = landingSearchYawReference(" in command
     assert "traj_info->traj, traj_time, reference_yaw" in command
+    assert command.count("landing_search_yaw_override_active_);") == 2
+
+
+def test_fixed_yaw_override_is_local_to_landing_search():
+    assert "bool force_fixed_yaw = false" in CONTROLLER_HEADER
+    fixed_branch = CONTROLLER.index("if (force_fixed_yaw)")
+    planned_branch = CONTROLLER.index("else if (has_planned_yaw)")
+    global_branch = CONTROLLER.index("else if (params_.use_fix_yaw_)")
+    assert fixed_branch < planned_branch < global_branch
+
+    mission_states = FSM.split(
+        "bool isLandingSearchMissionState", maxsplit=1
+    )[1].split("double wrapYaw", maxsplit=1)[0]
+    assert 'state == "WAIT_EXIT_SWITCH"' not in mission_states
+    assert 'state == "LANDING_HANDOFF"' not in mission_states

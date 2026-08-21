@@ -270,7 +270,8 @@ namespace PayloadMPC
   }
 
   void MpcController::setTrajectoyReference(Trajectory &traj, double tstart, double start_yaw,
-                                             const Trajectory* yaw_traj)
+                                             const Trajectory* yaw_traj,
+                                             bool force_fixed_yaw)
   {
     const double t_step = mpc_time_step_;
     double t_all = traj.getTotalDuration() - 1.0e-3;
@@ -327,7 +328,21 @@ namespace PayloadMPC
       jerk_quad = jerk;
       const bool has_planned_yaw = yaw_traj != nullptr && yaw_traj->getPieceNum() > 0 &&
                                    yaw_traj->getTotalDuration() > 1.0e-6;
-      if (has_planned_yaw)
+      // 搜索降落的 CH9 航向覆盖优先级最高：即使上游意外附带 yaw 轨迹，
+      // 也必须使用搜索管理器给出的扫描/锁定航向。普通轨迹仍走原有策略。
+      if (force_fixed_yaw)
+      {
+        yaw = start_yaw;
+        yaw_dot = 0.0;
+        if (i == 0)
+        {
+          last_yaw_ = angle_limit(yaw);
+          last_yaw_dot_ = 0.0;
+          predicted_yaw = last_yaw_;
+          predicted_yaw_dot = 0.0;
+        }
+      }
+      else if (has_planned_yaw)
       {
         // FUEL yaw 来自规划器，单位 rad；对其位置多项式求导得到 yaw_rate，单位 rad/s。
         const double yaw_time = std::max(0.0, std::min(t, yaw_traj->getTotalDuration() - 1.0e-6));
