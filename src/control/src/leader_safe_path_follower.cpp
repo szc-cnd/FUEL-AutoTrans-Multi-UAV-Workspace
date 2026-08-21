@@ -113,6 +113,8 @@ class LeaderSafePathFollower {
                             "/UAV0/mission/final_exit");
     pnh_.param<std::string>("landing_search_state_topic", landing_search_state_topic_,
                             "/landing_diff_search_manager/state");
+    pnh_.param<std::string>("front_scan_anchor_topic", front_scan_anchor_topic_,
+                            "/UAV0/landing/front_scan_anchor");
     // 2026-07-16: 接力点使用前机任务命名空间公开，后续实机可直接将该Path桥接给第二架无人机。
     pnh_.param<std::string>("relay_path_topic", relay_path_topic_,
                             "/UAV0/mission/relay_waypoints");
@@ -283,6 +285,9 @@ class LeaderSafePathFollower {
     landing_search_state_sub_ = nh_.subscribe(
         landing_search_state_topic_, 2,
         &LeaderSafePathFollower::landingSearchStateCallback, this);
+    front_scan_anchor_sub_ = nh_.subscribe(
+        front_scan_anchor_topic_, 1,
+        &LeaderSafePathFollower::frontScanAnchorCallback, this);
     leader_task_status_sub_ = nh_.subscribe(
         leader_task_status_topic_, 2,
         &LeaderSafePathFollower::leaderTaskStatusCallback, this);
@@ -468,14 +473,27 @@ class LeaderSafePathFollower {
               state.c_str());
   }
 
+  void frontScanAnchorCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    if (!enable_search_landing_) return;
+    front_scan_anchor_.position = followerCruisePointToWorld(msg->pose.position);
+    front_scan_anchor_.yaw = yawFromQuaternion(msg->pose.orientation);
+    have_front_scan_anchor_ = true;
+    ROS_ERROR("[safe_follower] UAV0 front-scan anchor received at "
+              "(%.2f, %.2f, %.2f), yaw=%.1fdeg.",
+              front_scan_anchor_.position.x, front_scan_anchor_.position.y,
+              front_scan_anchor_.position.z,
+              front_scan_anchor_.yaw * 180.0 / M_PI);
+  }
+
   void tryReleaseFrontSearchWaitWaypoint() {
     if (!down_search_wait_requested_ || outside_wait_waypoint_released_ ||
         release_uav1_ || terminal_mode_active_ || !leader_outside_exit_) {
       return;
     }
-    if (!have_final_exit_ || !have_leader_odom_ || !have_follower_odom_) {
+    if (!have_front_scan_anchor_ || !have_leader_odom_ || !have_follower_odom_) {
       ROS_WARN_THROTTLE(1.0,
-                        "[safe_follower] HOLD outside wait release: anchor/odometry unavailable.");
+                        "[safe_follower] HOLD outside wait release: front-scan "
+                        "anchor/odometry unavailable.");
       return;
     }
     const geometry_msgs::Point leader_world =
@@ -494,15 +512,15 @@ class LeaderSafePathFollower {
     if (!relayWaypointSeparationReady("OUTSIDE_WAIT")) return;
 
     pending_relay_valid_ = false;
-    confirmed_exit_.progress = nearestRouteProgress(confirmed_exit_.position);
+    front_scan_anchor_.progress = nearestRouteProgress(front_scan_anchor_.position);
     exit_waypoint_index_ = relay_waypoints_.size();
-    appendRelayWaypoint(confirmed_exit_, "OUTSIDE_WAIT");
+    appendRelayWaypoint(front_scan_anchor_, "OUTSIDE_WAIT");
     exit_waypoint_released_ = true;
     outside_wait_waypoint_released_ = true;
     diff_goal_published_ = false;
     ROS_ERROR("[safe_follower] RELEASE OUTSIDE_WAIT after UAV0 entered down search: "
               "target=(%.2f, %.2f, %.2f), UAV0_z=%.2f, vertical_separation=%.2f.",
-              confirmed_exit_.position.x, confirmed_exit_.position.y,
+              front_scan_anchor_.position.x, front_scan_anchor_.position.y,
               fixed_follow_height_, leader_world.z, vertical_separation);
   }
 
@@ -2258,7 +2276,8 @@ class LeaderSafePathFollower {
   ros::Subscriber release_uav1_sub_;
   ros::Subscriber follower_assigned_target_sub_;
   ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
-  ros::Subscriber leader_task_status_sub_, landing_search_state_sub_;
+  ros::Subscriber leader_task_status_sub_, landing_search_state_sub_,
+      front_scan_anchor_sub_;
   ros::Subscriber diff_status_sub_;  // 2026-07-28: UAV1 Diff轨迹成功/失败反馈。
   ros::Publisher command_pub_, traj_started_pub_, diff_goal_pub_, route_pub_, relay_path_pub_, target_pub_, state_pub_;
   ros::Publisher follower_landing_target_pub_, follower_landing_request_pub_;
@@ -2267,7 +2286,8 @@ class LeaderSafePathFollower {
   ros::Timer timer_;
   nav_msgs::Odometry leader_odom_, follower_odom_;
   geometry_msgs::PoseStamped leader_landing_target_;
-  RoutePoint terminal_target_world_, confirmed_door_, confirmed_exit_, pending_relay_;
+  RoutePoint terminal_target_world_, confirmed_door_, confirmed_exit_,
+      front_scan_anchor_, pending_relay_;
   RoutePoint assigned_follower_target_;
   sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
   std::vector<DynamicObstacleSample> retained_dynamic_obstacles_;
@@ -2287,7 +2307,7 @@ class LeaderSafePathFollower {
   std::string follower_assigned_target_topic_;
   std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
   std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
-  std::string landing_search_state_topic_;
+  std::string landing_search_state_topic_, front_scan_anchor_topic_;
   std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
   std::string dynamic_obstacle_topic_;  // 默认/UAV1/ldop/dynamic_objects。
   bool have_leader_odom_{false}, have_follower_odom_{false};
@@ -2308,6 +2328,7 @@ class LeaderSafePathFollower {
   bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
   bool have_confirmed_door_{false}, door_waypoint_released_{false};
   bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
+  bool have_front_scan_anchor_{false};
   bool down_search_wait_requested_{false};
   bool outside_wait_waypoint_released_{false}, outside_wait_arrived_{false};
   bool pending_relay_valid_{false};
