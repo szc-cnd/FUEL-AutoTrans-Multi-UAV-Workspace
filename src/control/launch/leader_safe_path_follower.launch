@@ -23,6 +23,9 @@
         <arg name="landing_marker_world_topic" value="/UAV1/mission/detection/final_aruco"/>
         <arg name="landing_search_config"
              value="$(find precision_landing)/config/landing_search.yaml"/>
+        <!-- 搜索和最终精降都在基础配置之后加载 UAV1 专用 camera_to_body。 -->
+        <arg name="camera_extrinsic_config"
+             value="$(find precision_landing)/config/down_camera_extrinsic_uav1.yaml"/>
         <arg name="enable_front_aruco_hint" value="false"/>
         <arg name="require_platform_assignment" value="true"/>
     </include>

@@ -23,10 +23,28 @@ def test_search_config_uses_calibrated_down_camera_extrinsic():
     assert config["handoff"]["approach_height_m"] == 2.0
 
 
+def test_uav1_override_uses_its_constrained_down_camera_extrinsic():
+    config = yaml.safe_load(
+        (PACKAGE / "config/down_camera_extrinsic_uav1.yaml").read_text()
+    )
+    transform = config["camera_to_body"]
+    assert transform["translation_m"] == [
+        -0.01407227,
+        0.02038670,
+        -0.13346814265233625,
+    ]
+    quaternion = transform["quaternion_xyzw"]
+    assert math.isclose(sum(value * value for value in quaternion), 1.0, abs_tol=1e-7)
+    rotation = transform["rotation"]
+    assert len(rotation) == 3
+    assert all(len(row) == 3 for row in rotation)
+
+
 def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
     args = {arg.attrib["name"]: arg.attrib["default"] for arg in root.findall("arg")}
     assert args["landing_search_config"] == "$(find precision_landing)/config/landing_search.yaml"
+    assert args["camera_extrinsic_config"] == ""
     search_nodes = [
         node for node in root.findall("node")
         if node.attrib.get("type") == "landing_search_node"
@@ -44,8 +62,21 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/excluded_id"] == "$(arg excluded_id_topic)"
     assert params["topics/candidates"] == "$(arg candidates_topic)"
 
+    precision_node = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "precision_landing_node"
+    )
+    for node in (search_nodes[0], precision_node):
+        override_loads = [
+            item for item in node.findall("rosparam")
+            if item.attrib.get("file") == "$(arg camera_extrinsic_config)"
+        ]
+        assert len(override_loads) == 1
+        assert override_loads[0].attrib["command"] == "load"
+        assert "camera_extrinsic_config" in override_loads[0].attrib["if"]
 
-def test_competition_entries_explicitly_share_search_extrinsic():
+
+def test_competition_entries_explicitly_load_base_search_config():
     expected = "$(find precision_landing)/config/landing_search.yaml"
     for relative_path in (
         "../control/launch/leader_safe_path_follower.launch",
@@ -65,6 +96,24 @@ def test_competition_entries_explicitly_share_search_extrinsic():
                 for arg in include.findall("arg")
             }
             assert args["landing_search_config"] == expected
+
+
+def test_uav1_entry_applies_specific_extrinsic_to_search_and_precision_nodes():
+    root = ET.parse(
+        (PACKAGE / "../control/launch/leader_safe_path_follower.launch").resolve()
+    ).getroot()
+    precision_include = next(
+        item for item in root.findall("include")
+        if item.attrib.get("file")
+        == "$(find precision_landing)/launch/precision_landing.launch"
+    )
+    args = {
+        arg.attrib["name"]: arg.attrib["value"]
+        for arg in precision_include.findall("arg")
+    }
+    assert args["camera_extrinsic_config"] == (
+        "$(find precision_landing)/config/down_camera_extrinsic_uav1.yaml"
+    )
 
 
 def test_competition_search_landing_waits_for_uav0_rc_trigger():
@@ -134,13 +183,14 @@ def test_search_runtime_exclusion_clears_conflicting_lock():
     assert "true, excluded_marker_id_" in source
 
 
-def test_dual_uav_coordinator_assigns_unique_ids_with_uav0_priority():
+def test_dual_uav_coordinator_assigns_after_scan_in_detection_order():
     source = (PACKAGE / "src/dual_uav_landing_coordinator_node.cpp").read_text()
-    assert "candidates_by_id_.size() < 2U" in source
+    assert "!front_scan_completed_ || candidate_order_.size() < 2U" in source
     assert "downward_ids_.insert(platform.id)" in source
     assert "downward_ids_.count(platform.id) == 0U" in source
-    assert "const auto& far_platform = candidates.back()" in source
-    assert "uav0_id_ = far_platform.id" in source
+    assert "candidate_order_.push_back(platform.id)" in source
+    assert "uav1_id_ = uav1_platform.id" in source
+    assert "uav0_id_ = uav0_platform.id" in source
     assert "publishBool(release_pub_, true)" in source
 
     root = ET.parse(
@@ -154,8 +204,39 @@ def test_dual_uav_coordinator_assigns_unique_ids_with_uav0_priority():
         for param in nodes[0].findall("param")
     }
     assert params["topics/front_candidates"] == "/UAV0/landing/front/candidates"
+    assert params["topics/search_state"] == "/landing_diff_search_manager/state"
+    assert params["topics/uav0_landing_request"] == "/UAV0/mission/landing_request"
     assert params["topics/uav0_target"] == "/UAV0/landing/assigned_target"
     assert params["topics/uav0_target"] != "/UAV0/mission/detection/final_aruco"
+
+    request_callback = source.split(
+        "void landingRequestCallback", maxsplit=1
+    )[1].split("void tryReleaseUav1", maxsplit=1)[0]
+    assert "uav0_landing_requested_ = true" in request_callback
+    release = source.split("void tryReleaseUav1", maxsplit=1)[1].split(
+        "void successCallback", maxsplit=1
+    )[0]
+    assert "!assignments_ready_ || !uav0_landing_requested_" in release
+    assert "publishBool(release_pub_, true)" in release
+
+    update = source.split("void updateCandidates", maxsplit=1)[1].split(
+        "void tryAssignPlatforms", maxsplit=1
+    )[0]
+    assert "downwardCandidatesAllowed(landing_search_state_)" in update
+    assert "frontCandidatesAllowed(landing_search_state_)" in update
+    assert "reject stale candidate array" in update
+    forward = source.split("static bool frontCandidatesAllowed", maxsplit=1)[1].split(
+        "static bool downwardCandidatesAllowed", maxsplit=1
+    )[0]
+    assert "FRONT_ARUCO_FORWARD_APPROACH" not in forward
+
+    state_callback = source.split("void searchStateCallback", maxsplit=1)[1].split(
+        "void updateCandidates", maxsplit=1
+    )[0]
+    assert 'next_state == "FRONT_ARUCO_FORWARD_APPROACH"' in state_callback
+    assert "resetSearchCandidates()" in state_callback
+    assert "frontScanCompleted(next_state)" in state_callback
+    assert "tryAssignPlatforms()" in state_callback
 
 
 def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():
@@ -169,6 +250,10 @@ def test_front_hint_uses_d435_depth_tf_and_separate_coarse_topic():
     assert config["frames"]["output_world"] == "world"
     assert config["topics"]["hint_world"] == "/UAV0/landing/front_aruco_hint"
     assert config["topics"]["candidates"] == "/UAV0/landing/front/candidates"
+    assert config["topics"]["search_state"] == (
+        "/landing_diff_search_manager/state"
+    )
+    assert config["mission"]["require_search_state_gate"] is True
     assert config["topics"]["hint_world"] != config["topics"].get("marker_world")
 
 
@@ -196,10 +281,37 @@ def test_precision_launch_wires_optional_front_hint_without_final_marker_access(
     assert params["topics/image"] == "$(arg front_image_topic)"
     assert params["topics/aligned_depth"] == "$(arg front_depth_topic)"
     assert params["topics/odometry"] == "$(arg odometry_topic)"
+    assert params["topics/search_state"] == "/landing_diff_search_manager/state"
     assert params["topics/hint_world"] == "$(arg front_aruco_hint_topic)"
     assert params["topics/candidates"] == "$(arg front_aruco_candidates_topic)"
     assert "topics/marker_world" not in params
     assert "topics/landing_trigger" not in params
+
+
+def test_front_detection_waits_until_forward_approach_is_complete():
+    source = (PACKAGE / "src/front_aruco_hint_node.cpp").read_text()
+    gate = source.split("bool stageAllowsHint() const", maxsplit=1)[1].split(
+        "static bool isFrontScanState", maxsplit=1
+    )[0]
+    assert "front_scan_active_" in gate
+    states = source.split("static bool isFrontScanState", maxsplit=1)[1].split(
+        "void searchStateCallback", maxsplit=1
+    )[0]
+    assert "FRONT_ARUCO_FORWARD_APPROACH" not in states
+    assert "FRONT_ARUCO_INITIAL_WAIT" in states
+    assert "FRONT_ARUCO_YAW_SCAN_LEFT" in states
+    assert "FRONT_ARUCO_YAW_SCAN_RIGHT" in states
+    callback = source.split("void searchStateCallback", maxsplit=1)[1].split(
+        "void missionStatusCallback", maxsplit=1
+    )[0]
+    assert "tracker_.reset()" in callback
+    assert "stable_candidates_.clear()" in callback
+    cmake = (PACKAGE / "CMakeLists.txt").read_text()
+    dependency = cmake.split(
+        "add_executable(front_aruco_hint_node", maxsplit=1
+    )[1].split("target_link_libraries(front_aruco_hint_node", maxsplit=1)[0]
+    assert "add_dependencies(front_aruco_hint_node" in dependency
+    assert "${${PROJECT_NAME}_EXPORTED_TARGETS}" in dependency
 
 
 def test_precision_launch_records_aruco_decisions_on_every_start():
@@ -232,6 +344,7 @@ def test_precision_launch_records_aruco_decisions_on_every_start():
         "$(arg odometry_topic)",
         "/dual_uav_landing/status",
         "/landing_diff_search_manager/state",
+        "/UAV0/landing/front_scan_anchor",
         "/tf",
         "/tf_static",
         "/rosout_agg",

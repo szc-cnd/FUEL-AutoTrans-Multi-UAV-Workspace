@@ -1,0 +1,11 @@
+# 2026-08-21 UAV1 constrained hand-eye result from
+# /home/oem/handeye_calibration/body_down_camera_uav1_fixed_z_04.yaml.
+# Z reuses the UAV0 value because both aircraft use the same body-frame and
+# camera mounting height; rotation and X/Y come from UAV1 bag _04.
+camera_to_body:
+  translation_m: [-0.01407227, 0.02038670, -0.13346814265233625]
+  quaternion_xyzw: [-0.62323218, 0.78197703, 0.00314224, 0.00914851]
+  rotation:
+    - [-0.222995906, -0.974763997, 0.010391158]
+    - [-0.974649010, 0.223143549, 0.016317603]
+    - [-0.018224531, -0.006488973, -0.999812862]
