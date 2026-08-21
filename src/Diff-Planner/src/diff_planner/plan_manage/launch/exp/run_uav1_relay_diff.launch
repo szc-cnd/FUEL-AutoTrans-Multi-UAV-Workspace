@@ -33,7 +33,7 @@
         <arg name="local_map_size_y" value="20.0"/>
         <arg name="local_map_size_z" value="3.0"/>
         <arg name="enable_virtual_wall" value="true"/>
-        <arg name="virtual_ceil" value="2.0"/>
+        <arg name="virtual_ceil" value="2.25"/>
         <arg name="virtual_ground" value="0.10"/>
         <arg name="map_resolution" value="0.15"/>
         <!-- 2026-07-28: 0.15m分辨率下0.18m会向上取整成2格(实际0.30m)并反包后机起点；改为精确1格0.15m，优化器0.18m净空仍保留。 -->
