@@ -201,6 +201,12 @@ class LeaderSafePathFollower {
     // 2026-07-28: 0.5m/s指令下FAST-LIO若出现数m/s跳变，立即请求控制器用MAVROS坐标锁点，禁止错误目标继续外推。
     pnh_.param("follower_odom_jump_speed", follower_odom_jump_speed_, 2.0);
     pnh_.param("follower_odom_jump_vertical_speed", follower_odom_jump_vertical_speed_, 1.2);
+    pnh_.param("follower_odom_jump_confirm_samples",
+                follower_odom_jump_confirm_samples_, 3);
+    if (follower_odom_jump_confirm_samples_ < 1) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: follower_odom_jump_confirm_samples must be >= 1");
+    }
     // 2026-07-27: 持续有运动指令但机体1.5s内位移不足6cm时进入点云选向脱困，防止贴墙后永久推杆。
     pnh_.param("stuck_detection_timeout", stuck_detection_timeout_, 1.50);
     pnh_.param("stuck_min_progress", stuck_min_progress_, 0.06);
@@ -804,9 +810,31 @@ class LeaderSafePathFollower {
   void followerOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
     // 2026-07-22: 用实际里程计位移估计到达速度，不能用规划指令速度代替真实制动状态。
     const ros::Time now = ros::Time::now();
+    // 高频里程计会经网络成批到达。速度差分必须使用传感器时间戳，不能使用回调接收时间；
+    // 否则毫米级点云校正除以亚毫秒级回调间隔会被放大成数m/s并误触发永久安全锁。
+    const ros::Time sample_stamp = msg->header.stamp;
+    if (sample_stamp.isZero()) {
+      ROS_WARN_THROTTLE(1.0,
+                        "[safe_follower] reject zero-stamp follower odometry sample.");
+      return;
+    }
     if (have_follower_odom_) {
-      const double dt = (now - follower_odom_stamp_).toSec();
-      if (dt > 1e-3 && dt < 0.25) {
+      const double dt = (sample_stamp - follower_odom_sample_stamp_).toSec();
+      if (dt <= 0.0) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "[safe_follower] reject non-monotonic follower odometry stamp dt=%.6fs.",
+            dt);
+        return;
+      }
+      if (dt < 1e-3) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "[safe_follower] reject duplicate/burst follower odometry stamp dt=%.6fs.",
+            dt);
+        return;
+      }
+      if (dt < 0.25) {
         const double raw_horizontal_speed =
             std::hypot(msg->pose.pose.position.x - follower_odom_.pose.pose.position.x,
                        msg->pose.pose.position.y - follower_odom_.pose.pose.position.y) / dt;
@@ -817,26 +845,43 @@ class LeaderSafePathFollower {
         if (follower_started_ &&
             (raw_horizontal_speed > follower_odom_jump_speed_ ||
              raw_vertical_speed > follower_odom_jump_vertical_speed_)) {
-          if (!follower_odom_fault_latched_) {
+          ++follower_odom_jump_consecutive_samples_;
+          ROS_WARN_THROTTLE(
+              0.5,
+              "[safe_follower] suspicious ODOM sample %d/%d: horizontal=%.2fm/s "
+              "vertical=%.2fm/s dt=%.4fs; discard pending confirmation.",
+              follower_odom_jump_consecutive_samples_,
+              follower_odom_jump_confirm_samples_, raw_horizontal_speed,
+              raw_vertical_speed, dt);
+          if (!follower_odom_fault_latched_ &&
+              follower_odom_jump_consecutive_samples_ >=
+                  follower_odom_jump_confirm_samples_) {
             follower_odom_fault_latched_ = true;
             std_msgs::Bool hold_msg;
             hold_msg.data = true;
             follower_safety_hold_pub_.publish(hold_msg);
-            ROS_ERROR("[safe_follower] ODOM FAULT latched: horizontal=%.2fm/s vertical=%.2fm/s; "
-                      "reject bad FAST-LIO sample and request MAVROS-frame safety hold.",
-                      raw_horizontal_speed, raw_vertical_speed);
+            ROS_ERROR("[safe_follower] ODOM FAULT latched after %d consecutive samples: "
+                      "horizontal=%.2fm/s vertical=%.2fm/s; reject bad FAST-LIO sample "
+                      "and request MAVROS-frame safety hold.",
+                      follower_odom_jump_consecutive_samples_, raw_horizontal_speed,
+                      raw_vertical_speed);
           }
           return;
         }
+        follower_odom_jump_consecutive_samples_ = 0;
         const double alpha = 0.35;
         follower_horizontal_speed_ =
             alpha * raw_horizontal_speed + (1.0 - alpha) * follower_horizontal_speed_;
         follower_vertical_speed_ =
             alpha * raw_vertical_speed + (1.0 - alpha) * follower_vertical_speed_;
+      } else {
+        // 长时间通信间断后的首帧不参与速度差分，也不能继承此前的疑似计数。
+        follower_odom_jump_consecutive_samples_ = 0;
       }
     }
     follower_odom_ = *msg;
     follower_odom_stamp_ = now;
+    follower_odom_sample_stamp_ = sample_stamp;
     have_follower_odom_ = true;
     if (!follower_started_ && msg->pose.pose.position.z > follower_start_height_) {
       follower_started_ = true;
@@ -2159,7 +2204,7 @@ class LeaderSafePathFollower {
   std::deque<RoutePoint> turn_candidate_route_;
   // 2026-07-16: relay_waypoints_ 是实际下发给后机的门点、滚动内部点和真实终点。
   std::vector<RoutePoint> relay_waypoints_;
-  ros::Time leader_odom_stamp_, follower_odom_stamp_, cloud_stamp_;
+  ros::Time leader_odom_stamp_, follower_odom_stamp_, follower_odom_sample_stamp_, cloud_stamp_;
   ros::Time dynamic_obstacle_receive_stamp_, retained_dynamic_obstacle_stamp_;
   std::string leader_odom_topic_, follower_odom_topic_, follower_cloud_topic_;
   std::string command_topic_, diff_goal_topic_;
@@ -2238,6 +2283,8 @@ class LeaderSafePathFollower {
   double diff_endpoint_capture_radius_{0.15}, diff_endpoint_capture_dwell_{0.45};
   double diff_command_stale_timeout_{0.80};  // 2026-07-28: 与控制器0.60s轨迹超时错开0.20s。
   double follower_odom_jump_speed_{2.0}, follower_odom_jump_vertical_speed_{1.2};
+  int follower_odom_jump_confirm_samples_{3};
+  int follower_odom_jump_consecutive_samples_{0};
   double stuck_detection_timeout_{1.50}, stuck_min_progress_{0.06};
   double recovery_step_{0.35}, recovery_speed_{0.20}, recovery_attempt_timeout_{1.50};
   double recovery_success_distance_{0.12}, recovery_near_ignore_{0.06};

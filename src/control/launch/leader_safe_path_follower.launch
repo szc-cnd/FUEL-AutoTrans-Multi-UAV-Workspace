@@ -160,6 +160,7 @@
         <!-- 2026-07-28: 识别7月27日实验中的FAST-LIO发散，并切换控制器MAVROS锁点保护。 -->
         <param name="follower_odom_jump_speed" value="2.0"/>
         <param name="follower_odom_jump_vertical_speed" value="1.2"/>
+        <param name="follower_odom_jump_confirm_samples" value="3"/>
         <!-- 2026-07-27: 后机持续有速度指令但1.5s内位移不足6cm时，按自身点云选择侧向/退向短目标脱困。 -->
         <param name="stuck_detection_timeout" value="1.50"/>
         <param name="stuck_min_progress" value="0.06"/>

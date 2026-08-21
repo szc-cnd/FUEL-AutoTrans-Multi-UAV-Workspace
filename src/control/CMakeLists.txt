@@ -73,4 +73,5 @@ install(DIRECTORY config/
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_dual_uav_frame_alignment.py)
+  catkin_add_nosetests(test/test_follower_odom_fault_filter.py)
 endif()
