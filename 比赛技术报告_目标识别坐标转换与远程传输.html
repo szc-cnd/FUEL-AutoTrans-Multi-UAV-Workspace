@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>无人机目标识别、坐标转换与远程传输系统技术报告</title>
+  <style>
+    @page { size: A4; margin: 2.4cm 2.2cm; }
+    body { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; color: #222; line-height: 1.72; font-size: 11pt; }
+    h1 { text-align: center; font-size: 22pt; margin: 1.6cm 0 0.5cm; }
+    h2 { font-size: 16pt; color: #17365d; border-bottom: 1px solid #9fbad0; padding-bottom: 4px; margin-top: 1.2em; }
+    h3 { font-size: 13pt; color: #1f4e79; margin-top: 1em; }
+    p { text-align: justify; margin: 0.45em 0; }
+    .subtitle { text-align: center; font-size: 13pt; color: #555; margin-bottom: 1.2cm; }
+    .meta { width: 72%; margin: 0 auto 1.5cm; border-collapse: collapse; }
+    .meta td { border: none; padding: 7px 10px; }
+    table { width: 100%; border-collapse: collapse; margin: 0.7em 0 1em; font-size: 9.5pt; }
+    th, td { border: 1px solid #8ea9c1; padding: 6px 8px; vertical-align: top; }
+    th { background: #d9eaf7; text-align: center; }
+    code { font-family: "Noto Sans Mono CJK SC", Consolas, monospace; background: #f3f5f7; padding: 1px 3px; }
+    pre { font-family: "Noto Sans Mono CJK SC", Consolas, monospace; background: #f5f7f9; border: 1px solid #d6dde4; padding: 10px 12px; line-height: 1.45; white-space: pre-wrap; font-size: 9pt; }
+    .caption { text-align: center; color: #555; font-size: 9pt; margin-top: -0.5em; }
+    .note { border-left: 4px solid #4f81bd; background: #edf4fb; padding: 8px 12px; }
+    ul, ol { margin-top: 0.25em; }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+  <h1>无人机目标识别、坐标转换与<br>远程传输系统技术报告</h1>
+  <div class="subtitle">基于 ROS Noetic、Intel RealSense D435 与 UVC 热成像仪的多模态感知方案</div>
+
+  <table class="meta">
+    <tr><td>参赛队伍：</td><td>________________________</td></tr>
+    <tr><td>项目名称：</td><td>________________________</td></tr>
+    <tr><td>编写人：</td><td>________________________</td></tr>
+    <tr><td>日期：</td><td>2026 年 8 月</td></tr>
+  </table>
+
+  <h2>摘要</h2>
+  <p>
+    本系统面向无人机赛事通道环境中的作业目标感知与结果上报任务，实现颜色标签、普通二维码与热源三类目标的检测、三维定位、世界坐标转换、空间去重、证据图留存以及局域网远程传输。软件采用 ROS Noetic 模块化架构，核心由 <code>color_tag_detector</code>、<code>qr_detector</code>、<code>uvc_ubuntu</code> 和 <code>target_reporting</code> 四个功能包组成。各检测器独立输出候选目标和稳定性状态，统一上报层仅对通过确认门控的目标进行远程传输，从而兼顾实时可视化、识别可靠性和网络异常时的任务连续性。
+  </p>
+  <p><b>关键词：</b>无人机；ROS；多模态目标识别；深度融合；TF 坐标变换；TCP 可靠传输</p>
+
+  <h2>1. 系统任务与总体方案</h2>
+  <p>
+    系统使用 D435 同步获取彩色图像、对齐深度图和相机内参，使用 UVC 热成像设备获取 384×288 热图数据。颜色标签和二维码直接在 D435 彩色图像上定位，并通过对齐深度和相机内参反投影得到相机坐标。热源首先在热图上定位，再通过单应矩阵映射到 D435 彩色像素，从深度图取得距离并反投影成三维点。最后，所有目标统一由 <code>target_reporting</code> 转换到 FAST-LIO 定位坐标系并进行上报。
+  </p>
+
+  <pre>
+D435 彩色图/对齐深度 ─┬─→ 颜色标签检测 ─→ 相机坐标 ─┐
+                         └─→ 二维码检测   ─→ 相机坐标 ─┤
+UVC 热成像 ─→ 热源检测 ─→ 单应映射 + D435 深度 ─→ 相机坐标 ─┘
+                                                              ↓
+                 FAST-LIO TF → 坐标转换 → 稳定门控/去重 → JSON+JPEG
+                                                              ↓
+                                         TCP 5000/5001 → Windows 接收端
+  </pre>
+  <div class="caption">图 1　目标识别与远程上报数据流</div>
+
+  <h2>2. 软件模块与主程序</h2>
+  <table>
+    <tr><th>功能包</th><th>比赛运行主程序</th><th>入口函数与核心类</th><th>主要职责</th></tr>
+    <tr><td><code>color_tag_detector</code></td><td><code>scripts/color_tag_detector.py</code></td><td><code>main()</code><br><code>ColorTagDetector</code></td><td>颜色分割、几何与深度质量校验、三维反投影和多帧稳定判定。</td></tr>
+    <tr><td><code>qr_detector</code></td><td><code>scripts/qr_detector_node.py</code></td><td><code>main()</code><br><code>QRDetectorNode</code></td><td>二维码角点检测、内容解码、真实性/深度一致性校验和三维定位。</td></tr>
+    <tr><td rowspan="2"><code>uvc_ubuntu</code></td><td><code>thermal_ros_node.py</code></td><td><code>main()</code><br><code>ThermalDetectorNode</code></td><td>调用底层 <code>uvc_demo</code> 取流，完成热源提取和像素稳定性检查。</td></tr>
+    <tr><td><code>thermal_d435_fusion_node.py</code></td><td><code>main()</code><br><code>ThermalD435FusionNode</code></td><td>热图到 D435 的单应映射、深度查询、三维反投影及调试图生成。</td></tr>
+    <tr><td><code>target_reporting</code></td><td><code>scripts/target_reporter_node.py</code></td><td><code>main()</code><br><code>TargetReporterNode</code></td><td>三类检测结果接入、TF 坐标转换、时间配对、空间去重、证据图存储和 TCP 可靠上报。</td></tr>
+  </table>
+  <p class="note">
+    系统的统一运行入口为 <code>uav0_competition_bringup/launch/uav0_detection_landing_stack.launch</code>。该文件统一启动 D435、三类检测、相机外参 TF 与目标上报节点，避免多次启动相机或同名 ROS 节点。
+  </p>
+
+  <h2>3. 颜色标签识别模块</h2>
+  <h3>3.1 主程序</h3>
+  <pre>def main():
+    rospy.init_node("color_tag_detector")
+    ColorTagDetector()
+    rospy.spin()</pre>
+  <p>
+    <code>ColorTagDetector</code> 同步订阅 D435 彩色图、对齐深度图与相机内参。算法首先在 HSV 颜色空间内对红、橙、黄、绿、蓝、紫等颜色执行阈值分割，然后通过形态学开闭运算抑制噪声。候选轮廓还需通过面积、填充率、矩形度、凸包实心度、颜色纯度、实际尺寸和表面深度平面性检查，用于排除路障、网格、衣物和背景色块。
+  </p>
+  <p>
+    对通过质量检查的目标，系统在候选中心附近的深度窗口中计算有效深度，并根据针孔相机模型将像素坐标 <i>(u,v)</i> 反投影为相机光学坐标：
+  </p>
+  <pre>Z = depth
+X = (u - cx) × Z / fx
+Y = (v - cy) × Z / fy</pre>
+  <p>
+    检测器使用 12 帧滑动窗口，当至少 8 帧为有效匹配，且像素位置、深度和轮廓面积跳变均在限制内时，才置位 <code>stable</code> 和 <code>confirmable</code>。候选结果可立即显示在机载端，但未通过门控时不进入远程上报。
+  </p>
+
+  <h2>4. 二维码识别模块</h2>
+  <h3>4.1 主程序</h3>
+  <pre>def main():
+    rospy.init_node("qr_detector_node")
+    QRDetectorNode()
+    rospy.spin()</pre>
+  <p>
+    二维码模块使用 OpenCV <code>QRCodeDetector</code> 完成候选四边形定位，并在 OpenCV 缺少 QUIRC 解码支持时使用 <code>libzbar</code> 作为解码回退通道。系统通过最小边长、长短边比、直角约束和画面占比排除非二维码纹理，同时检查中心及四个角点的深度有效率、标准差和极差，防止将跨越网格、地面或背景的伪四边形识别为真实目标。
+  </p>
+  <p>
+    有效二维码的中心像素通过 11×11 邻域深度中位数估计距离，并使用与颜色标签一致的相机反投影模型得到三维位置。当前配置要求至少一帧成功解码，随后在 2 s 身份验证保持期内连续 5 帧通过角点和深度检查才允许确认。D435 启动后设置 5 s 曝光预热阶段，避免暗启动画面触发错误上报。
+  </p>
+
+  <h2>5. 热源识别与 D435 深度融合</h2>
+  <h3>5.1 UVC 取流和热源检测</h3>
+  <p>
+    <code>thermal_ros_node.py</code> 是热源识别的 ROS 主节点，其 <code>main()</code> 创建 <code>ThermalDetectorNode</code>。节点内部启动由 <code>main.c</code> 编译生成的 <code>uvc_demo</code> 底层取流程序。设备参数固定为 384×288、YUYV/YUV422、<code>streamType=10</code>和 <code>offset=0</code>。Python 节点从数据流中提取亮度分量，在有效 ROI 内按背景均值和标准差构造自适应阈值，再通过连通域面积筛选得到热源中心。
+  </p>
+  <p>
+    热源在 3 帧滑动窗口内至少出现 2 次，且像素跳变不超过 25 px 时，才通过检测器级稳定性检查。视野边缘候选会保留边界状态供调试，但根据比赛场景配置不会仅因位于边缘而禁止确认。
+  </p>
+
+  <h3>5.2 热图与 D435 融合</h3>
+  <pre>def main():
+    rospy.init_node("thermal_d435_fusion_node", anonymous=False)
+    ThermalD435FusionNode()
+    rospy.spin()</pre>
+  <p>
+    热成像仪不能直接提供目标深度，因此系统使用事先标定的 3×3 单应矩阵 <i>H</i> 将热图像素 <i>p<sub>t</sub></i> 映射为 D435 彩色像素 <i>p<sub>d</sub></i>：
+  </p>
+  <pre>s · p_d = H · p_t</pre>
+  <p>
+    获得 D435 像素后，在对齐深度图的半径 5 px 邻域内查找有效深度，再利用 D435 内参反投影为 <code>camera_color_optical_frame</code> 下的三维点。该模块同时输出热源在 D435 画面上的映射框和深度调试图，用于赛前校验和确认后的双图证据上传。
+  </p>
+
+  <h2>6. 统一坐标转换与目标管理</h2>
+  <h3>6.1 TF 坐标链</h3>
+  <p>
+    三类检测器均使用真实相机光学坐标系、源图像 ROS 时间戳和米制坐标发布空间点。完整 TF 链为：
+  </p>
+  <pre>UAV0/camera_init → UAV0/body → camera_link → camera_color_optical_frame
+                                              └→ camera_depth_optical_frame</pre>
+  <p>
+    <code>UAV0/camera_init → UAV0/body</code> 由 FAST-LIO 提供，<code>UAV0/body → camera_link</code> 由手眼标定外参发布，相机内部光学坐标变换由 RealSense 驱动发布。当前配置以 <code>UAV0/camera_init</code> 作为 ROS 定位帧，并在上报 JSON 中使用业务名 <code>channel</code>。
+  </p>
+
+  <h3>6.2 上报节点核心处理</h3>
+  <p>
+    <code>TargetReporterNode</code> 的核心处理函数为 <code>_try_process(source)</code>。节点先按时间戳配对检测点、状态 JSON 和调试图，然后调用：
+  </p>
+  <pre>world = self.tf_buffer.transform(
+    point, self.localization_frame, rospy.Duration(0.10)
+)</pre>
+  <p>
+    该调用将相机坐标点转换到 FAST-LIO 世界定位帧。TF 不可用时，节点保留当前数据并等待重试，不使用错误帧或过时位姿强行生成结果。
+  </p>
+  <p>
+    完成坐标转换后，候选目标立即发布到机载 ROS 观测话题供 RViz 显示。只有 <code>confirmable=true</code> 的检测结果才允许登记。系统以 0.30 m 为默认空间去重距离；非空二维码内容优先作为目标身份，因此相同内容不会因定位漂移而重复上报。为过滤移动人员，热源在检测器门控之后还需在世界坐标 0.30 m 范围内稳定满 1 s，并至少获得 3 次有效观测。
+  </p>
+
+  <h2>7. 远程传输与断网容错</h2>
+  <p>
+    上报数据分为结构化目标事件和 JPEG 证据图两类，分别使用 TCP 5000 与 TCP 5001 传输。确认事件包含任务编号、无人机编号、序列号、目标编号、目标类型、识别结果、时间戳、通道坐标和图片元数据。证据图必须与确认点使用同一源时间戳，普通图像默认匹配容差为 0.03 s，非硬件同步的热成像与 D435 映射图容差为 0.15 s。若超时未匹配到同帧图像，系统只发送结构化结果，不使用前后时刻的不稳定图像替代。
+  </p>
+  <p>
+    机载端在发送前将确认事件和图片写入本地任务目录。发送客户端等待远程 ACK，断网或接收服务器未启动时不会阻塞检测与飞行任务，网络恢复后会自动补发未确认数据。在同一 <code>mission_id</code> 下，即使节点或电脑重启，也可从磁盘恢复待发队列。接收端以无人机编号和序列号去重，保证同一事件重传时只保存一次。
+  </p>
+  <pre>
+机载端：target_reporter_node.py
+  ├─本地 reports.jsonl / JPEG 持久化
+  ├─TCP 5000：确认观测、最终 JSON、JSON ACK
+  └─TCP 5001：JPEG 证据图、图片 ACK
+                         ↓
+远程端：target_report_server.py
+  └─received_target_reports/&lt;mission_id&gt;/
+  </pre>
+
+  <h2>8. ROS 接口设计</h2>
+  <table>
+    <tr><th>模块</th><th>主要输入</th><th>主要输出</th></tr>
+    <tr><td>颜色标签</td><td><code>/camera/color/image_raw</code><br><code>/camera/aligned_depth_to_color/image_raw</code><br><code>/camera/color/camera_info</code></td><td><code>/UAV0/color_tag_detector/candidate_point_camera</code><br><code>/UAV0/color_tag_detector/candidate_text</code><br><code>/UAV0/color_tag_detector/debug_image</code></td></tr>
+    <tr><td>二维码</td><td>D435 彩色图、对齐深度图、内参</td><td><code>/UAV0/vision/qr_candidate_pose_camera</code><br><code>/UAV0/vision/qr_candidate_detected</code><br><code>/UAV0/vision/qr_debug_image</code></td></tr>
+    <tr><td>热源检测/融合</td><td>UVC 热图、D435 彩色图/深度/内参</td><td><code>/UAV0/thermal/target_candidate_camera_point</code><br><code>/UAV0/thermal/target_candidate_status</code><br><code>/UAV0/thermal/debug_image</code><br><code>/UAV0/thermal/d435_debug_image</code></td></tr>
+    <tr><td>统一上报</td><td>三类候选点、状态、调试图与 TF</td><td><code>/UAV0/target_reporting/observation</code><br>TCP JSON/JPEG<br>本地 JSONL/JPEG</td></tr>
+  </table>
+
+  <h2>9. 系统启动与验证</h2>
+  <h3>9.1 机载端统一启动</h3>
+  <pre>cd ~/match_ws
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
+  enable_realsense:=true \
+  enable_thermal:=true \
+  enable_thermal_d435_fusion:=true \
+  enable_camera_body_tf:=true \
+  enable_target_reporting:=true</pre>
+
+  <h3>9.2 关键验证项</h3>
+  <ol>
+    <li>检查 D435 彩色图、对齐深度图、内参和 UVC 热图的频率与分辨率。</li>
+    <li>使用 <code>tf_echo</code> 确认 <code>UAV0/camera_init</code> 到各相机光学帧的 TF 链连通。</li>
+    <li>在已知位置摆放目标，比较相机坐标、RViz 世界坐标和实测位置。</li>
+    <li>验证未稳定候选只在机载端显示，不在 Windows 端生成记录。</li>
+    <li>确认目标后检查两端 JSONL、坐标、序列号和证据图是否一致。</li>
+    <li>主动断开 Wi-Fi，确认检测与飞行不中断；恢复网络后确认数据自动补发。</li>
+    <li>重复发送相同序列号，确认接收端只保存一条事件。</li>
+  </ol>
+
+  <h2>10. 方案特点</h2>
+  <ul>
+    <li><b>多模态融合：</b>共享 D435 彩色、深度与内参数据，同时将无深度的热成像目标映射到 D435 完成三维定位。</li>
+    <li><b>分层确认机制：</b>原始候选保持可观测，检测器独立完成真实性和时间稳定校验，上报层再进行世界坐标稳定性和空间去重。</li>
+    <li><b>时间一致性：</b>点、状态和证据图使用源时间戳配对，避免飞行中使用不同姿态时刻的图像或坐标。</li>
+    <li><b>可靠传输：</b>本地先持久化、ACK 确认、断线重连、重启恢复和接收端幂等去重共同保证比赛结果不因短时断网丢失。</li>
+    <li><b>飞行解耦：</b>目标候选和确认结果只进入 RViz 与远程上报，不直接修改规划器和控制器状态，网络故障不影响飞行。</li>
+  </ul>
+
+  <h2>11. 结论</h2>
+  <p>
+    本方案通过四个 ROS 功能包建立了从多源图像采集、目标识别、深度融合、坐标统一到可靠远程上报的完整闭环。系统以检测器级质量门控降低误报，以 ROS TF 保证三类目标的坐标一致性，以本地持久化和 ACK 重传机制保证结果可追溯。该架构具有模块边界清晰、运行链路可观测、故障影响范围可控等特点，可满足无人机比赛环境下对实时性、准确性和传输可靠性的综合要求。
+  </p>
+
+  <h2>附录 A　核心源码位置</h2>
+  <table>
+    <tr><th>内容</th><th>源码路径</th></tr>
+    <tr><td>颜色标签主程序</td><td><code>src/color_tag_detector/scripts/color_tag_detector.py</code></td></tr>
+    <tr><td>二维码主程序</td><td><code>src/qr_detector/scripts/qr_detector_node.py</code></td></tr>
+    <tr><td>热成像 ROS 主程序</td><td><code>src/uvc_ubuntu/thermal_ros_node.py</code></td></tr>
+    <tr><td>热成像底层 UVC 入口</td><td><code>src/uvc_ubuntu/main.c</code></td></tr>
+    <tr><td>热源与 D435 融合</td><td><code>src/uvc_ubuntu/thermal_d435_fusion_node.py</code></td></tr>
+    <tr><td>坐标转换与机载上报</td><td><code>src/target_reporting/scripts/target_reporter_node.py</code></td></tr>
+    <tr><td>远程接收服务器</td><td><code>src/target_reporting/scripts/target_report_server.py</code></td></tr>
+    <tr><td>统一启动文件</td><td><code>src/uav0_competition_bringup/launch/uav0_detection_landing_stack.launch</code></td></tr>
+  </table>
+</body>
+</html>
