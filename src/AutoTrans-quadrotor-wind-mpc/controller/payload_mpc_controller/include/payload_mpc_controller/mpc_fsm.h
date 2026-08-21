@@ -12,6 +12,8 @@
 #include <std_msgs/Empty.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/String.h>
+#include <quadrotor_msgs/PositionCommand.h>
 #include "mpc_params.h"
 #include "mpc_input.h"
 #include "mpc_controller.h"
@@ -91,6 +93,8 @@ namespace PayloadMPC
 		bool imu_is_received(const ros::Time &now_time) const;
 		bool recv_new_odom();
 		void addNewForceObseverState();
+		void landingSearchStateCallback(const std_msgs::String::ConstPtr &msg);
+		void landingSearchYawCallback(const quadrotor_msgs::PositionCommand::ConstPtr &msg);
 
 	private:
 		// Subscribers and publisher.
@@ -112,6 +116,13 @@ namespace PayloadMPC
 		bool auto_land_request_sent_{false};
 		ros::Time last_auto_land_request_time_{0};
 		bool takeoff_requested_{false};
+		// 前视扫描由搜索管理器给出航向，AutoTrans 锁定进入扫描时的 XYZ，仅执行偏航。
+		bool landing_search_yaw_active_{false};
+		bool landing_search_hold_latched_{false};
+		bool have_landing_search_yaw_{false};
+		double landing_search_yaw_{0.0};
+		double landing_search_yaw_timeout_{0.5};
+		ros::Time last_landing_search_yaw_time_{0};
 		// CH8 低位触发一次起飞；失败后必须离开低位再重新进入，避免循环反复重启。
 		bool takeoff_request_latched_{false};
 		// 仅在起飞前置条件的失败原因变化时输出提示，避免控制周期反复刷屏。
@@ -219,6 +230,7 @@ namespace PayloadMPC
 		DisturbanceGateReason disturbanceCompensationGate(const ros::Time &now) const;
 		void reportDisturbanceGate(DisturbanceGateReason reason);
 		void clearAppliedDisturbance();
+		void processLandingSearchYawHold(const ros::Time &now);
 		void clearAutonomousState();
 		bool odomControlStateValid(const ros::Time &now) const;
 		void startOdomFailsafe(const ros::Time &now);

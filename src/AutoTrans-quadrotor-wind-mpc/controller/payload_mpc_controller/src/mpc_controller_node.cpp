@@ -71,6 +71,17 @@ int main(int argc, char **argv)
                                                       ros::VoidConstPtr(),
                                                       ros::TransportHints().tcpNoDelay());
 
+    // 前视 ArUco 扫描期间直接由 AutoTrans 锁定当前位置并跟踪搜索航向；
+    // 不再依赖只接入旧简单控制器的 yaw-only 通路。
+    ros::Subscriber landing_search_state_sub =
+        nh.subscribe<std_msgs::String>("landing_search_state", 10,
+                                       &PayloadMPC::MPCFSM::landingSearchStateCallback, &fsm);
+    ros::Subscriber landing_search_yaw_sub =
+        nh.subscribe<quadrotor_msgs::PositionCommand>("landing_search_yaw", 20,
+                                                      &PayloadMPC::MPCFSM::landingSearchYawCallback,
+                                                      &fsm,
+                                                      ros::TransportHints().tcpNoDelay());
+
     ros::Subscriber imu_sub =
         nh.subscribe<sensor_msgs::Imu>("drone_imu/data",
                                        100,

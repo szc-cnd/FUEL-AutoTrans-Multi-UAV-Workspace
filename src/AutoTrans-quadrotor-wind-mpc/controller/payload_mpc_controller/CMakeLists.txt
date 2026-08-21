@@ -119,6 +119,7 @@ catkin_add_nosetests(test/test_velocity_hard_constraint_static.py)
   catkin_add_nosetests(test/test_takeoff_timeout_hover_static.py)
   catkin_add_nosetests(test/test_fsm_simplification_static.py)
   catkin_add_nosetests(test/test_cav0_sync_contract_static.py)
+  catkin_add_nosetests(test/test_landing_search_yaw_hold_static.py)
 endif()
 
 catkin_install_python(PROGRAMS

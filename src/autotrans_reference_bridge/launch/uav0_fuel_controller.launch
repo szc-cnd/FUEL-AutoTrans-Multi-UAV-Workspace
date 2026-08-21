@@ -57,6 +57,8 @@
     <arg name="set_mode_service" value="/UAV0/mavros/set_mode"/>
     <arg name="trajectory_topic" value="/UAV0/planning/autotrans_trajectory"/>
     <arg name="position_cmd_topic" value="/UAV0/planning/pos_cmd"/>
+    <arg name="landing_search_state_topic" value="/landing_diff_search_manager/state"/>
+    <arg name="landing_search_yaw_topic" value="/UAV0/landing_diff/yaw"/>
     <arg name="cmd_trigger_topic" value="/UAV0/hummingbird/goal"/>
     <arg name="goal_topic" value="/UAV0/move_base_simple/goal"/>
     <arg name="enable_logger" value="$(arg enable_logger)"/>

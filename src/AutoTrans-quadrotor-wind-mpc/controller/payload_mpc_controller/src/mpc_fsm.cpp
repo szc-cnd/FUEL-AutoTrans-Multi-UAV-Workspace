@@ -17,6 +17,25 @@ namespace
 	constexpr double safe_output_hold_time = 0.3;
 	constexpr double kLastValidMpcHoldSeconds = 0.2;
 
+	std::string firstToken(const std::string &text)
+	{
+		const std::size_t end = text.find_first_of(" \t\r\n");
+		return text.substr(0, end);
+	}
+
+	bool isLandingSearchYawState(const std::string &state)
+	{
+		return state == "FRONT_ARUCO_INITIAL_WAIT" ||
+			state == "FRONT_ARUCO_YAW_SCAN_LEFT" ||
+			state == "FRONT_ARUCO_YAW_SCAN_RIGHT" ||
+			state == "FRONT_ARUCO_YAW_SCAN_RETURN";
+	}
+
+	double wrapYaw(double yaw)
+	{
+		return std::remainder(yaw, 2.0 * M_PI);
+	}
+
 	PayloadMPC::ForceAttitudeAlignmentConfig makeForceAttitudeAlignmentConfig(
 		const PayloadMPC::MpcParams &params)
 	{
@@ -107,6 +126,47 @@ namespace PayloadMPC
 								params_.rc_mode_.mid_low_threshold,
 								params_.rc_mode_.mid_high_threshold,
 								params_.rc_mode_.high_threshold);
+		nh_.param("landing_search_yaw_timeout", landing_search_yaw_timeout_, 0.5);
+		if (!std::isfinite(landing_search_yaw_timeout_) ||
+			landing_search_yaw_timeout_ <= 0.0)
+		{
+			ROS_WARN("[landing_search_yaw] invalid timeout; use 0.5 s.");
+			landing_search_yaw_timeout_ = 0.5;
+		}
+	}
+
+	void MPCFSM::landingSearchStateCallback(const std_msgs::String::ConstPtr &msg)
+	{
+		const std::string state = firstToken(msg->data);
+		const bool active = isLandingSearchYawState(state);
+		if (active == landing_search_yaw_active_)
+			return;
+
+		landing_search_yaw_active_ = active;
+		if (!active)
+		{
+			landing_search_hold_latched_ = false;
+			ROS_WARN("[landing_search_yaw] 前视偏航阶段结束，允许 Diff 轨迹接管。");
+			return;
+		}
+
+		// 实际锁点在下一个 NMPC 周期读取最新里程计后完成。
+		landing_search_hold_latched_ = false;
+		ROS_WARN("[landing_search_yaw] state=%s，准备锁定当前 XYZ 并执行前视偏航。",
+			state.c_str());
+	}
+
+	void MPCFSM::landingSearchYawCallback(
+		const quadrotor_msgs::PositionCommand::ConstPtr &msg)
+	{
+		if (!std::isfinite(msg->yaw))
+		{
+			ROS_WARN_THROTTLE(1.0, "[landing_search_yaw] reject non-finite yaw command.");
+			return;
+		}
+		landing_search_yaw_ = wrapYaw(msg->yaw);
+		have_landing_search_yaw_ = true;
+		last_landing_search_yaw_time_ = ros::Time::now();
 	}
 
 	/*
@@ -322,6 +382,10 @@ namespace PayloadMPC
 				fsm_state = AUTO_LAND;
 				ROS_WARN("[AUTO_LAND] CH10 上升沿：AUTO_HOVER -> AUTO_LAND。");
 			}
+			else if (landing_search_yaw_active_)
+			{
+				processLandingSearchYawHold(now_time);
+			}
 			else if (rc_mode_available && rc_data.is_command_mode)
 			{
 				if (((USE_PX4_OR_ARDUPILOT == 1) && (state_data.current_state.mode == "GUIDED_NOGPS")) || ((USE_PX4_OR_ARDUPILOT == 0) && (state_data.current_state.mode == "OFFBOARD")))
@@ -376,6 +440,10 @@ namespace PayloadMPC
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				fsm_state = AUTO_LAND;
 				ROS_WARN("[AUTO_LAND] CH10 上升沿：CMD_CTRL -> AUTO_LAND。");
+			}
+			else if (landing_search_yaw_active_)
+			{
+				processLandingSearchYawHold(now_time);
 			}
 			else if (rc_mode_available && (rc_data.is_takeoff_mode || rc_data.is_hover_mode))
 			{
@@ -1221,6 +1289,37 @@ namespace PayloadMPC
 	{
 		fq_applied_.setZero();
 		controller_.setExternalForce(fq_applied_);
+	}
+
+	void MPCFSM::processLandingSearchYawHold(const ros::Time &now)
+	{
+		if (!landing_search_hold_latched_)
+		{
+			// CH9 后禁止旧 FUEL/入口命令在前视扫描期间继续平移。锁存当前实际位置，
+			// 清除旧轨迹；扫描结束后新的 Diff 轨迹仍可正常进入。
+			update_hover_pose();
+			trajectory_data.exec_traj = 0;
+			trajectory_data.traj_queue.clear();
+			trajectory_data.total_traj_start_time = ros::Time(0);
+			trajectory_data.total_traj_end_time = ros::Time(0);
+			exec_traj_state_ = HOVER;
+			entry_command_active_ = false;
+			cmd_data.rcv_stamp = ros::Time(0);
+			landing_search_hold_latched_ = true;
+			ROS_ERROR("[landing_search_yaw] 已锁定前视扫描位置 (%.3f, %.3f, %.3f)。",
+				hover_pose_.x(), hover_pose_.y(), hover_pose_.z());
+		}
+
+		const bool yaw_fresh = have_landing_search_yaw_ &&
+			(now - last_landing_search_yaw_time_).toSec() <= landing_search_yaw_timeout_;
+		if (yaw_fresh)
+			hover_yaw_ = landing_search_yaw_;
+		else
+			ROS_WARN_THROTTLE(1.0,
+				"[landing_search_yaw] 航向指令超时，保持最后航向且不恢复水平轨迹。");
+
+		controller_.setHoverReference(hover_pose_, hover_yaw_);
+		controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 	}
 
 	void MPCFSM::clearAutonomousState()

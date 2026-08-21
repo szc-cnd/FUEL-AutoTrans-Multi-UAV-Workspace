@@ -17,6 +17,9 @@
   <arg name="trajectory_topic" default="/UAV0/planning/autotrans_trajectory"/>
   <!-- FUEL 入口点阶段的 PositionCommand；完整 PolynomialTraj 到达后优先级更高。 -->
   <arg name="position_cmd_topic" default="/UAV0/planning/pos_cmd"/>
+  <!-- 搜索管理器的状态和 yaw-only 指令；前视扫描时 AutoTrans 固定当前 XYZ。 -->
+  <arg name="landing_search_state_topic" default="/landing_diff_search_manager/state"/>
+  <arg name="landing_search_yaw_topic" default="/UAV0/landing_diff/yaw"/>
   <arg name="planning_stop_topic" default="/UAV0/planning_stop_trigger"/>
   <arg name="planning_restart_topic" default="/UAV0/planning_restart_trigger"/>
   <!-- CAV0 FUEL 原始 B-spline；logger 当前只解析 traj_utils/PolyTraj，故不送入 MPC。 -->
@@ -70,6 +73,8 @@
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
     <remap from="~cmd" to="$(arg position_cmd_topic)"/>
+    <remap from="~landing_search_state" to="$(arg landing_search_state_topic)"/>
+    <remap from="~landing_search_yaw" to="$(arg landing_search_yaw_topic)"/>
     <remap from="~cmd_trigger" to="$(arg cmd_trigger_topic)"/>
     <remap from="/planning_stop_trigger" to="$(arg planning_stop_topic)"/>
     <remap from="/planning_restart_trigger" to="$(arg planning_restart_topic)"/>
@@ -121,6 +126,8 @@
       - "$(arg trajectory_topic)"
       - "$(arg raw_trajectory_topic)"
       - "$(arg position_cmd_topic)"
+      - "$(arg landing_search_state_topic)"
+      - "$(arg landing_search_yaw_topic)"
       - "$(arg goal_topic)"
       - "$(arg reference_topic)"
       - "$(arg force_topic)"
