@@ -11,6 +11,9 @@ class AutoTakeoffContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.fsm_source = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        cls.fsm_header = (
+            PACKAGE / "include/payload_mpc_controller/mpc_fsm.h"
+        ).read_text(encoding="utf-8")
         cls.input_header = (
             PACKAGE / "include/payload_mpc_controller/mpc_input.h"
         ).read_text(encoding="utf-8")
@@ -37,6 +40,15 @@ class AutoTakeoffContractTest(unittest.TestCase):
         manual_publish = manual_publish.split("void MPCFSM::handleOffboardLoss", 1)[0]
         self.assertIn("manual_setpoint_published_", manual_publish)
         self.assertIn("msg.thrust = 0.01", manual_publish)
+
+    def test_ch8_low_prestream_has_no_fixed_wait_timer(self):
+        manual = self.fsm_source.split("case MANUAL_CTRL:", 1)[1]
+        manual = manual.split("case AUTO_HOVER:", 1)[0]
+        self.assertIn("prestream_allowed", manual)
+        self.assertNotIn("publishTakeoffPrestream", self.fsm_source)
+        self.assertIn("publish_manual_ctrl(now_time);", self.fsm_source)
+        self.assertNotIn("takeoff_prestream_start_", manual)
+        self.assertNotIn("takeoff_prestream_start_", self.fsm_header)
 
     def test_takeoff_parameters_keep_target_and_climb_rate(self):
         for token in ("struct Takeoff", 'takeoff/target_z', 'takeoff/climb_rate'):

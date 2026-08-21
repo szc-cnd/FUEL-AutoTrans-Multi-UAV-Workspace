@@ -145,6 +145,8 @@ int main(int argc, char **argv)
             if (trials++ > 5)
                 ROS_ERROR("[启动] 无法连接 PX4。");
         }
+        if (!ros::ok())
+            return 1;
     }
     else
     {
