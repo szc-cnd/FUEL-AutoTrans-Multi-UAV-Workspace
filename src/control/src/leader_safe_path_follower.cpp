@@ -101,6 +101,8 @@ class LeaderSafePathFollower {
                             "/UAV1/mission/landing_target");
     pnh_.param<std::string>("follower_landing_request_topic", follower_landing_request_topic_,
                             "/UAV1/mission/landing_request");
+    pnh_.param<std::string>("follower_landing_trigger_topic", follower_landing_trigger_topic_,
+                            "/UAV1/need_to_land");
     pnh_.param<std::string>("follower_assigned_target_topic", follower_assigned_target_topic_,
                             "/UAV1/landing/assigned_target");
     pnh_.param<std::string>("release_uav1_topic", release_uav1_topic_,
@@ -277,6 +279,9 @@ class LeaderSafePathFollower {
     follower_assigned_target_sub_ = nh_.subscribe(
         follower_assigned_target_topic_, 1,
         &LeaderSafePathFollower::followerAssignedTargetCallback, this);
+    follower_landing_trigger_sub_ = nh_.subscribe(
+        follower_landing_trigger_topic_, 2,
+        &LeaderSafePathFollower::followerLandingTriggerCallback, this);
     door_pose_sub_ = nh_.subscribe(door_pose_topic_, 1,
                                    &LeaderSafePathFollower::doorPoseCallback, this);
     final_exit_pose_sub_ = nh_.subscribe(
@@ -648,6 +653,18 @@ class LeaderSafePathFollower {
     have_assigned_follower_target_ = true;
     ROS_INFO("[safe_follower] assigned UAV1 landing target received (%.2f, %.2f, %.2f).",
              msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+  }
+
+  void followerLandingTriggerCallback(const std_msgs::Bool::ConstPtr& msg) {
+    // 精降控制权一旦接管就永久锁存到本次任务结束。停止继续重发终端 Diff
+    // 航点；实际 MAVROS 输出同时由 landing_setpoint_arbiter 切给精降节点。
+    if (!msg->data || follower_precision_landing_active_) return;
+    follower_precision_landing_active_ = true;
+    diff_goal_published_ = false;
+    diff_plan_response_received_ = false;
+    setFollowerDetectionEnable(false, "precision landing takeover");
+    ROS_ERROR("[safe_follower] UAV1 precision landing takeover active; "
+              "stop issuing relay/Diff goals.");
   }
 
   void releaseUav1Callback(const std_msgs::Bool::ConstPtr& msg) {
@@ -1976,6 +1993,10 @@ class LeaderSafePathFollower {
   }
 
   void timerCallback(const ros::TimerEvent&) {
+    if (follower_precision_landing_active_) {
+      publishState("UAV1_PRECISION_LANDING_OWNS_CONTROL", 0.2, 1.0, 0.2);
+      return;
+    }
     if (!follower_started_) return;
     // 2026-07-28: FAST-LIO跳变故障锁存后不再生成任何跟随目标；控制器已通过独立话题切到MAVROS本地锁点。
     if (follower_odom_fault_latched_) {
@@ -2275,6 +2296,7 @@ class LeaderSafePathFollower {
   ros::Subscriber leader_landing_target_sub_, leader_landing_request_sub_, door_pose_sub_;
   ros::Subscriber release_uav1_sub_;
   ros::Subscriber follower_assigned_target_sub_;
+  ros::Subscriber follower_landing_trigger_sub_;
   ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
   ros::Subscriber leader_task_status_sub_, landing_search_state_sub_,
       front_scan_anchor_sub_;
@@ -2305,7 +2327,8 @@ class LeaderSafePathFollower {
   std::string leader_landing_target_topic_, leader_landing_request_topic_;
   std::string release_uav1_topic_;
   std::string follower_assigned_target_topic_;
-  std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
+  std::string follower_landing_target_topic_, follower_landing_request_topic_;
+  std::string follower_landing_trigger_topic_, door_pose_topic_;
   std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
   std::string landing_search_state_topic_, front_scan_anchor_topic_;
   std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
@@ -2318,6 +2341,7 @@ class LeaderSafePathFollower {
   bool pending_leader_landing_request_{false};
   bool have_assigned_follower_target_{false};
   bool follower_landing_requested_{false};
+  bool follower_precision_landing_active_{false};
   bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
   bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。
   bool enable_dynamic_obstacle_detection_{false};

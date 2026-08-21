@@ -122,6 +122,8 @@ private:
                         true);
     private_node_.param("mission/require_platform_assignment",
                         require_platform_assignment_, false);
+    private_node_.param("mission/early_handoff_on_assigned_marker",
+                        early_handoff_on_assigned_marker_, false);
     private_node_.param("frames/world", world_frame_, std::string("world"));
 
     if (max_image_odom_delta_sec_ <= 0.0 || image_timeout_sec_ <= 0.0 ||
@@ -154,6 +156,8 @@ private:
     std::string odom_topic{"/UAV0/fast_lio/Odom_high_freq"};
     std::string mission_status_topic{"/UAV0/mission/task_status"};
     std::string landing_request_topic{"/UAV0/mission/landing_request"};
+    std::string early_handoff_authorization_topic{
+        "/dual_uav_landing/release_uav1"};
     std::string debug_image_topic{"/UAV0/landing/search/debug_image"};
     std::string status_topic{"/UAV0/landing/search/status"};
     std::string locked_id_topic{"/UAV0/landing/search/locked_id"};
@@ -172,6 +176,9 @@ private:
                         std::string("/UAV0/mission/detection/final_aruco"));
     private_node_.param("topics/landing_request", landing_request_topic,
                         landing_request_topic);
+    private_node_.param("topics/early_handoff_authorization",
+                        early_handoff_authorization_topic,
+                        early_handoff_authorization_topic);
     private_node_.param("topics/landing_trigger", landing_trigger_topic_,
                         std::string("/UAV0/need_to_land"));
     private_node_.param("topics/debug_image", debug_image_topic,
@@ -200,6 +207,9 @@ private:
     landing_request_subscriber_ =
         node_.subscribe(landing_request_topic, 2,
                         &LandingSearchNode::landingRequestCallback, this);
+    early_handoff_authorization_subscriber_ = node_.subscribe(
+        early_handoff_authorization_topic, 2,
+        &LandingSearchNode::earlyHandoffAuthorizationCallback, this);
     assigned_id_subscriber_ =
         node_.subscribe(assigned_id_topic, 2,
                         &LandingSearchNode::assignedIdCallback, this);
@@ -290,6 +300,11 @@ private:
     if (!message->data && !trigger_sent_) {
       publishLandingTrigger(false);
     }
+  }
+
+  void earlyHandoffAuthorizationCallback(
+      const std_msgs::BoolConstPtr &message) {
+    early_handoff_authorized_ = message->data;
   }
 
   void assignedIdCallback(const std_msgs::Int32ConstPtr &message) {
@@ -484,6 +499,20 @@ private:
                 << std::setprecision(2) << filtered.x() << ", " << filtered.y()
                 << ", " << filtered.z() << ")";
     annotateAndPublish(tracker_.debugImage(), image_state.str());
+
+    // UAV1 已被 UAV0 释放后，只要下视稳定识别到分配的同一平台 ID，
+    // 就立即把控制权交给精降，不再继续追踪 UAV0 提供的粗平台航点。
+    // UAV0 默认关闭此功能，仍维持“到达粗航点后请求精降”的原流程。
+    if (early_handoff_on_assigned_marker_ && early_handoff_authorized_ &&
+        !trigger_sent_ && stageAllowsHandoff() && requested_marker_id_ >= 0 &&
+        observation.id == requested_marker_id_) {
+      trigger_sent_ = true;
+      publishLandingTrigger(true);
+      publishStatus("已识别到分配的同码 ArUco，提前由精确降落接管");
+      ROS_ERROR("landing_search: EARLY HANDOFF TO PRECISION LANDING, "
+                "assigned_id=%d world=(%.3f, %.3f, %.3f)",
+                requested_marker_id_, filtered.x(), filtered.y(), filtered.z());
+    }
   }
 
   void requestTimerCallback(const ros::TimerEvent &) {
@@ -640,6 +669,7 @@ private:
   ros::Subscriber odom_subscriber_;
   ros::Subscriber mission_status_subscriber_;
   ros::Subscriber landing_request_subscriber_;
+  ros::Subscriber early_handoff_authorization_subscriber_;
   ros::Subscriber assigned_id_subscriber_;
   ros::Subscriber excluded_id_subscriber_;
   ros::Publisher marker_world_publisher_;
@@ -684,9 +714,11 @@ private:
   double max_height_error_m_{0.25};
   bool require_stage_gate_{true};
   bool require_platform_assignment_{false};
+  bool early_handoff_on_assigned_marker_{false};
   bool camera_info_received_{false};
   bool stable_target_received_{false};
   bool landing_request_active_{false};
+  bool early_handoff_authorized_{false};
   bool trigger_sent_{false};
 };
 

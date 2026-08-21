@@ -28,6 +28,10 @@
              value="$(find precision_landing)/config/down_camera_extrinsic_uav1.yaml"/>
         <arg name="enable_front_aruco_hint" value="false"/>
         <arg name="require_platform_assignment" value="true"/>
+        <!-- UAV1 飞往粗平台航点途中一旦稳定识别到分配的同一 ArUco，立即交给精降。 -->
+        <arg name="early_handoff_on_assigned_marker" value="true"/>
+        <arg name="early_handoff_authorization_topic"
+             value="/dual_uav_landing/release_uav1"/>
     </include>
     <!-- 2026-07-16: 后机不运行第二套FUEL；执行门点、持续滚动内部接力点和真实终点。 -->
     <!-- 2026-07-27: 后机接力链路的全部双机话题前缀统一为 UAV0/UAV1。 -->
@@ -70,6 +74,7 @@
         <param name="leader_landing_request_topic" value="/UAV0/mission/landing_request"/>
         <param name="follower_landing_target_topic" value="/UAV1/mission/landing_target"/>
         <param name="follower_landing_request_topic" value="/UAV1/mission/landing_request"/>
+        <param name="follower_landing_trigger_topic" value="/UAV1/need_to_land"/>
         <param name="release_uav1_topic" value="/dual_uav_landing/release_uav1"/>
         <param name="follower_assigned_target_topic" value="/UAV1/landing/assigned_target"/>
         <!-- 2026-07-15: workspace_lock 只在门确认后锁存发布，比 entry_pose 的搜索期参考点可靠。 -->
