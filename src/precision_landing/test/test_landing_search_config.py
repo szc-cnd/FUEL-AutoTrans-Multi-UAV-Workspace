@@ -156,8 +156,19 @@ def test_dual_uav_coordinator_assigns_after_scan_in_detection_order():
     }
     assert params["topics/front_candidates"] == "/UAV0/landing/front/candidates"
     assert params["topics/search_state"] == "/landing_diff_search_manager/state"
+    assert params["topics/uav0_landing_request"] == "/UAV0/mission/landing_request"
     assert params["topics/uav0_target"] == "/UAV0/landing/assigned_target"
     assert params["topics/uav0_target"] != "/UAV0/mission/detection/final_aruco"
+
+    request_callback = source.split(
+        "void landingRequestCallback", maxsplit=1
+    )[1].split("void tryReleaseUav1", maxsplit=1)[0]
+    assert "uav0_landing_requested_ = true" in request_callback
+    release = source.split("void tryReleaseUav1", maxsplit=1)[1].split(
+        "void successCallback", maxsplit=1
+    )[0]
+    assert "!assignments_ready_ || !uav0_landing_requested_" in release
+    assert "publishBool(release_pub_, true)" in release
 
     update = source.split("void updateCandidates", maxsplit=1)[1].split(
         "void tryAssignPlatforms", maxsplit=1

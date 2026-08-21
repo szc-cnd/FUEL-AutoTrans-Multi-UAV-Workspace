@@ -27,12 +27,15 @@ class DualUavLandingCoordinator {
     std::string candidates_topic{"/UAV0/landing/search/candidates"};
     std::string front_candidates_topic{"/UAV0/landing/front/candidates"};
     std::string exit_topic{"/UAV0/mission/final_exit"};
+    std::string landing_request_topic{"/UAV0/mission/landing_request"};
     std::string success_topic{"/UAV0/landing/success"};
     std::string search_state_topic{"/landing_diff_search_manager/state"};
     private_node_.param("topics/candidates", candidates_topic, candidates_topic);
     private_node_.param("topics/front_candidates", front_candidates_topic,
                         front_candidates_topic);
     private_node_.param("topics/final_exit", exit_topic, exit_topic);
+    private_node_.param("topics/uav0_landing_request", landing_request_topic,
+                        landing_request_topic);
     private_node_.param("topics/uav0_success", success_topic, success_topic);
     private_node_.param("topics/search_state", search_state_topic,
                         search_state_topic);
@@ -63,6 +66,9 @@ class DualUavLandingCoordinator {
         front_candidates_topic, 2,
         &DualUavLandingCoordinator::frontCandidatesCallback, this);
     exit_sub_ = node_.subscribe(exit_topic, 1, &DualUavLandingCoordinator::exitCallback, this);
+    landing_request_sub_ = node_.subscribe(
+        landing_request_topic, 2,
+        &DualUavLandingCoordinator::landingRequestCallback, this);
     success_sub_ = node_.subscribe(success_topic, 2, &DualUavLandingCoordinator::successCallback, this);
     search_state_sub_ = node_.subscribe(
         search_state_topic, 5,
@@ -205,14 +211,36 @@ class DualUavLandingCoordinator {
     publishId(uav0_assigned_pub_, uav0_id_);
     publishId(uav1_assigned_pub_, uav1_id_);
     publishBool(ready_pub_, true);
-    publishStatus("左右扫描完成并确认两个平台：UAV1 第一个，UAV0 第二个；等待 UAV0 降落");
+    publishStatus("左右扫描完成并确认两个平台：UAV1 第一个，UAV0 第二个；等待 UAV0 准备精降");
+    tryReleaseUav1();
+  }
+
+  void landingRequestCallback(const std_msgs::BoolConstPtr& message) {
+    if (!message->data) return;
+    uav0_landing_requested_ = true;
+    tryReleaseUav1();
+  }
+
+  void tryReleaseUav1() {
+    if (uav1_released_ || !assignments_ready_ || !uav0_landing_requested_) {
+      return;
+    }
+    uav1_released_ = true;
+    publishBool(release_pub_, true);
+    publishStatus("UAV0 已到达自身平台并请求精降，已释放 UAV1 前往分配平台");
   }
 
   void successCallback(const std_msgs::BoolConstPtr& message) {
     if (!message->data || uav0_id_ < 0 || uav1_id_ < 0 || uav0_success_) return;
     uav0_success_ = true;
-    publishBool(release_pub_, true);
-    publishStatus("UAV0 已完成降落，已释放 UAV1 出口等待点");
+    if (!uav1_released_) {
+      // 兼容精降请求话题异常缺失的情况：成功信号仍作为最终兜底释放。
+      uav1_released_ = true;
+      publishBool(release_pub_, true);
+      publishStatus("UAV0 已完成降落，兜底释放 UAV1 前往分配平台");
+    } else {
+      publishStatus("UAV0 已完成降落；UAV1 已在并行执行分配平台任务");
+    }
   }
 
   void targetTimerCallback(const ros::TimerEvent&) {
@@ -243,8 +271,8 @@ class DualUavLandingCoordinator {
   }
 
   ros::NodeHandle node_, private_node_;
-  ros::Subscriber candidates_sub_, front_candidates_sub_, exit_sub_, success_sub_,
-      search_state_sub_;
+  ros::Subscriber candidates_sub_, front_candidates_sub_, exit_sub_,
+      landing_request_sub_, success_sub_, search_state_sub_;
   ros::Timer target_timer_;
   ros::Publisher uav0_assigned_pub_, uav1_assigned_pub_, uav0_target_pub_, uav1_target_pub_;
   ros::Publisher release_pub_, ready_pub_, status_pub_;
@@ -255,7 +283,8 @@ class DualUavLandingCoordinator {
   std::map<int, precision_landing::LandingPlatform> candidates_by_id_;
   std::vector<int> candidate_order_;
   std::set<int> downward_ids_;
-  bool have_exit_{false}, uav0_success_{false}, assignments_ready_{false};
+  bool have_exit_{false}, uav0_landing_requested_{false}, uav0_success_{false},
+      assignments_ready_{false}, uav1_released_{false};
   bool front_scan_completed_{false};
   int uav0_id_{-1}, uav1_id_{-1};
   double candidate_message_timeout_sec_{0.50};

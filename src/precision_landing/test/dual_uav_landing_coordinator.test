@@ -4,6 +4,7 @@
     <param name="topics/candidates" value="/test/down_candidates"/>
     <param name="topics/front_candidates" value="/test/front_candidates"/>
     <param name="topics/final_exit" value="/test/final_exit"/>
+    <param name="topics/uav0_landing_request" value="/test/uav0_landing_request"/>
     <param name="topics/uav0_success" value="/test/uav0_success"/>
     <param name="topics/search_state" value="/test/search_state"/>
     <param name="topics/uav0_assigned" value="/test/uav0_assigned"/>

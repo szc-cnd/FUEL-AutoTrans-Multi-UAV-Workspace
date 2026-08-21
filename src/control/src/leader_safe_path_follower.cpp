@@ -601,7 +601,7 @@ class LeaderSafePathFollower {
     if (!msg->data || terminal_mode_active_) return;
     if (!release_uav1_) {
       pending_leader_landing_request_ = true;
-      ROS_INFO("[safe_follower] leader landing reported; hold terminal until UAV1 release.");
+      ROS_INFO("[safe_follower] leader precision landing requested; hold terminal until coordinator release.");
       return;
     }
     queueFollowerTerminalTarget();
@@ -654,9 +654,9 @@ class LeaderSafePathFollower {
     if (!enable_search_landing_) return;
     release_uav1_ = msg->data;
     if (release_uav1_) {
-      ROS_ERROR("[safe_follower] UAV0 landing confirmed; UAV1 released from its current hold point.");
+      ROS_ERROR("[safe_follower] UAV0 precision landing is starting; UAV1 released from its current hold point.");
       hold_target_latched_ = false;
-      tryReleaseFinalExitWaypoint("UAV0 landing success release");
+      tryReleaseFinalExitWaypoint("UAV0 precision landing release");
       if (pending_leader_landing_request_) {
         pending_leader_landing_request_ = false;
         queueFollowerTerminalTarget();

@@ -1,10 +1,11 @@
 <launch>
-  <!-- UAV0 完成左右扫描后确认两个平台：第一个给 UAV1，第二个给 UAV0；UAV0 成功后释放 UAV1。 -->
+  <!-- UAV0 完成左右扫描后确认两个平台：第一个给 UAV1，第二个给 UAV0；UAV0 请求精降后释放 UAV1。 -->
   <node pkg="precision_landing" type="dual_uav_landing_coordinator_node"
         name="dual_uav_landing_coordinator" output="screen" required="true">
     <param name="topics/candidates" value="/UAV0/landing/search/candidates"/>
     <param name="topics/front_candidates" value="/UAV0/landing/front/candidates"/>
     <param name="topics/final_exit" value="/UAV0/mission/final_exit"/>
+    <param name="topics/uav0_landing_request" value="/UAV0/mission/landing_request"/>
     <param name="topics/uav0_success" value="/UAV0/landing/success"/>
     <param name="topics/search_state" value="/landing_diff_search_manager/state"/>
     <param name="topics/uav0_assigned" value="/UAV0/landing/assigned_id"/>

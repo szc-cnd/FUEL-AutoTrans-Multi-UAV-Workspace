@@ -18,12 +18,14 @@ class DualUavLandingCoordinatorTest(unittest.TestCase):
         self.uav1_id = -1
         self.uav0_target = None
         self.uav1_target = None
+        self.released = False
 
         rospy.Subscriber("/test/assignments_ready", Bool, self._ready_callback)
         rospy.Subscriber("/test/uav0_assigned", Int32, self._uav0_id_callback)
         rospy.Subscriber("/test/uav1_assigned", Int32, self._uav1_id_callback)
         rospy.Subscriber("/test/uav0_target", PoseStamped, self._uav0_target_callback)
         rospy.Subscriber("/test/uav1_target", PoseStamped, self._uav1_target_callback)
+        rospy.Subscriber("/test/release_uav1", Bool, self._release_callback)
 
         self.front_candidates_pub = rospy.Publisher(
             "/test/front_candidates", LandingPlatformArray, queue_size=1
@@ -34,12 +36,16 @@ class DualUavLandingCoordinatorTest(unittest.TestCase):
         self.state_pub = rospy.Publisher(
             "/test/search_state", String, queue_size=1
         )
+        self.landing_request_pub = rospy.Publisher(
+            "/test/uav0_landing_request", Bool, queue_size=1
+        )
 
         self.assertTrue(
             self._wait_for(
                 lambda: self.front_candidates_pub.get_num_connections() > 0
                 and self.exit_pub.get_num_connections() > 0
                 and self.state_pub.get_num_connections() > 0
+                and self.landing_request_pub.get_num_connections() > 0
             ),
             "coordinator did not subscribe to test inputs",
         )
@@ -58,6 +64,9 @@ class DualUavLandingCoordinatorTest(unittest.TestCase):
 
     def _uav1_target_callback(self, message):
         self.uav1_target = message
+
+    def _release_callback(self, message):
+        self.released = message.data
 
     @staticmethod
     def _wait_for(predicate, timeout=3.0):
@@ -121,6 +130,13 @@ class DualUavLandingCoordinatorTest(unittest.TestCase):
         self.assertIsNotNone(self.uav0_target)
         self.assertAlmostEqual(self.uav1_target.pose.position.x, 1.0)
         self.assertAlmostEqual(self.uav0_target.pose.position.x, 3.0)
+        self.assertFalse(self.released, "assignment alone must not release UAV1")
+
+        self.landing_request_pub.publish(Bool(data=True))
+        self.assertTrue(
+            self._wait_for(lambda: self.released),
+            "UAV0 precision-landing request did not release UAV1",
+        )
 
 
 if __name__ == "__main__":

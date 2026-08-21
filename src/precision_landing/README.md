@@ -25,7 +25,8 @@ SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
 -> UAV0 到第二个平台上方等待下视指定 ID 复核 -> APPROACH_LANDING
 -> 规划到平台上方 2.00 m -> /UAVx/mission/landing_request
 -> /UAVx/need_to_land -> 精确降落
--> /UAV0/landing/success=true 后才释放 UAV1 前往第一个平台并重复下视复核、精降
+-> UAV0 发布 `/UAV0/mission/landing_request=true`、开始精降准备后，立即释放 UAV1 前往第一个平台
+-> UAV1 到达后重复下视复核、精降；无需等待 UAV0 完全降落
 ```
 
 搜索节点只在 `/UAVx/mission/task_status` 进入门外搜索阶段后接受 ArUco，避免通道内

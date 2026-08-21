@@ -183,7 +183,7 @@ def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
     assert adapter.attrib["name"] == "$(arg vehicle_ns)_livox_imu_to_body"
 
 
-def test_uav1_only_leaves_front_anchor_for_platform_after_landing_release():
+def test_uav1_only_leaves_front_anchor_for_platform_after_precision_landing_release():
     source = FOLLOWER.read_text(encoding="utf-8")
     release_gate = source.split("void tryReleaseFinalExitWaypoint", 1)[1].split(
         "void finalExitPoseCallback", 1
@@ -205,4 +205,4 @@ def test_uav1_only_leaves_front_anchor_for_platform_after_landing_release():
     release = source.split("void releaseUav1Callback", 1)[1].split(
         "bool getRouteForwardDirection", 1
     )[0]
-    assert 'tryReleaseFinalExitWaypoint("UAV0 landing success release")' in release
+    assert 'tryReleaseFinalExitWaypoint("UAV0 precision landing release")' in release
