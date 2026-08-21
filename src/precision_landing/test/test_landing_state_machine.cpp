@@ -30,9 +30,7 @@ void ReachHighDescent(LandingStateMachine& machine) {
 
 void ReachFixedDescent(LandingStateMachine& machine) {
   ReachAlign(machine, 1.50);
-  ASSERT_EQ(machine.update(ActiveInput(0.80, 1.50)).state,
-            LandingState::ALIGN);
-  ASSERT_EQ(machine.update(ActiveInput(1.31, 1.50)).state,
+  ASSERT_EQ(machine.update(ActiveInput(0.31, 1.50)).state,
             LandingState::FIXED_XY_DESCENT);
 }
 
@@ -104,14 +102,10 @@ TEST(LandingStateMachine, ReacquiredTargetReturnsToAlignment) {
   EXPECT_DOUBLE_EQ(output.descent_speed_mps, 0.0);
 }
 
-TEST(LandingStateMachine, StableFineAlignmentEntersFixedWorldXyDescent) {
+TEST(LandingStateMachine, HandoffHeightImmediatelyEntersFixedWorldXyDescent) {
   LandingStateMachine machine;
   ReachAlign(machine, 1.50);
-  EXPECT_EQ(machine.update(ActiveInput(0.80, 1.50)).state,
-            LandingState::ALIGN);
-  EXPECT_EQ(machine.update(ActiveInput(1.29, 1.50)).state,
-            LandingState::ALIGN);
-  const auto output = machine.update(ActiveInput(1.31, 1.50));
+  const auto output = machine.update(ActiveInput(0.31, 1.50, 0.24));
   EXPECT_EQ(output.state, LandingState::FIXED_XY_DESCENT);
   EXPECT_DOUBLE_EQ(output.descent_speed_mps, 0.10);
 }

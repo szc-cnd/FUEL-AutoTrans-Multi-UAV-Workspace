@@ -52,7 +52,6 @@ def test_conservative_configuration_contract():
     assert cfg["safety"]["require_camera_info"] is True
     assert cfg["stages"]["high"]["min_height_m"] == 1.50
     assert cfg["stages"]["auto_land"]["height_m"] == 1.50
-    assert cfg["stages"]["auto_land"]["error_m"] == 0.08
     assert cfg["stages"]["fixed_xy_descent"]["descent_mps"] == 0.10
     assert cfg["stages"]["fixed_xy_descent"]["cutoff_height_m"] == 0.30
 
@@ -157,7 +156,6 @@ def test_every_shipped_leaf_is_a_canonical_node_private_parameter():
         "stages/high/error_m",
         "stages/high/descent_mps",
         "stages/auto_land/height_m",
-        "stages/auto_land/error_m",
         "stages/auto_land/stable_sec",
         "stages/fixed_xy_descent/descent_mps",
         "stages/fixed_xy_descent/cutoff_height_m",
@@ -304,7 +302,6 @@ def test_flight_control_parameters_fail_closed_on_invalid_values():
         "config.align_stable_sec",
         "config.align_error_m",
         "config.high_align_error_m",
-        "config.auto_land_error_m",
         "config.high_descent_mps",
         "config.fixed_descent_mps",
         "config.high_height_m",
@@ -395,5 +392,5 @@ def test_rostest_resets_between_cases_and_uses_fixed_descent_gate():
 
     assert 'mode="POSCTL"' in test_source
     assert "state == LandingState::PASSIVE_ABORT" in state_machine_source
-    assert 'name="state_machine/auto_land_error_m" value="0.20"' in launch_source
+    assert 'name="state_machine/auto_land_height_m" value="2.0"' in launch_source
     assert 'name="stages/fixed_xy_descent/cutoff_height_m" value="0.30"' in launch_source

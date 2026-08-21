@@ -273,6 +273,8 @@ WAIT_EXIT_SWITCH
 → FIXED_XY_DESCENT → REQUEST_AUTO_LAND → DONE
 ```
 
+其中检测高度到 `≤1.50 m` 后立即进入 `FIXED_XY_DESCENT`，不再等待水平误差达到 0.08 m 并稳定 0.5 秒；固定当前融合定位 X/Y 后以 `0.10 m/s` 下降，到估计离地高度 `≤0.30 m` 再请求 `AUTO.LAND`。
+
 ## RViz 中应看到的内容
 
 - UAV0 机体模型和 FAST-LIO 历史路径。

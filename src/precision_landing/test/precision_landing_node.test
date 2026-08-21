@@ -26,7 +26,6 @@
     <param name="state_machine/high_height_m" value="2.0"/>
     <param name="state_machine/high_align_error_m" value="0.20"/>
     <param name="state_machine/auto_land_height_m" value="2.0"/>
-    <param name="state_machine/auto_land_error_m" value="0.20"/>
     <param name="stages/fixed_xy_descent/cutoff_height_m" value="0.30"/>
   </node>
 
