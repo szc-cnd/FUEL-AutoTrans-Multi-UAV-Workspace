@@ -64,7 +64,7 @@ fixed_hover:
     enabled: false
     x: 0.0
     y: 0.0
-    z: 0.5
+    z: 0.6
 
 # 当前仅读取该参数，尚未接入控制状态机；数值单位为度，负值表示不限制。
 max_angle: 30
