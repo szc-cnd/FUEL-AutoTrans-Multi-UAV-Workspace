@@ -166,17 +166,25 @@ Catkin 工作空间，需要在其目录内单独编译；启动终端也必须�
 
 ## 6. 检查 UAV1 的相机和外参
 
-当前搜索降落节点使用的共享文件是：
+UAV0 搜索和精降节点的基础配置分别是：
 
 ```text
 ~/match_ws/src/precision_landing/config/landing_search.yaml
+~/match_ws/src/precision_landing/config/precision_landing.yaml
 ```
 
-UAV0 和 UAV1 应使用相同的数值外参。检查文件是否存在：
+UAV1 启动入口会在上述基础配置之后，将下面的 UAV1 专用文件同时覆盖到搜索节点和
+精降节点：
+
+```text
+~/match_ws/src/precision_landing/config/down_camera_extrinsic_uav1.yaml
+```
+
+检查专用外参：
 
 ```bash
 ssh <uav1_user>@<uav1_ip> \
-  'grep -A5 camera_to_body ~/match_ws/src/precision_landing/config/landing_search.yaml'
+  'cat ~/match_ws/src/precision_landing/config/down_camera_extrinsic_uav1.yaml'
 ```
 
 如果 UAV1 后续也启用前视 D435，前视相机静态 TF 使用的标定文件默认是：
@@ -192,10 +200,9 @@ scp ~/handeye_calibration/body_camera_03.yaml \
   <uav1_user>@<uav1_ip>:~/handeye_calibration/body_camera_03.yaml
 ```
 
-下视搜索的数值外参来自 `landing_search.yaml`，最终精降控制的同组外参来自
-`precision_landing.yaml`；两者存储格式不同，但应保持为同一组标定结果。UAV1 的相机
-设备名、相机信息 URL 和下视图像话题可能与 UAV0 不同，只修改 UAV1 入口的设备参数，
-不修改共享外参数值。
+UAV1 专用文件同时提供搜索节点使用的四元数和精降节点使用的旋转矩阵，保证两个阶段
+使用同一组标定结果。UAV1 的相机设备名、相机信息 URL 和下视图像话题仍由 UAV1
+入口设置，不修改 UAV0 的基础外参。
 
 ## 7. 启动前检查
 

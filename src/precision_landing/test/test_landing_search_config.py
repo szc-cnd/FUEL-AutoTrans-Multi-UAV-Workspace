@@ -23,10 +23,28 @@ def test_search_config_uses_calibrated_down_camera_extrinsic():
     assert config["handoff"]["approach_height_m"] == 2.0
 
 
+def test_uav1_override_uses_its_constrained_down_camera_extrinsic():
+    config = yaml.safe_load(
+        (PACKAGE / "config/down_camera_extrinsic_uav1.yaml").read_text()
+    )
+    transform = config["camera_to_body"]
+    assert transform["translation_m"] == [
+        -0.01407227,
+        0.02038670,
+        -0.13346814265233625,
+    ]
+    quaternion = transform["quaternion_xyzw"]
+    assert math.isclose(sum(value * value for value in quaternion), 1.0, abs_tol=1e-7)
+    rotation = transform["rotation"]
+    assert len(rotation) == 3
+    assert all(len(row) == 3 for row in rotation)
+
+
 def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
     args = {arg.attrib["name"]: arg.attrib["default"] for arg in root.findall("arg")}
     assert args["landing_search_config"] == "$(find precision_landing)/config/landing_search.yaml"
+    assert args["camera_extrinsic_config"] == ""
     search_nodes = [
         node for node in root.findall("node")
         if node.attrib.get("type") == "landing_search_node"
@@ -44,8 +62,21 @@ def test_search_launch_wires_mission_request_to_precision_landing_trigger():
     assert params["topics/excluded_id"] == "$(arg excluded_id_topic)"
     assert params["topics/candidates"] == "$(arg candidates_topic)"
 
+    precision_node = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "precision_landing_node"
+    )
+    for node in (search_nodes[0], precision_node):
+        override_loads = [
+            item for item in node.findall("rosparam")
+            if item.attrib.get("file") == "$(arg camera_extrinsic_config)"
+        ]
+        assert len(override_loads) == 1
+        assert override_loads[0].attrib["command"] == "load"
+        assert "camera_extrinsic_config" in override_loads[0].attrib["if"]
 
-def test_competition_entries_explicitly_share_search_extrinsic():
+
+def test_competition_entries_explicitly_load_base_search_config():
     expected = "$(find precision_landing)/config/landing_search.yaml"
     for relative_path in (
         "../control/launch/leader_safe_path_follower.launch",
@@ -65,6 +96,24 @@ def test_competition_entries_explicitly_share_search_extrinsic():
                 for arg in include.findall("arg")
             }
             assert args["landing_search_config"] == expected
+
+
+def test_uav1_entry_applies_specific_extrinsic_to_search_and_precision_nodes():
+    root = ET.parse(
+        (PACKAGE / "../control/launch/leader_safe_path_follower.launch").resolve()
+    ).getroot()
+    precision_include = next(
+        item for item in root.findall("include")
+        if item.attrib.get("file")
+        == "$(find precision_landing)/launch/precision_landing.launch"
+    )
+    args = {
+        arg.attrib["name"]: arg.attrib["value"]
+        for arg in precision_include.findall("arg")
+    }
+    assert args["camera_extrinsic_config"] == (
+        "$(find precision_landing)/config/down_camera_extrinsic_uav1.yaml"
+    )
 
 
 def test_competition_search_landing_waits_for_uav0_rc_trigger():

@@ -117,14 +117,17 @@ descent.
    `K[5]`, and `K[8]`, plus finite distortion values. A visible image without
    this message is not a calibrated input and must not be used for descent.
 
-4. Verify the body transform. The shipped rotation and translation are the
+4. Verify the body transform. The base configuration contains the UAV0
    2026-08-15 Park hand-eye result from
    `/home/asus/handeye_calibration/body_down_camera_park_03_stable.yaml`, not
-   an idealized axis mapping. It maps image-right to aircraft-right, image-top
-   to aircraft-forward, and camera-positive Z to body-down while preserving
-   the measured small mounting-angle errors. If command directions are wrong,
-   stop testing and re-check the mounted camera and calibration; do not replace
-   the calibrated matrix with an ideal matrix merely to change a sign.
+   an idealized axis mapping. The UAV1 entry loads
+   `config/down_camera_extrinsic_uav1.yaml` after the base search and precision
+   configurations so both UAV1 stages use its own transform. Each transform
+   maps image-right to aircraft-right, image-top to aircraft-forward, and
+   camera-positive Z to body-down while preserving measured mounting-angle
+   errors. If command directions are wrong, stop testing and re-check the
+   mounted camera and calibration; do not replace a calibrated matrix with an
+   ideal matrix merely to change a sign.
 
 The matrix is only a documented default, not proof of the physical
 installation. Verify the real mounting, cable orientation, and both command

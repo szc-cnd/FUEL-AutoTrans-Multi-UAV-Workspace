@@ -34,9 +34,10 @@
   <arg name="enable_aruco_rosbag" default="true"/>
   <arg name="aruco_rosbag_prefix"
        default="$(env HOME)/.ros/aruco_detection_$(arg vehicle_ns)"/>
-  <!-- UAV0/UAV1 共用同一份下视相机到机体外参；数值文件可由入口统一替换。 -->
+  <!-- 基础配置保留 UAV0 外参；UAV1 入口通过可选覆盖文件加载自身外参。 -->
   <arg name="landing_search_config"
        default="$(find precision_landing)/config/landing_search.yaml"/>
+  <arg name="camera_extrinsic_config" default=""/>
 
   <!--
     下视 ArUco 搜索节点只在任务状态进入门外搜索后发布平台世界坐标；
@@ -47,6 +48,8 @@
         ns="$(arg vehicle_ns)" output="screen" required="true">
     <rosparam command="load"
               file="$(arg landing_search_config)"/>
+    <rosparam if="$(eval arg('camera_extrinsic_config') != '')"
+              command="load" file="$(arg camera_extrinsic_config)"/>
     <param name="topics/image" value="$(arg image_topic)"/>
     <param name="topics/camera_info" value="$(arg camera_info_topic)"/>
     <param name="topics/odometry" value="$(arg odometry_topic)"/>
@@ -132,6 +135,8 @@
         name="precision_landing_node" ns="$(arg vehicle_ns)" output="screen">
     <rosparam command="load"
               file="$(find precision_landing)/config/precision_landing.yaml"/>
+    <rosparam if="$(eval arg('camera_extrinsic_config') != '')"
+              command="load" file="$(arg camera_extrinsic_config)"/>
 
     <!-- These arguments intentionally override the corresponding YAML defaults. -->
     <param name="topics/image" value="$(arg image_topic)"/>
