@@ -78,6 +78,50 @@ def test_relay_waypoints_require_one_meter_actual_separation():
     assert 'relayWaypointSeparationReady("EXIT")' in source
 
 
+def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["fixed_follow_height"] == "0.60"
+    assert params["landing_search_state_topic"] == (
+        "/landing_diff_search_manager/state"
+    )
+    assert params["down_search_release_height"] == "1.80"
+    assert params["down_search_min_vertical_separation"] == "1.00"
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    callback = source.split("void landingSearchStateCallback", 1)[1].split(
+        "void tryReleaseFrontSearchWaitWaypoint", 1
+    )[0]
+    assert "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" in callback
+    assert "FRONT_ARUCO_HINT_DIFF_APPROACH" in callback
+    assert "TWO_ARUCOS_ASSIGNED_APPROACH_FAR_PLATFORM" not in callback
+
+    release = source.split("void tryReleaseFrontSearchWaitWaypoint", 1)[1].split(
+        "void publishRelayPath", 1
+    )[0]
+    assert "leader_world.z" in release
+    assert "down_search_release_height_" in release
+    assert "down_search_min_vertical_separation_" in release
+    assert 'relayWaypointSeparationReady("OUTSIDE_WAIT")' in release
+    assert 'appendRelayWaypoint(confirmed_exit_, "OUTSIDE_WAIT")' in release
+    assert "exit_waypoint_released_ = true" in release
+
+    timer = source.split("void timerCallback", 1)[1].split(
+        "void publishTarget", 1
+    )[0]
+    assert timer.index("tryReleaseFrontSearchWaitWaypoint()") < timer.index(
+        "!outside_wait_waypoint_released_"
+    )
+    assert "DIFF_WAIT_FRONT_SEARCH_ANCHOR" in source
+
+
 def test_uav1_dynamic_obstacle_detection_is_disabled_by_default():
     root = ET.parse(LAUNCH).getroot()
     args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
@@ -135,7 +179,7 @@ def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
     assert adapter.attrib["name"] == "$(arg vehicle_ns)_livox_imu_to_body"
 
 
-def test_uav1_stays_parked_until_uav0_landing_release():
+def test_uav1_only_leaves_front_anchor_for_platform_after_landing_release():
     source = FOLLOWER.read_text(encoding="utf-8")
     release_gate = source.split("void tryReleaseFinalExitWaypoint", 1)[1].split(
         "void finalExitPoseCallback", 1
@@ -145,10 +189,14 @@ def test_uav1_stays_parked_until_uav0_landing_release():
     timer = source.split("void timerCallback", 1)[1].split(
         "ros::Subscriber", 1
     )[0]
-    wait = 'if (leader_outside_exit_ && !release_uav1_)'
+    wait = (
+        "if (leader_outside_exit_ && !release_uav1_ && "
+        "!outside_wait_waypoint_released_)"
+    )
     assert wait in timer
-    assert 'hold("UAV1 parked until UAV0 finds two ArUcos and lands")' in timer
+    assert "tryReleaseFrontSearchWaitWaypoint()" in timer
     assert timer.index(wait) < timer.index("handleStuckRecovery(now)")
+    assert "DIFF_WAIT_FRONT_SEARCH_ANCHOR" in source
 
     release = source.split("void releaseUav1Callback", 1)[1].split(
         "bool getRouteForwardDirection", 1

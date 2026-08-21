@@ -73,9 +73,13 @@
         <param name="door_pose_topic" value="/UAV0/corridor_search/workspace_lock"/>
         <!-- 2026-07-28: 仅接收前机达到锁门里程后发布的最终出口；后机在前机出门后按入口式离散点执行。 -->
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
+        <!-- 前视不足两码并切换下视后，等UAV0实测升高再让UAV1前往前视扫描锚点。 -->
+        <param name="landing_search_state_topic" value="/landing_diff_search_manager/state"/>
+        <param name="down_search_release_height" value="1.80"/>
+        <param name="down_search_min_vertical_separation" value="1.00"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
         <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
-        <!-- 出口前沿前机实飞XY折线保持1.00m滞后；后机高度独立固定0.65m。 -->
+        <!-- 出口前沿前机实飞XY折线保持1.00m滞后；后机名义高度与起飞悬停统一为0.60m。 -->
         <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
         <param name="continuous_follow_before_exit" value="false"/>
         <!-- 2026-07-27: 后机通道连续跟随速度上限与前机 FUEL 的 0.5m/s 对齐，避免长期速度差持续放大跟随滞后。 -->
@@ -89,8 +93,8 @@
         <param name="min_separation" value="0.50"/>
         <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到1m后，才向UAV1释放普通航点。 -->
         <param name="waypoint_release_min_separation" value="1.00"/>
-        <!-- 2026-07-24: 不接收前机z；默认0.65m，只有自身点云线段受阻才在0.60至0.70m内调整。 -->
-        <param name="fixed_follow_height" value="0.65"/>
+        <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
+        <param name="fixed_follow_height" value="0.60"/>
         <param name="follow_height_min" value="0.60"/>
         <param name="follow_height_max" value="0.70"/>
         <param name="separation_recovery_distance" value="1.15"/>
