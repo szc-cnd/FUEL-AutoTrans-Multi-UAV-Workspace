@@ -124,8 +124,6 @@ void validateStateMachineConfig(const StateMachineConfig& config) {
   requireFinitePositive(config.auto_land_height_m,
                         "stages/auto_land/height_m");
   requireFinitePositive(config.high_align_error_m, "stages/high/error_m");
-  requireFinitePositive(config.auto_land_error_m,
-                        "stages/auto_land/error_m");
   requireFinitePositive(config.high_descent_mps, "stages/high/descent_mps");
   requireFinitePositive(config.fixed_descent_mps,
                         "stages/fixed_xy_descent/descent_mps");
@@ -139,10 +137,6 @@ void validateStateMachineConfig(const StateMachineConfig& config) {
   if (std::abs(config.auto_land_height_m - config.high_height_m) > 1.0e-6) {
     throw std::runtime_error(
         "visual descent and fixed-XY descent must share the same handoff height");
-  }
-  if (config.auto_land_error_m > config.high_align_error_m) {
-    throw std::runtime_error(
-        "auto-land error gate must not exceed the high-stage error gate");
   }
   if (!(config.target_loss_timeout_sec <= config.reacquire_timeout_sec &&
         config.reacquire_timeout_sec <= config.total_timeout_sec)) {
@@ -165,8 +159,6 @@ StateMachineConfig loadStateMachineConfig(ros::NodeHandle& private_node) {
                 "state_machine/auto_land_height_m", config.auto_land_height_m);
   loadParameter(private_node, "stages/high/error_m",
                 "state_machine/high_align_error_m", config.high_align_error_m);
-  loadParameter(private_node, "stages/auto_land/error_m",
-                "state_machine/auto_land_error_m", config.auto_land_error_m);
   loadParameter(private_node, "stages/high/descent_mps",
                 "state_machine/high_descent_mps", config.high_descent_mps);
   loadParameter(private_node, "stages/fixed_xy_descent/descent_mps",

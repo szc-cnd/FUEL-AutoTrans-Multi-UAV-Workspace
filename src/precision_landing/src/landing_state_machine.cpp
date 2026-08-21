@@ -31,7 +31,6 @@ StateOutput LandingStateMachine::update(const StateInput& input) {
     target_visible_since_sec_ = -1.0;
     aligned_since_sec_ = -1.0;
     target_loss_since_sec_ = -1.0;
-    auto_land_aligned_since_sec_ = -1.0;
     descent_gate_since_sec_ = -1.0;
     descent_gate_state_ = LandingState::IDLE;
     reacquire_started_sec_ = -1.0;
@@ -95,25 +94,17 @@ StateOutput LandingStateMachine::update(const StateInput& input) {
         reset_controller = true;
         reset_target_jump_history = true;
       }
-      auto_land_aligned_since_sec_ = -1.0;
     } else {
       target_loss_since_sec_ = -1.0;
       if (input.marker_height_m <= config_.auto_land_height_m) {
-        state_ = LandingState::ALIGN;
+        // Once the visual descent reaches the handoff height, freeze the
+        // current world-frame X/Y immediately.  Do not wait for a second
+        // fine-alignment gate: the fixed-X/Y phase is intentionally
+        // independent of subsequent marker visibility.
+        state_ = LandingState::FIXED_XY_DESCENT;
         descent_gate_since_sec_ = -1.0;
         descent_gate_state_ = LandingState::IDLE;
-        if (input.horizontal_error_m <= config_.auto_land_error_m) {
-          if (auto_land_aligned_since_sec_ < 0.0) {
-            auto_land_aligned_since_sec_ = input.now_sec;
-          } else if (input.now_sec - auto_land_aligned_since_sec_ >=
-                     config_.align_stable_sec) {
-            state_ = LandingState::FIXED_XY_DESCENT;
-          }
-        } else {
-          auto_land_aligned_since_sec_ = -1.0;
-        }
       } else if (state_ == LandingState::ALIGN) {
-        auto_land_aligned_since_sec_ = -1.0;
         const double alignment_gate =
             std::min(config_.align_error_m, config_.high_align_error_m);
         if (input.horizontal_error_m > alignment_gate) {
@@ -126,7 +117,6 @@ StateOutput LandingStateMachine::update(const StateInput& input) {
           descent_gate_since_sec_ = aligned_since_sec_;
         }
       } else {
-        auto_land_aligned_since_sec_ = -1.0;
         if (input.horizontal_error_m > config_.high_align_error_m) {
           descent_gate_since_sec_ = -1.0;
         } else if (descent_gate_state_ != state_ ||

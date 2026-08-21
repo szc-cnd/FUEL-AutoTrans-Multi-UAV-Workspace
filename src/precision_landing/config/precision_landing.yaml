@@ -43,7 +43,9 @@ safety:
   total_timeout_sec: 30.0
 stages:
   high: {min_height_m: 1.50, error_m: 0.25, descent_mps: 0.25}
-  auto_land: {height_m: 1.50, error_m: 0.08, stable_sec: 0.50}
+  # At this height the current world X/Y is frozen immediately; there is no
+  # second fine-alignment gate before fixed-X/Y descent.
+  auto_land: {height_m: 1.50, stable_sec: 0.50}
   fixed_xy_descent:
     descent_mps: 0.10
     cutoff_height_m: 0.30

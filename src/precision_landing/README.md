@@ -183,13 +183,14 @@ rostopic echo /mavros/state
 ```
 
 The normal sequence is acquire, align, and visual descent above `1.50 m`.
-At or below `1.50 m`, after horizontal error remains at or below `0.08 m`
-for `0.50 s`, the node records the fused local X/Y and estimated ground
-height. It then holds full XYZ position targets: X/Y and yaw remain fixed
-while the Z target moves down at `0.10 m/s`; ArUco visibility is no longer
-required during this phase. The node stays in `OFFBOARD` until an estimated
-height of `0.30 m` or lower, then requests PX4 to switch to `AUTO.LAND` for
-the final descent and motor stop.
+As soon as the detected marker height reaches `1.50 m` or lower, the node
+records the current fused local X/Y and estimated ground height and enters
+fixed-X/Y descent immediately; there is no second fine-alignment dwell at the
+handoff height. It then holds full XYZ position targets: X/Y and yaw remain
+fixed while the Z target moves down at `0.10 m/s`; ArUco visibility is no
+longer required during this phase. The node stays in `OFFBOARD` until an
+estimated height of `0.30 m` or lower, then requests PX4 to switch to
+`AUTO.LAND` for the final descent and motor stop.
 
 Freshness is checked twice for every Image, CameraInfo, PoseStamped, and
 MAVROS State sample: callback receive age must remain within its configured
@@ -279,8 +280,8 @@ mode change.
    until the trigger and alignment gates are satisfied.
 3. XY-only: keep altitude fixed and confirm centering responses in both axes.
 4. Visual-descent band: confirm the `0.25 m/s` limit above `1.50 m`.
-5. Handoff height: at or below `1.50 m`, confirm visual correction continues
-   until the error remains at or below `0.08 m` for `0.50 s`.
+5. Handoff height: at or below `1.50 m`, confirm the controller immediately
+   records the current fused X/Y and enters fixed-X/Y descent.
 6. Fixed-XYZ descent: confirm the recorded fused X/Y stays fixed while the Z
    target descends at `0.10 m/s`, including when ArUco leaves the image.
 7. Low-height cutoff: confirm the node logs the `0.30 m` threshold and requests
