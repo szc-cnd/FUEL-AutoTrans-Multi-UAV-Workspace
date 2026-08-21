@@ -18,6 +18,7 @@
 #include "mpc_input.h"
 #include "mpc_controller.h"
 #include "force_attitude_aligner.h"
+#include "odom_spike_guard.h"
 #include "polynomial_trajectory.h"
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/CommandLong.h>
@@ -95,6 +96,7 @@ namespace PayloadMPC
 		void addNewForceObseverState();
 		void landingSearchStateCallback(const std_msgs::String::ConstPtr &msg);
 		void landingSearchYawCallback(const quadrotor_msgs::PositionCommand::ConstPtr &msg);
+		void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
 
 	private:
 		// Subscribers and publisher.
@@ -111,6 +113,7 @@ namespace PayloadMPC
 		MpcController &controller_;
 		MultiOptForceEstimator force_estimator_;
 		ForceAttitudeAligner force_attitude_aligner_;
+		OdomSpikeGuard odom_spike_guard_;
 		ros::Time land_start_time_;
 		bool auto_land_lockout_{false};
 		bool auto_land_request_sent_{false};
@@ -242,7 +245,8 @@ namespace PayloadMPC
 		// PX4 退出 OFFBOARD 后清除旧轨迹和外力补偿，防止重新进入自动模式时恢复旧控制目标。
 		void handleOffboardLoss();
 		bool mpcControlStateValid(const ros::Time &now) const;
-		void beginMpcRecovery(const ros::Time &now);
+		void beginMpcRecovery(const ros::Time &now,
+			const char *reason = "NMPC 求解失败");
 		void processMpcRecovery(const ros::Time &now);
 		void beginDirectAutoLand(const ros::Time &now, const char *reason);
 		void processDirectAutoLand(const ros::Time &now);

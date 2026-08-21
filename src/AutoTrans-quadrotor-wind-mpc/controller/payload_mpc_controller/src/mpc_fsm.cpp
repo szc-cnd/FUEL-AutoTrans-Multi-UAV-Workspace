@@ -68,6 +68,21 @@ namespace
 		return config;
 	}
 
+	PayloadMPC::OdomSpikeGuardConfig makeOdomSpikeGuardConfig(
+		const PayloadMPC::MpcParams &params)
+	{
+		PayloadMPC::OdomSpikeGuardConfig config;
+		config.enabled = params.odom_spike_guard_.enabled;
+		config.max_sample_interval = params.odom_spike_guard_.max_sample_interval;
+		config.max_position_residual_xy = params.odom_spike_guard_.max_position_residual_xy;
+		config.max_position_residual_z = params.odom_spike_guard_.max_position_residual_z;
+		config.max_velocity_jump_xy = params.odom_spike_guard_.max_velocity_jump_xy;
+		config.max_velocity_jump_z = params.odom_spike_guard_.max_velocity_jump_z;
+		config.fault_duration = params.odom_spike_guard_.fault_duration;
+		config.recovery_good_samples = params.odom_spike_guard_.recovery_good_samples;
+		return config;
+	}
+
 	const char *forceAttitudeSampleResultName(PayloadMPC::ForceAttitudeSampleResult result)
 	{
 		switch (result)
@@ -89,9 +104,10 @@ namespace PayloadMPC
 {
 
 	MPCFSM::MPCFSM(const ros::NodeHandle &nh, MpcParams &params, MpcController &controller) : nh_(nh),
-															  params_(params),
-															  controller_(controller),
-															  force_attitude_aligner_(makeForceAttitudeAlignmentConfig(params))
+																  params_(params),
+																  controller_(controller),
+																  force_attitude_aligner_(makeForceAttitudeAlignmentConfig(params)),
+																  odom_spike_guard_(makeOdomSpikeGuardConfig(params))
 	{
 		fsm_state = MANUAL_CTRL;
 		exec_traj_state_ = HOVER;
@@ -148,6 +164,40 @@ namespace PayloadMPC
 		{
 			ROS_WARN("[landing_search_yaw] invalid timeout; use 0.5 s.");
 			landing_search_yaw_timeout_ = 0.5;
+		}
+	}
+
+	void MPCFSM::odomCallback(const nav_msgs::Odometry::ConstPtr &msg)
+	{
+		Odom_Data_t candidate;
+		candidate.feed(msg);
+		const double sample_time = candidate.rcv_stamp.toSec();
+		const OdomSpikeGuardResult result =
+			odom_spike_guard_.evaluate(sample_time, candidate.p, candidate.v);
+
+		if (result == OdomSpikeGuardResult::ACCEPTED ||
+			result == OdomSpikeGuardResult::RECOVERED)
+		{
+			odom_data = candidate;
+			if (result == OdomSpikeGuardResult::RECOVERED)
+			{
+				ROS_WARN("[ODOM_SPIKE] FAST-LIO 已连续恢复 %d 个正常样本，解除尖峰故障锁存。",
+					params_.odom_spike_guard_.recovery_good_samples);
+			}
+			return;
+		}
+
+		ROS_WARN_THROTTLE(
+			0.5,
+			"[ODOM_SPIKE] 拒绝 FAST-LIO 异常样本：位置残差 xy=%.3f z=%.3f m，速度突变 xy=%.3f z=%.3f m/s；暂用上一可信状态。",
+			odom_spike_guard_.lastPositionResidualXY(),
+			odom_spike_guard_.lastPositionResidualZ(),
+			odom_spike_guard_.lastVelocityJumpXY(),
+			odom_spike_guard_.lastVelocityJumpZ());
+		if (result == OdomSpikeGuardResult::FAULT_LATCHED)
+		{
+			ROS_ERROR("[ODOM_SPIKE] FAST-LIO 异常已连续 %.2f s，锁存故障并进入 NMPC 原有恢复流程。",
+				params_.odom_spike_guard_.fault_duration);
 		}
 	}
 
@@ -263,6 +313,11 @@ namespace PayloadMPC
 			auto_land_lockout_ = true;
 			suppress_manual_setpoint_ = true;
 			ROS_WARN("[AUTO_LAND] PX4 已确认进入 AUTO.LAND，AutoTrans 停止 NMPC 和 setpoint。");
+		}
+		else if (!direct_auto_land_active_ && automatic_state &&
+			odom_spike_guard_.faultActive())
+		{
+			beginMpcRecovery(now_time, "FAST-LIO 里程计连续尖峰");
 		}
 		else if (!direct_auto_land_active_ && automatic_state && !odomControlStateValid(now_time))
 			startOdomFailsafe(now_time);
@@ -1395,7 +1450,7 @@ namespace PayloadMPC
 			std::isfinite(attitude_norm) && attitude_norm > 1.0e-6;
 	}
 
-	void MPCFSM::beginMpcRecovery(const ros::Time &now)
+	void MPCFSM::beginMpcRecovery(const ros::Time &now, const char *reason)
 	{
 		if (mpc_recovery_active_)
 			return;
@@ -1426,7 +1481,8 @@ namespace PayloadMPC
 				"[安全] NMPC 求解器重置未完成，继续锁存悬停位置并等待下次恢复重试。");
 			return;
 		}
-		ROS_ERROR("[安全] NMPC 求解失败：锁存悬停点 (%.3f, %.3f, %.3f)，进入 MPC_RECOVERY_HOVER；不自动降落。",
+		ROS_ERROR("[安全] %s：锁存悬停点 (%.3f, %.3f, %.3f)，进入 MPC_RECOVERY_HOVER；不自动降落。",
+			reason == nullptr ? "NMPC 求解失败" : reason,
 			hover_pose_.x(), hover_pose_.y(), hover_pose_.z());
 	}
 
@@ -1440,7 +1496,7 @@ namespace PayloadMPC
 
 		controller_.setHoverReference(hover_pose_, hover_yaw_);
 		controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
-		if (controller_.lastMpcSolveSuccessful())
+		if (controller_.lastMpcSolveSuccessful() && !odom_spike_guard_.faultActive())
 			++mpc_recovery_success_count_;
 		else
 			mpc_recovery_success_count_ = 0;

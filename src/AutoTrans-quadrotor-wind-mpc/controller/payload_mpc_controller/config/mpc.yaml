@@ -35,8 +35,8 @@ max_bodyrate_xy:    1.5       # ~ pi [rad/s]
 max_bodyrate_z:     0.5         # ~ pi*2/3 [rad/s]
 # NMPC 世界系速度硬约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
 # 该约束直接进入 ACADO 优化器，超过上限的预测速度不会被求解器接受。
-max_velocity_xy:    0.5
-max_velocity_z:     0.5
+max_velocity_xy:    1.5
+max_velocity_z:     1.0
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
 # 对实际起飞质量 1.817 kg、g=9.795、hover_percentage=0.54，29.5 N 标称约对应 normalized thrust 0.895。
 min_thrust:         1.0
@@ -183,6 +183,22 @@ safety:
     mpc_recovery_success_cycles: 1
     # 请求 PX4 AUTO.LAND 的最小重试周期，避免在控制频率下反复调用服务。
     auto_land_retry_period: 1.0
+
+# FAST-LIO 高频里程计尖峰门控。单个异常样本不会更新 NMPC 状态；连续异常才进入已有求解失败恢复流程。
+odom_spike_guard:
+    enabled: true
+    # 只比较时间间隔不超过该值的相邻原始样本，避免把通信间断后的首帧误判为尖峰，单位 s。
+    max_sample_interval: 0.10
+    # 当前坐标相对上一原始样本匀速预测位置的最大残差，单位 m。
+    max_position_residual_xy: 0.08
+    max_position_residual_z: 0.06
+    # 相邻原始样本允许的最大速度突变量，单位 m/s。
+    max_velocity_jump_xy: 0.60
+    max_velocity_jump_z: 0.60
+    # 异常连续达到该时间后锁存故障并进入 MPC_RECOVERY_HOVER，单位 s。
+    fault_duration: 0.10
+    # 故障后连续收到该数量的正常样本才恢复采用 FAST-LIO 状态。
+    recovery_good_samples: 5
 
 thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 thrust。
     # 初次模式 1 实机验证时以 1 Hz 打印在线 thrustscale、悬停比例和 RPM 推力。

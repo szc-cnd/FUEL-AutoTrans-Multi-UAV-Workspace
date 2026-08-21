@@ -39,8 +39,8 @@ int main(int argc, char **argv)
     ros::Subscriber odom_sub =
         nh.subscribe<nav_msgs::Odometry>("odom",
                                          100,
-                                         boost::bind(&Odom_Data_t::feed, &fsm.odom_data, _1),
-                                         ros::VoidConstPtr(),
+										 &PayloadMPC::MPCFSM::odomCallback,
+										 &fsm,
                                          ros::TransportHints().tcpNoDelay());
 
     // PX4 EKF 融合里程计只向外力估计器提供机体系到 ENU 世界系的姿态四元数；
