@@ -26,15 +26,17 @@ SEARCH_CORRIDOR -> CROSS_EXIT -> SEARCH_OUTSIDE_LANDING
 -> 规划到平台上方 2.00 m -> /UAVx/mission/landing_request
 -> /UAVx/need_to_land -> 精确降落
 -> UAV0 发布 `/UAV0/mission/landing_request=true`、开始精降准备后，立即释放 UAV1 前往第一个平台
--> UAV1 到达后重复下视复核、精降；无需等待 UAV0 完全降落
+-> UAV1 途中稳定识别到分配的同一 ArUco 后立即转交精降，不再继续追粗航点；无需等待 UAV0 完全降落
 ```
 
 搜索节点只在 `/UAVx/mission/task_status` 进入门外搜索阶段后接受 ArUco，避免通道内
 误检提前结束任务。它将相机测量通过
 [`config/landing_search.yaml`](config/landing_search.yaml) 中的下视相机手眼外参和同步
 FAST-LIO 里程计转换到世界系，并完成相机内五帧锁定与世界系八帧稳定过滤。稳定结果
-发布到 `/UAVx/mission/detection/final_aruco`。Diff 搜索管理器生成高于平台 `2.00 m`
-的接近目标，到达后才申请交接给降落代码。
+发布到 `/UAVx/mission/detection/final_aruco`。UAV0 仍由 Diff 搜索管理器生成高于平台
+`2.00 m` 的接近目标，到达后才申请交接；UAV1 则在 UAV0 已释放它之后，只要稳定识别
+结果的 ID 与 `/UAV1/landing/assigned_id` 一致，就直接发布 `/UAV1/need_to_land=true`，
+停止继续执行粗平台航点并交给视觉精降。
 
 前视节点读取 D435 彩色图、对齐深度、`body_camera_03.yaml` 静态外参以及与图像同步的
 FAST-LIO 里程计。每个 ID 分别经过连续帧、深度一致性和世界坐标稳定过滤，并跨完整
@@ -49,8 +51,9 @@ FAST-LIO 里程计。每个 ID 分别经过连续帧、深度一致性和世界�
 Diff 的速度上限为 `0.30 m/s`、加速度上限为 `0.60 m/s²`；发布降落请求后不再使用
 搜索阶段速度，由视觉精降节点独立控制下降。
 
-规划器到达后，搜索节点仍会复核目标和里程计新鲜度、水平误差以及接近高度；只有全部
-通过才发布 `/UAVx/need_to_land=true`。该触发是锁存的，之后由
+UAV0 规划器到达后，搜索节点仍会复核目标和里程计新鲜度、水平误差以及接近高度；
+UAV1 的提前交接则要求 UAV0 已发布释放信号、平台分配有效、任务阶段允许，并且下视
+世界坐标过滤已稳定锁定同一 ID。通过后发布 `/UAVx/need_to_land=true`。该触发是锁存的，之后由
 `landing_setpoint_arbiter` 将控制权交给 `precision_landing_node`，不会交给简单控制器。
 关键诊断话题为：
 

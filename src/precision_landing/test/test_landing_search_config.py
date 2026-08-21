@@ -114,6 +114,58 @@ def test_uav1_entry_applies_specific_extrinsic_to_search_and_precision_nodes():
     assert args["camera_extrinsic_config"] == (
         "$(find precision_landing)/config/down_camera_extrinsic_uav1.yaml"
     )
+    assert args["early_handoff_on_assigned_marker"] == "true"
+    assert args["early_handoff_authorization_topic"] == (
+        "/dual_uav_landing/release_uav1"
+    )
+
+
+def test_uav1_same_assigned_aruco_triggers_early_precision_handoff():
+    source = (PACKAGE / "src/landing_search_node.cpp").read_text()
+    early_handoff = source.split(
+        "UAV1 已被 UAV0 释放后", maxsplit=1
+    )[1].split("void requestTimerCallback", maxsplit=1)[0]
+    assert "early_handoff_on_assigned_marker_" in early_handoff
+    assert "early_handoff_authorized_" in early_handoff
+    assert "requested_marker_id_ >= 0" in early_handoff
+    assert "observation.id == requested_marker_id_" in early_handoff
+    assert "stageAllowsHandoff()" in early_handoff
+    assert "publishLandingTrigger(true)" in early_handoff
+
+    launch_root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
+    args = {arg.attrib["name"]: arg.attrib for arg in launch_root.findall("arg")}
+    assert args["early_handoff_on_assigned_marker"]["default"] == "false"
+    search_node = next(
+        node for node in launch_root.findall("node")
+        if node.attrib.get("type") == "landing_search_node"
+    )
+    params = {
+        param.attrib["name"]: param.attrib["value"]
+        for param in search_node.findall("param")
+    }
+    assert params["mission/early_handoff_on_assigned_marker"] == (
+        "$(arg early_handoff_on_assigned_marker)"
+    )
+    assert params["topics/early_handoff_authorization"] == (
+        "$(arg early_handoff_authorization_topic)"
+    )
+
+
+def test_uav1_follower_stops_diff_goals_after_precision_trigger():
+    source = (
+        PACKAGE.parent / "control/src/leader_safe_path_follower.cpp"
+    ).read_text()
+    callback = source.split(
+        "void followerLandingTriggerCallback", maxsplit=1
+    )[1].split("void releaseUav1Callback", maxsplit=1)[0]
+    assert "follower_precision_landing_active_ = true" in callback
+    assert "diff_goal_published_ = false" in callback
+
+    timer = source.split("void timerCallback", maxsplit=1)[1].split(
+        "if (!follower_started_)", maxsplit=1
+    )[0]
+    assert "if (follower_precision_landing_active_)" in timer
+    assert "return;" in timer
 
 
 def test_competition_search_landing_waits_for_uav0_rc_trigger():

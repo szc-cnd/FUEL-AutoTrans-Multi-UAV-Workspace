@@ -29,6 +29,9 @@
   <arg name="front_aruco_candidates_topic" default="$(arg topic_prefix)/landing/front/candidates"/>
   <arg name="mission_status_topic" default="$(arg topic_prefix)/mission/task_status"/>
   <arg name="mission_landing_request_topic" default="$(arg topic_prefix)/mission/landing_request"/>
+  <arg name="early_handoff_on_assigned_marker" default="false"/>
+  <arg name="early_handoff_authorization_topic"
+       default="/dual_uav_landing/release_uav1"/>
   <arg name="landing_marker_world_topic" default="$(arg topic_prefix)/mission/detection/final_aruco"/>
   <!-- 每次启动 ArUco 检测链路时单独录制判定数据；-o 会为每次启动追加时间戳。 -->
   <arg name="enable_aruco_rosbag" default="true"/>
@@ -56,6 +59,10 @@
     <param name="topics/mission_status" value="$(arg mission_status_topic)"/>
     <param name="topics/marker_world" value="$(arg landing_marker_world_topic)"/>
     <param name="topics/landing_request" value="$(arg mission_landing_request_topic)"/>
+    <param name="topics/early_handoff_authorization"
+           value="$(arg early_handoff_authorization_topic)"/>
+    <param name="mission/early_handoff_on_assigned_marker"
+           value="$(arg early_handoff_on_assigned_marker)"/>
     <param name="topics/landing_trigger" value="$(arg trigger_topic)"/>
     <param name="topics/filtered_target" value="$(arg topic_prefix)/landing/search/target_world"/>
     <param name="topics/locked_id" value="$(arg topic_prefix)/landing/search/locked_id"/>
