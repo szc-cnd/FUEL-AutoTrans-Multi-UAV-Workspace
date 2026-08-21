@@ -118,6 +118,8 @@ namespace PayloadMPC
 		bool takeoff_requested_{false};
 		// 前视扫描由搜索管理器给出航向，AutoTrans 锁定进入扫描时的 XYZ，仅执行偏航。
 		bool landing_search_yaw_active_{false};
+		// CH9 搜索任务全程的航向覆盖：前视阶段扫描，下视/接近阶段固定为 CH9 航向。
+		bool landing_search_yaw_override_active_{false};
 		bool landing_search_hold_latched_{false};
 		bool have_landing_search_yaw_{false};
 		double landing_search_yaw_{0.0};
@@ -231,6 +233,7 @@ namespace PayloadMPC
 		void reportDisturbanceGate(DisturbanceGateReason reason);
 		void clearAppliedDisturbance();
 		void processLandingSearchYawHold(const ros::Time &now);
+		double landingSearchYawReference(double fallback_yaw) const;
 		void clearAutonomousState();
 		bool odomControlStateValid(const ros::Time &now) const;
 		void startOdomFailsafe(const ros::Time &now);

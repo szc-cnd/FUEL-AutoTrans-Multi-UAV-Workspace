@@ -58,3 +58,17 @@ def test_yaw_command_timeout_never_resumes_horizontal_trajectory():
     assert hold.index("if (yaw_fresh)") < hold.index(
         "controller_.setHoverReference(hover_pose_, hover_yaw_)"
     )
+
+
+def test_downward_search_trajectory_keeps_ch9_locked_yaw():
+    callback = FSM.split(
+        "void MPCFSM::landingSearchStateCallback", maxsplit=1
+    )[1].split("void MPCFSM::landingSearchYawCallback", maxsplit=1)[0]
+    assert 'state != "WAIT_EXIT_SWITCH" && state != "LANDING_HANDOFF"' in callback
+
+    command = FSM.split("void MPCFSM::CMD_CTRL_process", maxsplit=1)[1].split(
+        "void MPCFSM::publish_trigger", maxsplit=1
+    )[0]
+    assert command.count("landingSearchYawReference(hover_yaw_)") >= 4
+    assert "entry_command_yaw_ = landingSearchYawReference(" in command
+    assert "traj_info->traj, traj_time, reference_yaw" in command

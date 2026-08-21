@@ -139,6 +139,10 @@ namespace PayloadMPC
 	{
 		const std::string state = firstToken(msg->data);
 		const bool active = isLandingSearchYawState(state);
+		// WAIT_EXIT_SWITCH 和 LANDING_HANDOFF 之外都属于 CH9 搜索任务。
+		// 前视结束后虽然恢复平移轨迹，但 yaw 仍必须固定为管理器持续发布的 CH9 锁定航向。
+		landing_search_yaw_override_active_ =
+			state != "WAIT_EXIT_SWITCH" && state != "LANDING_HANDOFF";
 		if (active == landing_search_yaw_active_)
 			return;
 
@@ -167,6 +171,13 @@ namespace PayloadMPC
 		landing_search_yaw_ = wrapYaw(msg->yaw);
 		have_landing_search_yaw_ = true;
 		last_landing_search_yaw_time_ = ros::Time::now();
+	}
+
+	double MPCFSM::landingSearchYawReference(double fallback_yaw) const
+	{
+		if (landing_search_yaw_override_active_ && have_landing_search_yaw_)
+			return landing_search_yaw_;
+		return fallback_yaw;
 	}
 
 	/*
@@ -629,8 +640,9 @@ namespace PayloadMPC
 				trajectory_data.total_traj_start_time = traj_info->traj_start_time;
 
 				double traj_time = (now_time - traj_info->traj_start_time).toSec();
+				const double reference_yaw = landingSearchYawReference(hover_yaw_);
 				controller_.setTrajectoyReference(
-					traj_info->traj, traj_time, hover_yaw_,
+					traj_info->traj, traj_time, reference_yaw,
 					traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 
@@ -654,7 +666,8 @@ namespace PayloadMPC
 					if (command_valid && attitude_valid)
 					{
 						latched_entry_command_ = cmd_data;
-						entry_command_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
+						entry_command_yaw_ = landingSearchYawReference(
+							get_yaw_from_quaternion(force_attitude_odom_data.q));
 						entry_command_active_ = true;
 						ROS_INFO("[CMD] 收到新目标：位置=(%.2f, %.2f, %.2f) m。",
 							latched_entry_command_.p.x(), latched_entry_command_.p.y(),
@@ -686,6 +699,7 @@ namespace PayloadMPC
 				}
 				if (!entry_command_active_)
 				{
+					hover_yaw_ = landingSearchYawReference(hover_yaw_);
 					controller_.setHoverReference(hover_pose_, hover_yaw_);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				}
@@ -712,6 +726,7 @@ namespace PayloadMPC
 					// 中止、异常或空队列时只能锁定当前实际位置，禁止访问空队列或恢复旧终点。
 					update_hover_pose();
 				}
+				hover_yaw_ = landingSearchYawReference(hover_yaw_);
 				controller_.setHoverReference(hover_pose_, hover_yaw_);
 				controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				exec_traj_state_ = HOVER;
@@ -758,8 +773,9 @@ namespace PayloadMPC
 							piece_index + 1, traj_info->traj.getPieceNum());
 					}
 					addRMSE();
+					const double reference_yaw = landingSearchYawReference(hover_yaw_);
 					controller_.setTrajectoyReference(
-						traj_info->traj, traj_time, hover_yaw_,
+						traj_info->traj, traj_time, reference_yaw,
 						traj_info->has_yaw ? &traj_info->yaw_traj : nullptr);
 					controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
 				}
