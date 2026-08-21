@@ -202,6 +202,46 @@ def test_precision_launch_wires_optional_front_hint_without_final_marker_access(
     assert "topics/landing_trigger" not in params
 
 
+def test_precision_launch_records_aruco_decisions_on_every_start():
+    root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
+    args = {arg.attrib["name"]: arg.attrib for arg in root.findall("arg")}
+    assert args["enable_aruco_rosbag"]["default"] == "true"
+    assert args["aruco_rosbag_prefix"]["default"] == (
+        "$(env HOME)/.ros/aruco_detection_$(arg vehicle_ns)"
+    )
+
+    recorders = [
+        node for node in root.findall("node")
+        if node.attrib.get("pkg") == "rosbag"
+        and node.attrib.get("type") == "record"
+    ]
+    assert len(recorders) == 1
+    recorder = recorders[0]
+    assert recorder.attrib["if"] == "$(arg enable_aruco_rosbag)"
+    assert recorder.attrib["ns"] == "$(arg vehicle_ns)"
+
+    record_args = recorder.attrib["args"]
+    required_topics = {
+        "$(arg front_aruco_candidates_topic)",
+        "$(arg topic_prefix)/landing/front/status",
+        "$(arg candidates_topic)",
+        "$(arg topic_prefix)/landing/search/status",
+        "$(arg assigned_id_topic)",
+        "$(arg mission_status_topic)",
+        "$(arg landing_marker_world_topic)",
+        "$(arg odometry_topic)",
+        "/dual_uav_landing/status",
+        "/landing_diff_search_manager/state",
+        "/tf",
+        "/tf_static",
+        "/rosout_agg",
+    }
+    for topic in required_topics:
+        assert topic in record_args
+    assert "$(arg topic_prefix)/landing/front/debug_image" not in record_args
+    assert "$(arg topic_prefix)/landing/search/debug_image" not in record_args
+
+
 def test_precision_launch_combines_downward_debug_views():
     root = ET.parse(PACKAGE / "launch/precision_landing.launch").getroot()
     nodes = [

@@ -30,6 +30,10 @@
   <arg name="mission_status_topic" default="$(arg topic_prefix)/mission/task_status"/>
   <arg name="mission_landing_request_topic" default="$(arg topic_prefix)/mission/landing_request"/>
   <arg name="landing_marker_world_topic" default="$(arg topic_prefix)/mission/detection/final_aruco"/>
+  <!-- 每次启动 ArUco 检测链路时单独录制判定数据；-o 会为每次启动追加时间戳。 -->
+  <arg name="enable_aruco_rosbag" default="true"/>
+  <arg name="aruco_rosbag_prefix"
+       default="$(env HOME)/.ros/aruco_detection_$(arg vehicle_ns)"/>
   <!-- UAV0/UAV1 共用同一份下视相机到机体外参；数值文件可由入口统一替换。 -->
   <arg name="landing_search_config"
        default="$(find precision_landing)/config/landing_search.yaml"/>
@@ -79,6 +83,35 @@
     <param name="topics/status" value="$(arg topic_prefix)/landing/front/status"/>
     <param name="topics/debug_image" value="$(arg topic_prefix)/landing/front/debug_image"/>
   </node>
+
+  <!--
+    只录候选、状态和位姿等小带宽判定数据，不录原始/调试图像。
+    LandingPlatformArray 可直接还原每次稳定检测到的 ArUco 数量和 ID。
+  -->
+  <node if="$(arg enable_aruco_rosbag)" pkg="rosbag" type="record"
+        name="aruco_detection_recorder" ns="$(arg vehicle_ns)" output="screen"
+        args="--lz4 -o $(arg aruco_rosbag_prefix)
+              $(arg front_aruco_candidates_topic)
+              $(arg topic_prefix)/landing/front/locked_id
+              $(arg topic_prefix)/landing/front/status
+              $(arg front_aruco_hint_topic)
+              $(arg candidates_topic)
+              $(arg topic_prefix)/landing/search/target_world
+              $(arg topic_prefix)/landing/search/locked_id
+              $(arg topic_prefix)/landing/search/status
+              $(arg target_id_topic)
+              $(arg assigned_id_topic)
+              $(arg excluded_id_topic)
+              $(arg mission_status_topic)
+              $(arg mission_landing_request_topic)
+              $(arg landing_marker_world_topic)
+              $(arg trigger_topic)
+              $(arg odometry_topic)
+              /dual_uav_landing/assignments_ready
+              /dual_uav_landing/release_uav1
+              /dual_uav_landing/status
+              /landing_diff_search_manager/state
+              /tf /tf_static /rosout_agg"/>
 
   <node if="$(arg enable_setpoint_arbiter)" pkg="precision_landing"
         type="landing_setpoint_arbiter_node" name="landing_setpoint_arbiter"
