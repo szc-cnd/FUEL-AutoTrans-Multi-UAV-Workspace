@@ -167,6 +167,7 @@
     <param name="front_yaw_scan_half_angle_rad" value="0.7854" />
     <param name="front_yaw_scan_rate_rad_s" value="0.35" />
     <param name="front_yaw_arrive_tolerance_rad" value="0.12" />
+    <param name="front_yaw_return_dwell_sec" value="0.50" />
     <param name="front_hint_forward_margin" value="1.0" />
     <param name="front_hint_lateral_margin" value="1.0" />
     <param name="front_hint_min_z" value="-0.50" />
