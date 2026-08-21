@@ -10,6 +10,7 @@
 #include "mpc_params.h"
 #include "mpc_input.h"
 #include "mpc_controller.h"
+#include "odom_spike_guard.h"
 #include "polynomial_trajectory.h"
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/CommandLong.h>
@@ -85,6 +86,7 @@ namespace PayloadMPC
 		bool bat_is_received(const ros::Time &now_time) const;
 		bool recv_new_odom();
 		void addNewForceObseverState();
+		void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
 
 	private:
 		// Subscribers and publisher.
@@ -100,6 +102,7 @@ namespace PayloadMPC
 		MpcParams &params_;
 		MpcController &controller_;
 		MultiOptForceEstimator force_estimator_;
+		OdomSpikeGuard odom_spike_guard_;
 		ros::Time land_start_time_;
 		bool auto_land_lockout_{false};
 		bool takeoff_requested_{false};
@@ -199,7 +202,8 @@ namespace PayloadMPC
 		void enter_odom_failsafe(const char *reason);
 		void clear_autonomous_inputs();
 		bool odom_state_valid() const;
-		void beginMpcRecovery(const ros::Time &now);
+		void beginMpcRecovery(const ros::Time &now,
+			const char *reason = "NMPC 求解失败");
 		void processMpcRecovery(const ros::Time &now);
 		void beginDirectAutoLand(const ros::Time &now, const char *reason);
 		void processDirectAutoLand(const ros::Time &now);

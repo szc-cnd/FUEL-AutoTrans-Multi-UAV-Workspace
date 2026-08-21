@@ -101,6 +101,18 @@ target_link_libraries(mpc_controller_node
   ${catkin_LIBRARIES}
 )
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_odom_spike_guard
+    test/test_odom_spike_guard.cpp
+  )
+  if(TARGET test_odom_spike_guard)
+    target_include_directories(test_odom_spike_guard PRIVATE
+      include/payload_mpc_controller
+      ${EIGEN3_INCLUDE_DIR}
+    )
+  endif()
+endif()
+
 catkin_install_python(PROGRAMS
   scripts/autotrans_mpc_logger.py
   scripts/generate_evo_report.py

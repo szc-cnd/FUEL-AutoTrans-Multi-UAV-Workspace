@@ -159,6 +159,18 @@ namespace PayloadMPC
 			double auto_land_retry_period{1.0};
 		};
 
+		struct OdomSpikeGuard
+		{
+			bool enabled{true};
+			double max_sample_interval{0.10};
+			double max_position_residual_xy{0.08};
+			double max_position_residual_z{0.06};
+			double max_velocity_jump_xy{0.60};
+			double max_velocity_jump_z{0.60};
+			double fault_duration{0.10};
+			int recovery_good_samples{5};
+		};
+
 		struct Takeoff
 		{
 			// AUTO_TAKEOFF 只在 PX4 已经进入 OFFBOARD 后执行，不自动解锁或切换 OFFBOARD。
@@ -189,6 +201,7 @@ namespace PayloadMPC
 		RCMode rc_mode_;
 		Land land_;
 		Safety safety_;
+		OdomSpikeGuard odom_spike_guard_;
 		Takeoff takeoff_;
 		FixedHover fixed_hover_;
 
@@ -316,6 +329,32 @@ namespace PayloadMPC
 				safety_.auto_land_retry_period <= 0.0)
 			{
 				ROS_ERROR("[参数] safety 恢复超时、连续成功次数和 AUTO.LAND 重试周期必须为正值。");
+				ROS_BREAK();
+			}
+
+			read_essential_param(nh, "odom_spike_guard/enabled", odom_spike_guard_.enabled);
+			read_essential_param(nh, "odom_spike_guard/max_sample_interval", odom_spike_guard_.max_sample_interval);
+			read_essential_param(nh, "odom_spike_guard/max_position_residual_xy", odom_spike_guard_.max_position_residual_xy);
+			read_essential_param(nh, "odom_spike_guard/max_position_residual_z", odom_spike_guard_.max_position_residual_z);
+			read_essential_param(nh, "odom_spike_guard/max_velocity_jump_xy", odom_spike_guard_.max_velocity_jump_xy);
+			read_essential_param(nh, "odom_spike_guard/max_velocity_jump_z", odom_spike_guard_.max_velocity_jump_z);
+			read_essential_param(nh, "odom_spike_guard/fault_duration", odom_spike_guard_.fault_duration);
+			read_essential_param(nh, "odom_spike_guard/recovery_good_samples", odom_spike_guard_.recovery_good_samples);
+			if (!std::isfinite(odom_spike_guard_.max_sample_interval) ||
+				!std::isfinite(odom_spike_guard_.max_position_residual_xy) ||
+				!std::isfinite(odom_spike_guard_.max_position_residual_z) ||
+				!std::isfinite(odom_spike_guard_.max_velocity_jump_xy) ||
+				!std::isfinite(odom_spike_guard_.max_velocity_jump_z) ||
+				!std::isfinite(odom_spike_guard_.fault_duration) ||
+				odom_spike_guard_.max_sample_interval <= 0.0 ||
+				odom_spike_guard_.max_position_residual_xy <= 0.0 ||
+				odom_spike_guard_.max_position_residual_z <= 0.0 ||
+				odom_spike_guard_.max_velocity_jump_xy <= 0.0 ||
+				odom_spike_guard_.max_velocity_jump_z <= 0.0 ||
+				odom_spike_guard_.fault_duration <= 0.0 ||
+				odom_spike_guard_.recovery_good_samples <= 0)
+			{
+				ROS_ERROR("[参数] odom_spike_guard 阈值、故障窗口和恢复样本数必须为有限正值。");
 				ROS_BREAK();
 			}
 

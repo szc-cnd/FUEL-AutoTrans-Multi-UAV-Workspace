@@ -39,8 +39,8 @@ int main(int argc, char **argv)
     ros::Subscriber odom_sub =
         nh.subscribe<nav_msgs::Odometry>("odom",
                                          100,
-                                         boost::bind(&Odom_Data_t::feed, &fsm.odom_data, _1),
-                                         ros::VoidConstPtr(),
+                                         &PayloadMPC::MPCFSM::odomCallback,
+                                         &fsm,
                                          ros::TransportHints().tcpNoDelay());
 
     // FAST-LIO odom 提供平移状态；MAVROS 融合里程计为 NMPC、推力模型和外力估计提供姿态。

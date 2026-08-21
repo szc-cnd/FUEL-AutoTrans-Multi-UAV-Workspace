@@ -175,6 +175,22 @@ safety:
     # 人工或正常降落流程请求 PX4 AUTO.LAND 时的服务重试周期，单位 s。
     auto_land_retry_period: 1.0
 
+# FAST-LIO 高频里程计尖峰门控。单个异常样本不会更新 NMPC 状态；连续异常才进入已有求解失败恢复流程。
+odom_spike_guard:
+    enabled: true
+    # 只比较时间间隔不超过该值的相邻原始样本，避免把通信间断后的首帧误判为尖峰，单位 s。
+    max_sample_interval: 0.10
+    # 当前坐标相对上一原始样本匀速预测位置的最大残差，单位 m。
+    max_position_residual_xy: 0.08
+    max_position_residual_z: 0.06
+    # 相邻原始样本允许的最大速度突变量，单位 m/s。
+    max_velocity_jump_xy: 0.60
+    max_velocity_jump_z: 0.60
+    # 异常连续达到该时间后锁存故障并进入 MPC_RECOVERY_HOVER，单位 s。
+    fault_duration: 0.10
+    # 故障后连续收到该数量的正常样本才恢复采用 FAST-LIO 状态。
+    recovery_good_samples: 5
+
 thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化推力。
     # 初次模式 1 实机验证时以 1 Hz 打印在线推力比例、悬停比例和 RPM 推力。
     print_value: true
