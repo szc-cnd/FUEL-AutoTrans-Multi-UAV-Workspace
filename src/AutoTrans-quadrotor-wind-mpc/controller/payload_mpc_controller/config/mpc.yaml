@@ -38,8 +38,8 @@ max_bodyrate_z:     0.5         # 连续轨迹偏航的最大角速度 [rad/s]
 min_thrust:         1.0
 max_thrust:         29.5
 # NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
-max_velocity_xy: 0.5
-max_velocity_z: 0.5
+max_velocity_xy: 1.5
+max_velocity_z: 1.0
 
 # 是否使用轨迹终点位置以改善末端跟踪性能。
 use_trajectory_ending_pos: true
