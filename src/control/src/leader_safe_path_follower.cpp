@@ -111,6 +111,8 @@ class LeaderSafePathFollower {
     // 2026-07-28: 前机最终锁门后独立发布门心；中途exit_candidate绝不进入后机队列。
     pnh_.param<std::string>("final_exit_pose_topic", final_exit_pose_topic_,
                             "/UAV0/mission/final_exit");
+    pnh_.param<std::string>("landing_search_state_topic", landing_search_state_topic_,
+                            "/landing_diff_search_manager/state");
     // 2026-07-16: 接力点使用前机任务命名空间公开，后续实机可直接将该Path桥接给第二架无人机。
     pnh_.param<std::string>("relay_path_topic", relay_path_topic_,
                             "/UAV0/mission/relay_waypoints");
@@ -131,16 +133,20 @@ class LeaderSafePathFollower {
     }
     follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
     follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
-    // 双机普通接力只共享XY路线；后机自身保持0.65m，并与前机保留1.00m路径间距。
+    // 双机普通接力只共享XY路线；后机名义高度与两机起飞悬停高度统一为0.60m。
     pnh_.param("follow_distance", follow_distance_, 1.00);
     pnh_.param("release_path_length", release_path_length_, 1.00);
     pnh_.param("min_separation", min_separation_, 0.50);
     // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证1m净距。
     pnh_.param("waypoint_release_min_separation",
                waypoint_release_min_separation_, 1.00);
-    pnh_.param("fixed_follow_height", fixed_follow_height_, 0.65);
+    pnh_.param("fixed_follow_height", fixed_follow_height_, 0.60);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
+    // 前视不足两码后，必须等UAV0真实升高并形成垂直分层，才允许UAV1前往前视锚点等待。
+    pnh_.param("down_search_release_height", down_search_release_height_, 1.80);
+    pnh_.param("down_search_min_vertical_separation",
+               down_search_min_vertical_separation_, 1.00);
     pnh_.param("continuous_follow_before_exit", continuous_follow_before_exit_, true);
     pnh_.param("continuous_follow_speed", continuous_follow_speed_, 0.42);
     pnh_.param<std::string>("leader_task_status_topic", leader_task_status_topic_,
@@ -274,6 +280,9 @@ class LeaderSafePathFollower {
     final_exit_pose_sub_ = nh_.subscribe(
         final_exit_pose_topic_, 1,
         &LeaderSafePathFollower::finalExitPoseCallback, this);
+    landing_search_state_sub_ = nh_.subscribe(
+        landing_search_state_topic_, 2,
+        &LeaderSafePathFollower::landingSearchStateCallback, this);
     leader_task_status_sub_ = nh_.subscribe(
         leader_task_status_topic_, 2,
         &LeaderSafePathFollower::leaderTaskStatusCallback, this);
@@ -441,6 +450,60 @@ class LeaderSafePathFollower {
               confirmed_exit_.position.x, confirmed_exit_.position.y,
               confirmed_exit_.position.z, confirmed_exit_.yaw * 180.0 / M_PI);
     tryReleaseFinalExitWaypoint("final exit received after leader outside");
+  }
+
+  void landingSearchStateCallback(const std_msgs::String::ConstPtr& msg) {
+    if (!enable_search_landing_ || down_search_wait_requested_) return;
+    const std::string& state = msg->data;
+    const bool front_scan_fell_back_to_down =
+        state == "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" ||
+        state == "FRONT_ARUCO_HINT_DIFF_APPROACH" ||
+        state == "FRONT_ARUCO_HINT_RETURN_COMPLETE_APPROACH" ||
+        state == "FRONT_HINT_TIMEOUT_FALLBACK_DOWN_SWEEP";
+    if (!front_scan_fell_back_to_down) return;
+    down_search_wait_requested_ = true;
+    ROS_ERROR("[safe_follower] UAV0 front search did not complete two-code assignment; "
+              "wait for measured climb before releasing UAV1 to the front-search anchor. "
+              "state=%s",
+              state.c_str());
+  }
+
+  void tryReleaseFrontSearchWaitWaypoint() {
+    if (!down_search_wait_requested_ || outside_wait_waypoint_released_ ||
+        release_uav1_ || terminal_mode_active_ || !leader_outside_exit_) {
+      return;
+    }
+    if (!have_final_exit_ || !have_leader_odom_ || !have_follower_odom_) {
+      ROS_WARN_THROTTLE(1.0,
+                        "[safe_follower] HOLD outside wait release: anchor/odometry unavailable.");
+      return;
+    }
+    const geometry_msgs::Point leader_world =
+        leaderToWorld(leader_odom_.pose.pose.position);
+    const double vertical_separation = leader_world.z - fixed_follow_height_;
+    if (leader_world.z + 1e-6 < down_search_release_height_ ||
+        vertical_separation + 1e-6 < down_search_min_vertical_separation_) {
+      ROS_WARN_THROTTLE(
+          0.5,
+          "[safe_follower] HOLD outside wait release: UAV0 z=%.2fm, required %.2fm; "
+          "vertical separation=%.2fm, required %.2fm.",
+          leader_world.z, down_search_release_height_, vertical_separation,
+          down_search_min_vertical_separation_);
+      return;
+    }
+    if (!relayWaypointSeparationReady("OUTSIDE_WAIT")) return;
+
+    pending_relay_valid_ = false;
+    confirmed_exit_.progress = nearestRouteProgress(confirmed_exit_.position);
+    exit_waypoint_index_ = relay_waypoints_.size();
+    appendRelayWaypoint(confirmed_exit_, "OUTSIDE_WAIT");
+    exit_waypoint_released_ = true;
+    outside_wait_waypoint_released_ = true;
+    diff_goal_published_ = false;
+    ROS_ERROR("[safe_follower] RELEASE OUTSIDE_WAIT after UAV0 entered down search: "
+              "target=(%.2f, %.2f, %.2f), UAV0_z=%.2f, vertical_separation=%.2f.",
+              confirmed_exit_.position.x, confirmed_exit_.position.y,
+              fixed_follow_height_, leader_world.z, vertical_separation);
   }
 
   void publishRelayPath() {
@@ -1691,8 +1754,12 @@ class LeaderSafePathFollower {
     if (active_relay_index_ >= relay_waypoints_.size()) {
       // 2026-07-28: 上一点消费后到下一点释放前保持同一个物理锁点，不能让等待位置随里程计漂移重置。
       setDiffWaitPositionHold(true, "waiting for next relay waypoint");
-      publishState(have_confirmed_door_ ? "DIFF_WAIT_NEXT_RELAY" : "DIFF_WAIT_CONFIRMED_DOOR",
-                   1.0, 0.65, 0.0);
+      const std::string wait_state =
+          outside_wait_arrived_ && !release_uav1_
+              ? "DIFF_WAIT_FRONT_SEARCH_ANCHOR"
+              : (have_confirmed_door_ ? "DIFF_WAIT_NEXT_RELAY"
+                                      : "DIFF_WAIT_CONFIRMED_DOOR");
+      publishState(wait_state, 1.0, 0.65, 0.0);
       return true;
     }
 
@@ -1818,9 +1885,11 @@ class LeaderSafePathFollower {
 
       ROS_ERROR("[safe_follower] UAV1 Diff ARRIVED relay waypoint %zu/%zu.",
                 active_relay_index_ + 1, relay_waypoints_.size());
-      // 2026-07-28: 后机到达最终出口门心后关闭通道内动态检测；后续门外终点仍由自身Diff避静态障碍。
-      if (active_relay_index_ == exit_waypoint_index_)
+      // 到达出口/前视锚点后关闭通道内动态检测，并在UAV0降落前锁点等待。
+      if (active_relay_index_ == exit_waypoint_index_) {
+        outside_wait_arrived_ = outside_wait_waypoint_released_;
         setFollowerDetectionEnable(false, "follower reached final exit relay");
+      }
       // 2026-07-28: 在清除当前目标之前先锁存到达位置，杜绝旧轨迹超时前的残余指令继续拉动后机。
       setDiffWaitPositionHold(true, "relay waypoint arrived");
       ++active_relay_index_;
@@ -1905,9 +1974,12 @@ class LeaderSafePathFollower {
       hold("leader odometry stale");
       return;
     }
-    // CH9 后 UAV1 不提前去出口：UAV0 找齐两个平台并成功降落前始终原地悬停。
-    if (leader_outside_exit_ && !release_uav1_) {
-      hold("UAV1 parked until UAV0 finds two ArUcos and lands");
+    // 前视不足两码时，只有UAV0实测升到下视层后才提前释放UAV1到前视扫描锚点。
+    tryReleaseFrontSearchWaitWaypoint();
+    if (leader_outside_exit_ && !release_uav1_ && !outside_wait_waypoint_released_) {
+      hold(down_search_wait_requested_
+               ? "UAV1 parked until UAV0 reaches down-search height"
+               : "UAV1 parked while UAV0 front-search result is pending");
       return;
     }
     // 2026-07-27: 卡死恢复优先于正常连续/离散跟随，避免正常目标每50ms覆盖脱困指令。
@@ -2186,7 +2258,7 @@ class LeaderSafePathFollower {
   ros::Subscriber release_uav1_sub_;
   ros::Subscriber follower_assigned_target_sub_;
   ros::Subscriber final_exit_pose_sub_;  // 2026-07-28: 前机永久锁存的最终出口门心。
-  ros::Subscriber leader_task_status_sub_;
+  ros::Subscriber leader_task_status_sub_, landing_search_state_sub_;
   ros::Subscriber diff_status_sub_;  // 2026-07-28: UAV1 Diff轨迹成功/失败反馈。
   ros::Publisher command_pub_, traj_started_pub_, diff_goal_pub_, route_pub_, relay_path_pub_, target_pub_, state_pub_;
   ros::Publisher follower_landing_target_pub_, follower_landing_request_pub_;
@@ -2215,6 +2287,7 @@ class LeaderSafePathFollower {
   std::string follower_assigned_target_topic_;
   std::string follower_landing_target_topic_, follower_landing_request_topic_, door_pose_topic_;
   std::string final_exit_pose_topic_;  // 2026-07-28: 默认/UAV0/mission/final_exit。
+  std::string landing_search_state_topic_;
   std::string relay_path_topic_, leader_task_status_topic_, follower_detection_enable_topic_;
   std::string dynamic_obstacle_topic_;  // 默认/UAV1/ldop/dynamic_objects。
   bool have_leader_odom_{false}, have_follower_odom_{false};
@@ -2235,6 +2308,8 @@ class LeaderSafePathFollower {
   bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
   bool have_confirmed_door_{false}, door_waypoint_released_{false};
   bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
+  bool down_search_wait_requested_{false};
+  bool outside_wait_waypoint_released_{false}, outside_wait_arrived_{false};
   bool pending_relay_valid_{false};
   bool continuous_follow_before_exit_{true}, leader_outside_exit_{false};
   bool enable_search_landing_{false};
@@ -2255,7 +2330,9 @@ class LeaderSafePathFollower {
   // 默认1.00m路径间隔、1.00m航点发布门槛、0.50m紧急硬间隔。
   double follow_distance_{1.00}, release_path_length_{1.00}, min_separation_{0.50};
   double waypoint_release_min_separation_{1.00};
-  double fixed_follow_height_{0.65}, follow_height_min_{0.60}, follow_height_max_{0.70};
+  double fixed_follow_height_{0.60}, follow_height_min_{0.60}, follow_height_max_{0.70};
+  double down_search_release_height_{1.80};
+  double down_search_min_vertical_separation_{1.00};
   double continuous_follow_speed_{0.42};
   double separation_recovery_distance_{1.15}, separation_release_distance_{1.35};
   double emergency_retreat_step_{0.35}, emergency_retreat_speed_{0.30};
