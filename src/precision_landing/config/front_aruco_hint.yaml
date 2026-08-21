@@ -46,7 +46,7 @@ safety:
   image_timeout_sec: 0.30
   max_header_future_sec: 0.05
   tf_timeout_sec: 0.05
-  max_image_odom_delta_sec: 0.08
+  max_image_odom_delta_sec: 0.11
 
 mission:
   require_stage_gate: true
