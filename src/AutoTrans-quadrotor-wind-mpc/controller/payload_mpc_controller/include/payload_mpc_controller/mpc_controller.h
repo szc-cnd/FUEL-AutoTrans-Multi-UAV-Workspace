@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <thread>
 
 #include <Eigen/Eigen>
@@ -86,17 +87,20 @@ namespace PayloadMPC
     double getTimeStep(){return mpc_time_step_;}
     void setDynamicParams(const real_t mass_q)
       {mpc_wrapper_.setDynamicParams(mass_q);}
-    void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
-      {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
+    void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq);
     bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
     bool hasRecentValidControl(const ros::Time &now, double max_age) const;
     const Eigen::Matrix<real_t, kInputSize, 1> &lastValidControlInput() const
       { return last_valid_control_input_; }
     void clearLastValidControl();
+    // 等待异步准备线程结束，再基于实测状态和固定悬停参考重建完整 ACADO 工作区。
     bool resetForHover(
       const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
       const Eigen::Ref<const Eigen::Vector3d> hover_position,
       double hover_yaw);
+    bool restoreNominalVelocityLimits();
+    bool recoveryVelocityLimitsRelaxed() const
+      { return recovery_velocity_limits_relaxed_; }
     void waitForPreparation();
     // Thrust to control
     std::queue<std::pair<ros::Time, double>> timed_thrust;
@@ -148,7 +152,8 @@ namespace PayloadMPC
     // Parameters
     MpcParams& params_;
 
-    Eigen::Vector3d fq_;
+    Eigen::Vector3d fq_{Eigen::Vector3d::Zero()};
+    mutable std::mutex external_force_mutex_;
     // MPC
     MpcWrapper mpc_wrapper_;
     const double mpc_time_step_;
@@ -160,6 +165,7 @@ namespace PayloadMPC
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
+    bool recovery_velocity_limits_relaxed_{false};
     bool mpc_failure_active_{false};
     Eigen::Matrix<real_t, kInputSize, 1> last_valid_control_input_{
         Eigen::Matrix<real_t, kInputSize, 1>::Zero()};

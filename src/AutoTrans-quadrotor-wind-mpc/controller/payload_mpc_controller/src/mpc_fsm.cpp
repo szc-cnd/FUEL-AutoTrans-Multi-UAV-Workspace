@@ -15,7 +15,6 @@ namespace
 {
 	constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 	constexpr double safe_output_hold_time = 0.3;
-	constexpr double kLastValidMpcHoldSeconds = 0.2;
 
 	std::string firstToken(const std::string &text)
 	{
@@ -639,9 +638,12 @@ namespace PayloadMPC
 		{
 			if (!mpc_recovery_active_ && !controller_.lastMpcSolveSuccessful())
 				beginMpcRecovery(now_time);
-			if (!controller_.lastMpcSolveSuccessful() &&
-				controller_.hasRecentValidControl(now_time, kLastValidMpcHoldSeconds))
+			const bool use_last_valid_mpc =
+				!controller_.lastMpcSolveSuccessful() && canReuseLastValidMpc(now_time);
+			if (use_last_valid_mpc)
 				publish_bodyrate_ctrl(controller_.lastValidControlInput(), now_time);
+			else if (mpc_recovery_active_ && !controller_.lastMpcSolveSuccessful())
+				publish_recovery_attitude_ctrl(now_time);
 			else
 				publish_bodyrate_ctrl(mpc_predicted_inputs_.col(0), now_time);
 			publishPrediction(controller_.reference_states_, mpc_predicted_states_, now_time, controller_.getTimeStep());
@@ -1430,7 +1432,10 @@ namespace PayloadMPC
 		direct_auto_land_active_ = false;
 		planning_stop_sent_ = false;
 		mpc_recovery_success_count_ = 0;
+		last_mpc_recovery_reset_time_ = ros::Time(0);
 		controller_.clearLastValidControl();
+		// 所有 ACADO 在线数据清理完成后再恢复正常约束并启动下一轮准备线程。
+		controller_.restoreNominalVelocityLimits();
 		trajectory_data.allowTrajectoryAcceptanceAfter(ros::Time::now());
 	}
 
@@ -1468,10 +1473,10 @@ namespace PayloadMPC
 		entry_command_active_ = false;
 		exec_traj_state_ = MPC_RECOVERY_HOVER;
 		mpc_recovery_start_time_ = now;
+		last_mpc_recovery_reset_time_ = now;
 		mpc_recovery_success_count_ = 0;
 		mpc_recovery_active_ = true;
 		clearForceObserverState();
-		controller_.clearLastValidControl();
 		if (fsm_state == AUTO_TAKEOFF)
 			fsm_state = AUTO_HOVER;
 
@@ -1496,7 +1501,26 @@ namespace PayloadMPC
 
 		controller_.setHoverReference(hover_pose_, hover_yaw_);
 		controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
-		if (controller_.lastMpcSolveSuccessful() && !odom_spike_guard_.faultActive())
+
+		const bool velocity_inside_recovery_exit =
+			odom_data.v.head<2>().norm() <= params_.safety_.mpc_recovery_exit_speed_xy &&
+			std::abs(odom_data.v.z()) <= params_.safety_.mpc_recovery_exit_speed_z;
+		if (controller_.lastMpcSolveSuccessful() &&
+			controller_.recoveryVelocityLimitsRelaxed() && velocity_inside_recovery_exit)
+		{
+			if (!controller_.restoreNominalVelocityLimits())
+				ROS_ERROR_THROTTLE(5.0,
+					"[NMPC恢复] 无法恢复配置的速度硬约束，继续留在恢复状态。");
+		}
+
+		const bool state_converged = recoveryStateConverged(
+			odom_data.p, hover_pose_, odom_data.v, force_attitude_odom_data.q,
+			params_.safety_.mpc_recovery_exit_position_error,
+			params_.safety_.mpc_recovery_exit_speed_xy,
+			params_.safety_.mpc_recovery_exit_speed_z,
+			params_.safety_.mpc_recovery_exit_tilt_deg * kDegToRad);
+		if (controller_.lastMpcSolveSuccessful() && !odom_spike_guard_.faultActive() &&
+			!controller_.recoveryVelocityLimitsRelaxed() && state_converged)
 			++mpc_recovery_success_count_;
 		else
 			mpc_recovery_success_count_ = 0;
@@ -1522,6 +1546,16 @@ namespace PayloadMPC
 				"[安全] NMPC 恢复超过 %.2f s，继续锁点重试，不因求解失败请求 AUTO.LAND。",
 				params_.safety_.mpc_recovery_timeout);
 		}
+
+		if (!controller_.lastMpcSolveSuccessful() &&
+			(now - last_mpc_recovery_reset_time_).toSec() >=
+				params_.safety_.mpc_recovery_full_reset_period)
+		{
+			last_mpc_recovery_reset_time_ = now;
+			if (!controller_.resetForHover(est_state_, hover_pose_, hover_yaw_))
+				ROS_ERROR_THROTTLE(5.0,
+					"[NMPC恢复] 周期性完整重置失败，继续发布拉平姿态并重试。");
+		}
 	}
 
 	void MPCFSM::beginDirectAutoLand(const ros::Time &now, const char *reason)
@@ -1530,6 +1564,7 @@ namespace PayloadMPC
 		{
 			mpc_recovery_active_ = false;
 			direct_auto_land_active_ = true;
+			last_mpc_recovery_reset_time_ = ros::Time(0);
 			fsm_state = AUTO_LAND;
 			exec_traj_state_ = MPC_RECOVERY_HOVER;
 			trajectory_data.blockTrajectoryAcceptance();
@@ -2004,6 +2039,69 @@ namespace PayloadMPC
 			return true;
 		}
 		return false;
+	}
+
+	bool MPCFSM::canReuseLastValidMpc(const ros::Time &now) const
+	{
+		if (odom_spike_guard_.faultActive())
+			return false;
+
+		if (!controller_.hasRecentValidControl(
+				now, params_.safety_.mpc_recovery_last_valid_hold))
+		{
+			return false;
+		}
+
+		const Eigen::Vector4d cached_input =
+			controller_.lastValidControlInput().cast<double>();
+		return conservativeLastValidInput(
+			odom_data.v, force_attitude_odom_data.q, cached_input,
+			params_.safety_.mpc_recovery_exit_speed_xy,
+			params_.safety_.mpc_recovery_exit_speed_z,
+			params_.safety_.mpc_recovery_exit_tilt_deg * kDegToRad,
+			params_.safety_.mpc_recovery_last_valid_max_bodyrate,
+			params_.min_thrust_, params_.max_thrust_);
+	}
+
+	void MPCFSM::publish_recovery_attitude_ctrl(const ros::Time &stamp)
+	{
+		const RecoveryAttitudeCommand command = makeRecoveryAttitudeCommand(
+			force_attitude_odom_data.q, hover_yaw_,
+			params_.thr_map_.hover_percentage,
+			params_.thr_map_.max_normalized_thrust,
+			params_.safety_.mpc_recovery_max_thrust_comp_tilt_deg * kDegToRad);
+		if (!command.valid)
+		{
+			ROS_ERROR_THROTTLE(1.0,
+				"[NMPC恢复] 无法生成有限的拉平姿态目标，退回零角速度和悬停推力。");
+			Eigen::Matrix<real_t, kInputSize, 1> hover_input;
+			hover_input << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0;
+			publish_bodyrate_ctrl(hover_input, stamp);
+			return;
+		}
+
+		mavros_msgs::AttitudeTarget msg;
+		msg.header.stamp = stamp;
+		msg.header.frame_id = std::string("FCU");
+		msg.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ROLL_RATE |
+			mavros_msgs::AttitudeTarget::IGNORE_PITCH_RATE |
+			mavros_msgs::AttitudeTarget::IGNORE_YAW_RATE;
+		msg.orientation.x = command.orientation.x();
+		msg.orientation.y = command.orientation.y();
+		msg.orientation.z = command.orientation.z();
+		msg.orientation.w = command.orientation.w();
+		msg.body_rate.x = 0.0;
+		msg.body_rate.y = 0.0;
+		msg.body_rate.z = 0.0;
+		msg.thrust = command.normalized_thrust;
+
+		ctrl_FCU_pub.publish(msg);
+		last_safe_setpoint_ = msg;
+		have_last_safe_setpoint_ = true;
+		ROS_WARN_THROTTLE(1.0,
+			"[NMPC恢复] 当前无有效 MPC 输出，发布水平姿态目标并保持锁存 yaw；"
+			"当前倾角 %.1f deg，归一化推力 %.3f。",
+			command.tilt_rad / kDegToRad, command.normalized_thrust);
 	}
 
 	void MPCFSM::publish_bodyrate_ctrl(const Eigen::Ref<const Eigen::Matrix<real_t, kInputSize, 1>> predicted_input,

@@ -29,6 +29,46 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("planning_restart_pub_", process)
         self.assertIn("CH10", process)
 
+    def test_recovery_levels_attitude_and_requires_converged_nominal_solution(self):
+        fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        controller = (PACKAGE / "src/mpc_controller.cpp").read_text(encoding="utf-8")
+        header = (
+            PACKAGE / "include/payload_mpc_controller/mpc_controller.h"
+        ).read_text(encoding="utf-8")
+        wrapper = (PACKAGE / "src/mpc_wrapper.cpp").read_text(encoding="utf-8")
+        config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("mpc_recovery_success_cycles: 5", config)
+        self.assertIn("mpc_recovery_last_valid_hold: 0.05", config)
+        self.assertIn("publish_recovery_attitude_ctrl", fsm)
+        self.assertIn("recoveryStateConverged", fsm)
+        self.assertIn("restoreNominalVelocityLimits", fsm)
+        self.assertIn("mpc_recovery_full_reset_period", fsm)
+        self.assertIn("odom_spike_guard_.faultActive()", fsm)
+
+        begin = fsm.split("void MPCFSM::beginMpcRecovery", 1)[1]
+        begin = begin.split("void MPCFSM::processMpcRecovery", 1)[0]
+        self.assertNotIn("clearLastValidControl", begin)
+
+        attitude_publish = fsm.split("void MPCFSM::publish_recovery_attitude_ctrl", 1)[1]
+        attitude_publish = attitude_publish.split("void MPCFSM::publish_bodyrate_ctrl", 1)[0]
+        self.assertIn("IGNORE_ROLL_RATE", attitude_publish)
+        self.assertIn("IGNORE_PITCH_RATE", attitude_publish)
+        self.assertIn("IGNORE_YAW_RATE", attitude_publish)
+        self.assertNotIn("IGNORE_ATTITUDE", attitude_publish)
+
+        self.assertIn("std::mutex external_force_mutex_", header)
+        setter = controller.split("void MpcController::setExternalForce", 1)[1]
+        setter = setter.split("void MpcController::execMPC", 1)[0]
+        self.assertNotIn("mpc_wrapper_.setExternalForce", setter)
+        preparation = controller.split("void MpcController::preparationThread", 1)[1]
+        preparation = preparation.split("double MpcController::angle_limit", 1)[0]
+        self.assertIn("mpc_wrapper_.setExternalForce(external_force);", preparation)
+
+        initialize = wrapper.split("void MpcWrapper::initialize", 1)[1]
+        initialize = initialize.split("bool MpcWrapper::setCosts", 1)[0]
+        self.assertNotIn("acado_preparationStep();", initialize)
+
     def test_bridge_uses_latched_output_and_two_second_timeout_abort(self):
         bridge = (
             WORKSPACE / "src/autotrans_reference_bridge/src/fuel_autotrans_bridge_node.cpp"

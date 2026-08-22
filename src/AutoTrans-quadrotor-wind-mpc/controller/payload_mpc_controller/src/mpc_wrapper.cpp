@@ -41,6 +41,7 @@ namespace PayloadMPC
       real_t input_cost_scaling)
   // Clear solver memory.
   {
+    acado_is_prepared_ = false;
     memset(&acadoWorkspace, 0, sizeof(acadoWorkspace));
     memset(&acadoVariables, 0, sizeof(acadoVariables));
 
@@ -85,8 +86,6 @@ namespace PayloadMPC
 
     // Initialize solver.
     acado_initializeNodesByForwardSimulation();
-    acado_preparationStep();
-    acado_is_prepared_ = true;
   }
 
   // Set cost matrices with optional scaling.
@@ -288,6 +287,8 @@ namespace PayloadMPC
 
   bool MpcWrapper::prepare()
   {
+    // 只有本次准备步骤成功后才允许下一次反馈求解，不能沿用旧的 prepared 状态。
+    acado_is_prepared_ = false;
     int ret = acado_preparationStep();
     if (ret != 0)
     {

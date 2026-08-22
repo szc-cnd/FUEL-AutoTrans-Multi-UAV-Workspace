@@ -54,7 +54,7 @@ class LogRatePolicyStaticTest(unittest.TestCase):
         controller = (ROOT / "src/mpc_controller.cpp").read_text(encoding="utf-8")
 
         self.assertIn(
-            'ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，切换到悬停安全输入。")',
+            'ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，等待恢复状态输出安全姿态。")',
             controller,
         )
         self.assertIn("ROS_INFO_THROTTLE(5.0, \"[NMPC] 计算耗时", controller)
