@@ -68,7 +68,4 @@ def test_uav0_launch_routes_fuel_and_diff_through_one_autotrans_input():
         for item in controller_include.findall("arg")
     }
     assert controller_args["trajectory_topic"] == "/UAV0/planning/autotrans_trajectory"
-    assert controller_args["position_cmd_topic"] == (
-        "$(eval '/UAV0/fuel/planning/pos_cmd' if "
-        "arg('pure_fuel_mode') else '/UAV0/planning/pos_cmd')"
-    )
+    assert controller_args["position_cmd_topic"] == "/UAV0/planning/pos_cmd"
