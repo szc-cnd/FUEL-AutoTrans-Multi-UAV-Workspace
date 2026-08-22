@@ -54,7 +54,7 @@ def test_cav1_vehicle_parameters_match_latest_hover_calibration():
         "R_pitchroll:  6.0",
         "max_velocity_xy: 0.5",
         "max_velocity_z: 0.5",
-        "kf: 1.790e-8",
+        "kf: 1.752e-8",
         "force_axis_gain_x: 1.0",
         "force_axis_gain_y: 1.0",
         "force_axis_gain_z: 1.0",
