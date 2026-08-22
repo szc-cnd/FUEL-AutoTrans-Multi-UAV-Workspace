@@ -289,15 +289,15 @@ run_planner_pane() {
   wait_for_topic "${ODOM_TOPIC}" 180 || keep_pane_open
   wait_for_topic /UAV0/fast_lio/cloud_registered 180 || keep_pane_open
   local planner_launch
-  planner_launch="$(rospack find diff_planner 2>/dev/null)/launch/exp/run_swarm_indoor1_fuel_exploration.launch"
+  planner_launch="$(rospack find diff_planner 2>/dev/null)/launch/exp/run_swarm_indoor1_fuel_diff_exploration.launch"
   if [[ ! -f "${planner_launch}" ]]; then
-    log "找不到 FUEL 规划器 launch：${planner_launch}"
+    log "找不到 FUEL-DIFF 混合规划器 launch：${planner_launch}"
     keep_pane_open
   fi
-  printf '[启动] UAV0 FUEL 规划器和 RViz\n'
+  printf '[启动] UAV0 FUEL-DIFF 混合规划器和 RViz\n'
   roslaunch "${planner_launch}" \
     odom_topic:="${ODOM_TOPIC}"
-  printf '[退出] FUEL 规划器分屏，返回码=%s\n' "$?"
+  printf '[退出] FUEL-DIFF 规划器分屏，返回码=%s\n' "$?"
   keep_pane_open
 }
 
@@ -441,7 +441,7 @@ sed "s|__UAV0_FIRST_SEVEN_SCRIPT__|${SCRIPT_PATH}|g" \
 
 log '打开 UAV0 前七步 Terminator 七分屏'
 log '上排：1 MAVROS | 2 MID360 | 3 FAST-LIO'
-log '下排：4 视觉位姿 | 5 检测/上报 | 6 FUEL 规划器/RViz | 7 简单控制器'
+log '下排：4 视觉位姿 | 5 检测/上报 | 6 FUEL-DIFF 规划器/RViz | 7 简单控制器'
 log "检测参数：thermal=${THERMAL}, odom=${ODOM_TOPIC}"
 log "Terminator 启动日志：${TERMINATOR_LOG}"
 

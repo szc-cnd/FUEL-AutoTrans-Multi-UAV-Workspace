@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# UAV0 传感器、FUEL 和 AutoTrans 的 Terminator 六分屏入口。
+# UAV0 传感器、FUEL-DIFF 混合规划和 AutoTrans 的 Terminator 六分屏入口。
 # 不自动解锁、不切换 OFFBOARD、不发布目标点。
 
 set -o pipefail
@@ -33,8 +33,8 @@ usage() {
   bash shfiles/start_uav0_six_terminator.sh
   bash shfiles/start_uav0_six_terminator.sh stop
 
-六屏依次为：MAVROS、MID360、FAST-LIO、高频视觉位姿、FUEL/RViz、
-FUEL bridge + AutoTrans NMPC + logger + rosbag。
+六屏依次为：MAVROS、MID360、FAST-LIO、高频视觉位姿、FUEL-DIFF/RViz、
+FUEL-DIFF bridge + AutoTrans NMPC + logger + rosbag。
 
 脚本不自动解锁、不切换 OFFBOARD、不发送目标点。
 EOF
@@ -109,7 +109,7 @@ run_controller_pane() {
   sleep "${VISION_STABILIZE_SECONDS}"
   wait_for_topic /UAV0/mavros/vision_pose/pose || keep_open
 
-  printf '[启动] UAV0 FUEL bridge、AutoTrans NMPC、logger 与同目录 rosbag\n'
+  printf '[启动] UAV0 FUEL-DIFF bridge、AutoTrans NMPC、logger 与同目录 rosbag\n'
   printf '[安全] 本屏不重复启动 FUEL，不自动解锁或切换 OFFBOARD。\n'
   roslaunch autotrans_reference_bridge uav0_autotrans_controller.launch
   printf '[退出] AutoTrans 分屏，返回码=%s\n' "$?"
@@ -147,7 +147,7 @@ command -v timeout >/dev/null 2>&1 || { log '缺少 timeout 命令'; exit 1; }
 sed "s|__UAV0_SIX_SCRIPT__|${SCRIPT_PATH}|g" "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
 log '打开 UAV0 Terminator 六分屏'
 log '上排：1 MAVROS | 2 MID360 | 3 FAST-LIO'
-log '下排：4 视觉位姿 | 5 FUEL/RViz | 6 AutoTrans/logger/rosbag'
+log '下排：4 视觉位姿 | 5 FUEL-DIFF/RViz | 6 AutoTrans/logger/rosbag'
 nohup terminator --no-dbus --maximise --config="${RUNTIME_CONFIG}" --layout=uav0_six \
   >"${TERMINATOR_LOG}" 2>&1 &
 terminator_pid=$!
