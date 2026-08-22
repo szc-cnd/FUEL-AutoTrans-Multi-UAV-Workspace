@@ -132,8 +132,9 @@ private:
     output.num_dim = static_cast<uint32_t>(dimension);
     output.duration = duration;
     output.data.reserve(static_cast<std::size_t>((degree + 1) * dimension));
-    // AutoTrans 使用 Eigen::Map<MatrixXd> 按列主序恢复矩阵；这里按阶次再按维度写入。
-    for (int order = 0; order <= degree; ++order)
+    // AutoTrans treats the last matrix column as the constant term, so serialize
+    // the ascending-power fit in reverse order.
+    for (int order = degree; order >= 0; --order)
     {
       for (int dim = 0; dim < dimension; ++dim)
       {
