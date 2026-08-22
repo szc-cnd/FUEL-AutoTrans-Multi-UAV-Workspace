@@ -150,10 +150,11 @@ def test_uav1_dynamic_obstacle_detection_is_disabled_by_default():
     assert "bool enable_dynamic_obstacle_detection_{false};" in source
 
 
-def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
+def test_collaboration_launch_has_one_alignment_tf_and_enables_uav1_diff_rviz():
     root = ET.parse(LAUNCH).getroot()
     args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
     assert args["follower_odom_topic"] == "/UAV1/fast_lio/Odom_high_freq"
+    assert args["enable_diff_rviz"] == "true"
 
     relay_include = next(
         item for item in root.findall("include")
@@ -164,7 +165,7 @@ def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
         for item in relay_include.findall("arg")
     }
     assert include_args["publish_world_to_follower_tf"] == "false"
-    assert include_args["enable_rviz"] == "false"
+    assert include_args["enable_rviz"] == "$(arg enable_diff_rviz)"
 
     relay_args = {
         item.attrib["name"]: item.attrib["default"]
@@ -172,6 +173,12 @@ def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
     }
     assert "publish_world_to_follower_tf" in relay_args
     assert "enable_rviz" in relay_args
+
+    rviz_node = next(
+        node for node in ET.parse(RELAY_LAUNCH).getroot().findall("node")
+        if node.attrib.get("type") == "rviz"
+    )
+    assert rviz_node.attrib["name"] == "UAV1_diff_rviz"
 
 
 def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():

@@ -106,7 +106,7 @@
     </node>
 
     <!-- 默认打开 Diff-Planner 自带 RViz；修正配置中 drone_1 的旧话题。 -->
-    <node if="$(arg enable_rviz)" name="rviz" pkg="rviz" type="rviz"
+    <node if="$(arg enable_rviz)" name="UAV1_diff_rviz" pkg="rviz" type="rviz"
           args="-d $(find diff_planner)/launch/include/exp.rviz" output="screen">
         <remap from="/move_base_simple/goal" to="$(arg goal_topic)"/>
         <remap from="/drone__diff_planner_node/goal_point"

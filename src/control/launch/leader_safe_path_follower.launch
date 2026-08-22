@@ -6,11 +6,13 @@
     <!-- UAV1 LDOP未完成实飞验证：即使节点被单独启动，跟随器默认也不消费动态目标。 -->
     <arg name="enable_dynamic_obstacle_detection"
          default="$(optenv UAV1_ENABLE_DYNAMIC_OBSTACLE_DETECTION false)"/>
+    <!-- 六分屏入口默认同时打开 UAV1 Diff-Planner 的 RViz；可通过 launch 参数关闭。 -->
+    <arg name="enable_diff_rviz" default="true"/>
     <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
     <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch">
-        <!-- 坐标对齐和公共RViz只由本入口/UAV0各启动一份，避免共享Master下节点冲突。 -->
+        <!-- 坐标对齐只由本入口发布；UAV1 RViz 使用独立节点名，可与 UAV0 并存。 -->
         <arg name="publish_world_to_follower_tf" value="false"/>
-        <arg name="enable_rviz" value="false"/>
+        <arg name="enable_rviz" value="$(arg enable_diff_rviz)"/>
     </include>
     <!-- UAV1 复用同一套搜索/精降节点；相机驱动和 UAV1/down_camera 话题由机载入口提供。 -->
     <include if="$(arg enable_search_landing)"
