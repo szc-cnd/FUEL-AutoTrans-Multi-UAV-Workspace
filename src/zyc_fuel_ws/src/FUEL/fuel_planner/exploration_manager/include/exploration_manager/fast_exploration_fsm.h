@@ -9,11 +9,16 @@
 #include <std_msgs/Int32.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>  // 将任务门内/门外阶段转换为动态检测状态。
+#include <quadrotor_msgs/ExplorationGoal.h>
+#include <quadrotor_msgs/ExplorationCancel.h>
+#include <quadrotor_msgs/ExplorationGoalStatus.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <visualization_msgs/Marker.h>
 #include <plan_manage/plan_container.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -52,8 +57,23 @@ private:
   ros::NodeHandle node_;
   ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
+  ros::Subscriber external_status_sub_;
   ros::Publisher replan_pub_, new_pub_, bspline_pub_, emergency_brake_pub_, safety_hold_pub_,
       endpoint_hold_pub_, dynamic_detection_enable_pub_;
+  ros::Publisher external_goal_pub_, external_cancel_pub_, external_trigger_pub_;
+  bool use_diff_for_fuel_exploration_{false};
+  bool external_exploration_active_{false};
+  bool external_goal_pending_{false};
+  std::string external_goal_topic_{"/UAV0/fuel_diff/goal"};
+  std::string external_status_topic_{"/UAV0/fuel_diff/status"};
+  std::string external_cancel_topic_{"/UAV0/fuel_diff/cancel"};
+  std::string external_trigger_topic_{"/UAV0/fuel_diff/trigger"};
+  std::uint64_t external_session_id_{0};
+  std::uint64_t external_goal_id_{0};
+  ros::Time external_goal_sent_at_;
+  ros::Time external_next_select_at_;
+  geometry_msgs::Pose external_last_pose_;
+  quadrotor_msgs::ExplorationGoal external_last_goal_;
   bool safety_hold_active_{false};
   bool safety_hold_enabled_{true};
   bool hold_on_plan_failure_{true};
@@ -99,6 +119,8 @@ private:
   void triggerCallback(const nav_msgs::PathConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
   void missionStatusCallback(const std_msgs::StringConstPtr& msg);
+  void externalStatusCallback(const quadrotor_msgs::ExplorationGoalStatusConstPtr& msg);
+  bool publishExternalViewpoint();
   void visualize();
   void clearVisMarker();
 

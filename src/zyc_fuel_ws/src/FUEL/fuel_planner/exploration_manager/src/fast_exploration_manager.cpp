@@ -1063,7 +1063,8 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
                "until %.2fm progress.",
                recovery_side_release_distance_);
     }
-    if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
+    if (task_search_manager_ && !external_selection_only_)
+      task_search_manager_->recordSelectedGoal(next_pos);
     if (choice.short_backtrack) {
       pending_short_backtrack_ = true;
       pending_short_backtrack_target_ = next_pos;
@@ -1816,7 +1817,7 @@ int FastExplorationManager::planExploreMotion(
   use_vertical_detour_target = handleActiveLowProbe(
       pos, next_pos, next_yaw, wait_for_low_confirmation);
   if (wait_for_low_confirmation) return FAIL;
-  if (!use_vertical_detour_target && !low_probe_was_active &&
+  if (!external_selection_only_ && !use_vertical_detour_target && !low_probe_was_active &&
       vertical_detour::inflationEscapeAllowed(low_probe_phase_) &&
       planInflationHistoryEscape(pos, vel, acc, yaw))
     return SUCCEED;
@@ -1968,7 +1969,8 @@ int FastExplorationManager::planExploreMotion(
              next_pos.x(), next_pos.y(), next_pos.z(), next_yaw * 180.0 / M_PI);
   } else if (use_stage3_target) {
     // 2026-07-13: 出口接近、二维码环扫和降落接近都走同一条安全 A*/轨迹生成后端。
-    if (task_search_manager_) task_search_manager_->recordSelectedGoal(next_pos);
+    if (task_search_manager_ && !external_selection_only_)
+      task_search_manager_->recordSelectedGoal(next_pos);
     ed_->global_tour_ = {pos, next_pos};
     ed_->refined_tour_.clear();
     ed_->refined_views1_.clear();
@@ -2106,6 +2108,16 @@ int FastExplorationManager::planExploreMotion(
   const Eigen::Vector2d motion_delta = next_pos.head<2>() - pos.head<2>();
   if (!use_camera_viewpoint_yaw_ && motion_delta.norm() > 0.15)
     next_yaw = std::atan2(motion_delta.y(), motion_delta.x());
+
+  if (external_selection_only_) {
+    external_selected_viewpoint_ = next_pos;
+    external_selected_yaw_ = next_yaw;
+    last_requested_goal_ = next_pos;
+    has_last_requested_goal_ = true;
+    ROS_INFO("[fuel_diff] selected complete viewpoint (%.2f, %.2f, %.2f), yaw=%.1fdeg.",
+             next_pos.x(), next_pos.y(), next_pos.z(), next_yaw * 180.0 / M_PI);
+    return SUCCEED;
+  }
 
   // 2026-07-24: 只在前机正常SEARCH_CORRIDOR平移阶段启用相机扫描；入口/出口任务朝向优先。
   // 默认直段小幅快扫、转弯关闭附加扫描、新障碍物才做一次6秒全向扫描。
@@ -2571,6 +2583,32 @@ int FastExplorationManager::planExploreMotion(
   }
 
   return SUCCEED;
+}
+
+bool FastExplorationManager::selectExplorationViewpoint(
+    const Vector3d& pos, const Vector3d& vel, const Vector3d& acc,
+    const Vector3d& yaw, Vector3d& next_pos, double& next_yaw) {
+  external_selection_only_ = true;
+  const int result = planExploreMotion(pos, vel, acc, yaw);
+  external_selection_only_ = false;
+  if (result != SUCCEED) return false;
+  next_pos = external_selected_viewpoint_;
+  next_yaw = external_selected_yaw_;
+  return next_pos.allFinite() && std::isfinite(next_yaw);
+}
+
+void FastExplorationManager::freezeExplorationInitialYaw(double yaw) {
+  if (task_search_manager_) task_search_manager_->freezeExplorationInitialYaw(yaw);
+}
+
+void FastExplorationManager::fillExplorationConstraint(
+    quadrotor_msgs::ExplorationMotionConstraint& msg) const {
+  if (task_search_manager_) task_search_manager_->fillExplorationConstraint(msg);
+  else msg = quadrotor_msgs::ExplorationMotionConstraint();
+}
+
+void FastExplorationManager::recordExplorationReached(const Vector3d& goal) {
+  if (task_search_manager_) task_search_manager_->recordExplorationReached(goal);
 }
 
 void FastExplorationManager::reportTrajectoryCollision() {

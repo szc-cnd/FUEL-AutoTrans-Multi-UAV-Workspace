@@ -9,6 +9,7 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <quadrotor_msgs/ExplorationMotionConstraint.h>
 #include <exploration_manager/vertical_detour_policy.h>
 using Eigen::Vector3d;
 using std::shared_ptr;
@@ -35,6 +36,13 @@ public:
 
   int planExploreMotion(const Vector3d& pos, const Vector3d& vel, const Vector3d& acc,
                         const Vector3d& yaw);
+  // 混合模式只执行FUEL的候选评分与完整观察视点选择，轨迹由DIFF负责。
+  bool selectExplorationViewpoint(const Vector3d& pos, const Vector3d& vel,
+                                  const Vector3d& acc, const Vector3d& yaw,
+                                  Vector3d& next_pos, double& next_yaw);
+  void freezeExplorationInitialYaw(double yaw);
+  void fillExplorationConstraint(quadrotor_msgs::ExplorationMotionConstraint& msg) const;
+  void recordExplorationReached(const Vector3d& goal);
   // 2026-07-13: 执行轨迹预测碰撞时把当前任务目标加入失败冷却，防止下一周期再次选择同一危险点。
   void reportTrajectoryCollision();
   // 2026-07-22: 由FSM里程计回调连续更新任务航迹，旧路判断不再只依赖稀疏重规划时刻。
@@ -66,6 +74,9 @@ private:
   shared_ptr<TaskSearchManager> task_search_manager_;
   bool mission_entered_search_region_{false};
   bool mission_workspace_lock_received_{false};
+  bool external_selection_only_{false};
+  Vector3d external_selected_viewpoint_{0.0, 0.0, 0.0};
+  double external_selected_yaw_{0.0};
   // 2026-07-16: 预留相机观测航向接口；Mid360比赛模式默认按运动方向飞行，不执行原地转头观测。
   bool use_camera_viewpoint_yaw_{false};
   // 2026-07-24: 前机通道搜索期间控制机体航向，为前置相机提供规律扫描视场。

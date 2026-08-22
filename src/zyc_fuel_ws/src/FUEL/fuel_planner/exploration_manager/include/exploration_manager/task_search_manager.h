@@ -8,6 +8,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <exploration_manager/motion_direction_rules.h>
+#include <quadrotor_msgs/ExplorationGoal.h>
 
 #include <deque>
 #include <cstdint>
@@ -49,6 +50,10 @@ public:
   // 2026-07-28: 短回撤只豁免路径开头方向，门平面、旧通道和逐点障碍约束仍全部保留。
   bool isRecoveryPathAllowed(const std::vector<Eigen::Vector3d>& path,
                              bool allow_initial_reverse) const;
+  void freezeExplorationInitialYaw(double yaw);
+  bool explorationInitialYawFrozen() const { return exploration_initial_yaw_frozen_; }
+  void fillExplorationConstraint(quadrotor_msgs::ExplorationMotionConstraint& msg) const;
+  void recordExplorationReached(const Eigen::Vector3d& goal);
   double clampSearchHeight(double z) const;
   double preferredSearchHeight() const;
   // 2026-07-13: 窄通道任务点优先保持水平飞行，仅以有限步长向巡航高度收敛。
@@ -213,6 +218,27 @@ private:
   Eigen::Vector2d latest_turn_anchor_{0.0, 0.0};
   Eigen::Vector2d latest_turn_incoming_direction_{1.0, 0.0};
   bool latest_turn_anchor_valid_{false};
+  struct CompletedGate {
+    std::uint32_t sequence{0};
+    Eigen::Vector2d center{0.0, 0.0};
+    Eigen::Vector2d normal{1.0, 0.0};
+    double left_extent{1.45};
+    double right_extent{1.45};
+    double thickness{0.30};
+  };
+  std::vector<CompletedGate> completed_gates_;
+  std::uint32_t next_gate_sequence_{1};
+  bool exploration_initial_yaw_frozen_{false};
+  double exploration_initial_yaw_{0.0};
+  double entry_inside_yaw_{0.0};
+  Eigen::Vector2d segment_origin_{0.0, 0.0};
+  Eigen::Vector2d segment_direction_{1.0, 0.0};
+  double segment_high_water_{0.0};
+  bool transition_active_{false};
+  Eigen::Vector2d transition_anchor_{0.0, 0.0};
+  Eigen::Vector2d transition_incoming_direction_{1.0, 0.0};
+  Eigen::Vector2d transition_outgoing_direction_{1.0, 0.0};
+  double transition_old_high_water_{0.0};
   std::deque<Eigen::Vector3d> visited_positions_;
   std::deque<Eigen::Vector3d> selected_goals_;
   // 2026-07-23: 每帧保留雷达原点和近水平回波的世界XY；不保存/比较世界z，从源头隔离高度退化。

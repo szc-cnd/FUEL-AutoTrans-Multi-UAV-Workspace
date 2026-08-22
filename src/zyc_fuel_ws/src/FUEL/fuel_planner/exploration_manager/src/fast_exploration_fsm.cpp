@@ -39,6 +39,11 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/endpoint_hold_lead_time", endpoint_hold_lead_time_, 0.05);
   endpoint_hold_lead_time_ = std::max(0.0, endpoint_hold_lead_time_);
   nh.param("fsm/periodic_replan_enabled", periodic_replan_enabled_, true);
+  nh.param("fsm/use_diff_for_fuel_exploration", use_diff_for_fuel_exploration_, false);
+  nh.param("fsm/fuel_diff_goal_topic", external_goal_topic_, external_goal_topic_);
+  nh.param("fsm/fuel_diff_status_topic", external_status_topic_, external_status_topic_);
+  nh.param("fsm/fuel_diff_cancel_topic", external_cancel_topic_, external_cancel_topic_);
+  nh.param("fsm/fuel_diff_trigger_topic", external_trigger_topic_, external_trigger_topic_);
   // 2026-07-28: 连续复核覆盖至少两次20Hz地图/安全周期；起点误差过大则从真实里程计重规划。
   nh.param("fsm/trajectory_release_confirm_time", fp_->trajectory_release_confirm_time_, 0.12);
   nh.param("fsm/trajectory_release_check_interval", fp_->trajectory_release_check_interval_, 0.04);
@@ -80,6 +85,17 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
            std::string("/UAV0/corridor_search/dynamic_detection_enable"));
   mission_status_sub_ = nh.subscribe(mission_status_topic, 2,
                                      &FastExplorationFSM::missionStatusCallback, this);
+  if (use_diff_for_fuel_exploration_) {
+    external_status_sub_ = nh.subscribe(
+        external_status_topic_, 10, &FastExplorationFSM::externalStatusCallback, this);
+    external_goal_pub_ = nh.advertise<quadrotor_msgs::ExplorationGoal>(
+        external_goal_topic_, 2, false);
+    external_cancel_pub_ = nh.advertise<quadrotor_msgs::ExplorationCancel>(
+        external_cancel_topic_, 2, false);
+    external_trigger_pub_ = nh.advertise<geometry_msgs::PoseStamped>(
+        external_trigger_topic_, 2, true);
+    external_session_id_ = static_cast<std::uint64_t>(ros::Time::now().toNSec());
+  }
 
   replan_pub_ = nh.advertise<std_msgs::Empty>("/planning/replan", 10);
   new_pub_ = nh.advertise<std_msgs::Empty>("/planning/new", 10);
@@ -161,6 +177,124 @@ void FastExplorationFSM::missionStatusCallback(const std_msgs::StringConstPtr &m
                             mission_allows_dynamic_detection_
                                 ? "inside corridor with published trajectory"
                                 : "outside corridor mission stage");
+  const bool landing_stage = state.find("SEARCH_OUTSIDE_LANDING") == 0 ||
+      state.find("SEARCH_OUTSIDE_QR") == 0 || state.find("APPROACH_LANDING") == 0 ||
+      state.find("LANDING") == 0;
+  if (use_diff_for_fuel_exploration_ && landing_stage) {
+    if (external_goal_pending_) {
+      quadrotor_msgs::ExplorationCancel cancel;
+      cancel.header.stamp = ros::Time::now();
+      cancel.session_id = external_session_id_;
+      cancel.goal_id = external_goal_id_;
+      cancel.reason = "landing handoff";
+      external_cancel_pub_.publish(cancel);
+    }
+    external_exploration_active_ = false;
+    external_goal_pending_ = false;
+    setSafetyHold(true, "landing handoff");
+  } else if (use_diff_for_fuel_exploration_ &&
+             state.find("SEARCH_CORRIDOR") == 0 && !external_exploration_active_) {
+    external_exploration_active_ = true;
+    external_goal_pending_ = false;
+    external_next_select_at_ = ros::Time::now();
+    if (fd_->have_odom_)
+      expl_manager_->freezeExplorationInitialYaw(fd_->odom_yaw_);
+    geometry_msgs::PoseStamped trigger;
+    trigger.header.stamp = ros::Time::now();
+    trigger.header.frame_id = "world";
+    trigger.pose = external_last_pose_;
+    external_trigger_pub_.publish(trigger);
+    setSafetyHold(true, "DIFF owns fuel exploration execution");
+    ROS_WARN("[fuel_diff] external DIFF execution activated after corridor handoff.");
+  }
+}
+
+bool FastExplorationFSM::publishExternalViewpoint() {
+  if (!use_diff_for_fuel_exploration_ || !external_exploration_active_ ||
+      !fd_->have_odom_) return false;
+  const ros::Time now = ros::Time::now();
+  expl_manager_->freezeExplorationInitialYaw(fd_->odom_yaw_);
+  if (external_goal_pending_) {
+    if ((now - external_goal_sent_at_).toSec() >= 1.0) {
+      external_last_goal_.header.stamp = now;
+      external_goal_pub_.publish(external_last_goal_);
+      external_goal_sent_at_ = now;
+    }
+    return true;
+  }
+  if (!external_next_select_at_.isZero() && now < external_next_select_at_) return true;
+
+  Vector3d next_pos;
+  double next_yaw = fd_->odom_yaw_;
+  if (!expl_manager_->selectExplorationViewpoint(
+          fd_->odom_pos_, fd_->odom_vel_, fd_->start_acc_, fd_->start_yaw_,
+          next_pos, next_yaw)) {
+    external_next_select_at_ = now + ros::Duration(0.50);
+    setSafetyHold(true, "FUEL has no executable viewpoint");
+    return false;
+  }
+  external_last_pose_ = geometry_msgs::Pose();
+  external_last_pose_.position.x = next_pos.x();
+  external_last_pose_.position.y = next_pos.y();
+  external_last_pose_.position.z = next_pos.z();
+  external_last_pose_.orientation.w = std::cos(0.5 * next_yaw);
+  external_last_pose_.orientation.z = std::sin(0.5 * next_yaw);
+  quadrotor_msgs::ExplorationGoal goal;
+  goal.header.stamp = now;
+  goal.header.frame_id = "world";
+  goal.session_id = external_session_id_;
+  goal.goal_id = ++external_goal_id_;
+  goal.target_type = quadrotor_msgs::ExplorationGoal::TARGET_FRONTIER;
+  goal.motion_type = quadrotor_msgs::ExplorationGoal::MOTION_MOVE;
+  goal.target_pose = external_last_pose_;
+  goal.enforce_yaw = false;
+  expl_manager_->fillExplorationConstraint(goal.motion_constraint);
+  external_last_goal_ = goal;
+  external_goal_pending_ = true;
+  external_goal_sent_at_ = now;
+  external_goal_pub_.publish(goal);
+  setSafetyHold(true, "waiting for DIFF trajectory");
+  ROS_INFO("[fuel_diff] publish goal session=%llu id=%llu view=(%.2f %.2f %.2f).",
+           static_cast<unsigned long long>(goal.session_id),
+           static_cast<unsigned long long>(goal.goal_id),
+           next_pos.x(), next_pos.y(), next_pos.z());
+  return true;
+}
+
+void FastExplorationFSM::externalStatusCallback(
+    const quadrotor_msgs::ExplorationGoalStatusConstPtr& msg) {
+  if (!use_diff_for_fuel_exploration_ || msg->session_id != external_session_id_ ||
+      msg->goal_id != external_goal_id_ || !external_goal_pending_)
+    return;
+  if (msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_ACCEPTED ||
+      msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_EXECUTING) {
+    setSafetyHold(true, "DIFF accepted/executing viewpoint");
+    return;
+  }
+  if (msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_REACHED) {
+    expl_manager_->recordExplorationReached(
+        Vector3d(external_last_pose_.position.x, external_last_pose_.position.y,
+                 external_last_pose_.position.z));
+    external_goal_pending_ = false;
+    external_next_select_at_ = ros::Time::now() + ros::Duration(0.05);
+    setSafetyHold(true, "viewpoint reached; selecting next FUEL viewpoint");
+    return;
+  }
+  if (msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_PREEMPTED &&
+      msg->reason == quadrotor_msgs::ExplorationGoalStatus::REASON_LANDING_HANDOFF) {
+    external_goal_pending_ = false;
+    external_exploration_active_ = false;
+    return;
+  }
+  if (msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_REJECTED ||
+      msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_PLANNING_FAILED ||
+      msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_ABORTED ||
+      msg->state == quadrotor_msgs::ExplorationGoalStatus::STATE_CANCELED) {
+    expl_manager_->reportTrajectoryCollision();
+    external_goal_pending_ = false;
+    external_next_select_at_ = ros::Time::now() + ros::Duration(0.05);
+    setSafetyHold(true, "DIFF failed viewpoint; FUEL selecting replacement");
+  }
 }
 
 void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
@@ -178,6 +312,15 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       requestActiveTrajectoryBrake("old trajectory ended before replacement publish");
       setEndpointHold(true, "wait for validated replacement at old trajectory endpoint");
     }
+  }
+
+  if (use_diff_for_fuel_exploration_ && external_exploration_active_ &&
+      state_ != INIT && state_ != FINISH) {
+    fd_->static_state_ = true;
+    fd_->start_acc_.setZero();
+    setSafetyHold(true, "DIFF external execution owner");
+    publishExternalViewpoint();
+    return;
   }
 
   switch (state_) {
