@@ -26,6 +26,7 @@ def test_arbiter_aborts_stale_fuel_and_gates_both_inputs():
 
 def test_uav0_launch_routes_fuel_and_diff_through_one_autotrans_input():
     root = ET.parse(PACKAGE / "launch/uav0_autotrans_controller.launch").getroot()
+    args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
     nodes = {node.attrib["name"]: node for node in root.findall("node")}
 
     fuel_params = {
@@ -41,8 +42,33 @@ def test_uav0_launch_routes_fuel_and_diff_through_one_autotrans_input():
         for item in nodes["autotrans_trajectory_arbiter"].findall("param")
     }
 
-    assert fuel_params["output_topic"] == "/UAV0/fuel/autotrans_trajectory"
+    assert args["pure_fuel_mode"] == "false"
+    assert fuel_params["output_topic"] == (
+        "$(eval '/UAV0/planning/autotrans_trajectory' if "
+        "arg('pure_fuel_mode') else '/UAV0/fuel/autotrans_trajectory')"
+    )
+    assert nodes["uav0_diff_autotrans_reference_bridge"].attrib["unless"] == (
+        "$(arg pure_fuel_mode)"
+    )
+    assert nodes["autotrans_trajectory_arbiter"].attrib["unless"] == (
+        "$(arg pure_fuel_mode)"
+    )
     assert diff_params["input_topic"] == "/drone_0_planning/trajectory"
     assert diff_params["output_topic"] == "/UAV0/diff/autotrans_trajectory"
     assert arbiter_params["output_topic"] == "/UAV0/planning/autotrans_trajectory"
     assert arbiter_params["stage_topic"] == "/UAV0/mission/task_status"
+
+    controller_include = next(
+        item
+        for item in root.findall("include")
+        if "quad_wind_mpc_controller.launch" in item.attrib["file"]
+    )
+    controller_args = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in controller_include.findall("arg")
+    }
+    assert controller_args["trajectory_topic"] == "/UAV0/planning/autotrans_trajectory"
+    assert controller_args["position_cmd_topic"] == (
+        "$(eval '/UAV0/fuel/planning/pos_cmd' if "
+        "arg('pure_fuel_mode') else '/UAV0/planning/pos_cmd')"
+    )

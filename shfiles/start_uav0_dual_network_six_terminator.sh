@@ -15,8 +15,8 @@ UAV0_LAUNCHER="${SCRIPT_DIR}/start_uav0_six_terminator.sh"
 source "${NETWORK_SETUP}"
 configure_dual_uav_ros_network uav0
 
-# 双机搜索降落模式必须经 landing_setpoint_arbiter 转发控制指令；
-# 原始单机六分屏不设置该变量，仍保持直接连接 MAVROS。
-export UAV0_AUTOTRANS_SETPOINT_TOPIC="/UAV0/control/attitude_setpoint"
+# 当前六分屏运行纯FUEL且不启动 landing_setpoint_arbiter，控制器必须直连MAVROS。
+# 显式覆盖该变量，避免父终端遗留的搜索降落配置截断控制指令。
+export UAV0_AUTOTRANS_SETPOINT_TOPIC="/UAV0/mavros/setpoint_raw/attitude"
 
 exec "${UAV0_LAUNCHER}" "$@"
