@@ -102,6 +102,28 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     assert source.count("++active_relay_index_") == 2
 
 
+def test_leader_odometry_uses_latest_low_latency_sample_and_rejects_delay():
+    source = FOLLOWER.read_text(encoding="utf-8")
+    assert "leader_odom_topic_, 1" in source
+    assert "ros::TransportHints().tcpNoDelay()" in source
+    callback = source.split("void leaderOdomCallback", 1)[1].split(
+        "void followerOdomCallback", 1
+    )[0]
+    assert "transport_age > leader_odom_max_transport_age_" in callback
+    assert "reject delayed leader odometry" in callback
+
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["leader_odom_max_transport_age"] == "0.50"
+
+
 def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
     root = ET.parse(LAUNCH).getroot()
     follower = next(

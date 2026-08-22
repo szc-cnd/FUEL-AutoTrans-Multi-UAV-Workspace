@@ -190,6 +190,9 @@ class LeaderSafePathFollower {
     pnh_.param("cruise_speed", cruise_speed_, 0.35);
     pnh_.param("max_vertical_speed", max_vertical_speed_, 0.20);
     pnh_.param("odom_timeout", odom_timeout_, 0.50);
+    // 跨机高频里程计发生网络积压时禁止用历史位置释放后机。
+    pnh_.param("leader_odom_max_transport_age",
+               leader_odom_max_transport_age_, 0.50);
     pnh_.param("cloud_timeout", cloud_timeout_, 0.60);
     pnh_.param("min_record_height", min_record_height_, 0.35);
     pnh_.param("obstacle_check_enabled", obstacle_check_enabled_, true);
@@ -256,8 +259,10 @@ class LeaderSafePathFollower {
     pnh_.param("diff_command_stale_timeout", diff_command_stale_timeout_, 0.80);
     pnh_.param("max_internal_relay_points", max_internal_relay_points_, 0);
 
-    leader_odom_sub_ = nh_.subscribe(leader_odom_topic_, 20,
-                                     &LeaderSafePathFollower::leaderOdomCallback, this);
+    // 安全门槛只需要最新位置。队列保留一帧并关闭 Nagle，避免网络恢复后依次回放旧坐标。
+    leader_odom_sub_ = nh_.subscribe(
+        leader_odom_topic_, 1, &LeaderSafePathFollower::leaderOdomCallback, this,
+        ros::TransportHints().tcpNoDelay());
     follower_odom_sub_ = nh_.subscribe(follower_odom_topic_, 20,
                                        &LeaderSafePathFollower::followerOdomCallback, this);
     follower_cloud_sub_ = nh_.subscribe(follower_cloud_topic_, 1,
@@ -730,8 +735,20 @@ class LeaderSafePathFollower {
   }
 
   void leaderOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+    const ros::Time now = ros::Time::now();
+    if (!msg->header.stamp.isZero()) {
+      const double transport_age = (now - msg->header.stamp).toSec();
+      if (transport_age > leader_odom_max_transport_age_) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "[safe_follower] reject delayed leader odometry age=%.3fs > %.3fs; "
+            "keep UAV1 parked.",
+            transport_age, leader_odom_max_transport_age_);
+        return;
+      }
+    }
     leader_odom_ = *msg;
-    leader_odom_stamp_ = ros::Time::now();
+    leader_odom_stamp_ = now;
     have_leader_odom_ = true;
     if (!leader_started_ && msg->pose.pose.position.z > leader_start_height_) {
       leader_started_ = true;
@@ -2372,7 +2389,8 @@ class LeaderSafePathFollower {
   double turn_branch_confirm_distance_{0.50}, turn_candidate_length_{0.0};
   double max_target_step_{0.55}, route_tracking_lookahead_{0.30};
   double cruise_speed_{0.35}, max_vertical_speed_{0.20};
-  double odom_timeout_{0.50}, cloud_timeout_{0.60}, min_record_height_{0.35};
+  double odom_timeout_{0.50}, leader_odom_max_transport_age_{0.50};
+  double cloud_timeout_{0.60}, min_record_height_{0.35};
   double obstacle_radius_{0.28}, obstacle_z_margin_{0.20}, obstacle_ignore_near_{0.18};
   double dynamic_obstacle_retention_{0.80}, dynamic_obstacle_safety_radius_{0.35};
   double dynamic_obstacle_z_margin_{0.18};

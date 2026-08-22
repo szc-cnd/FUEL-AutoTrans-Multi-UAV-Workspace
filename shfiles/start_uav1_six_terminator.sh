@@ -210,6 +210,25 @@ wait_for_mavros_connected() {
   return 1
 }
 
+verify_follower_binary_fresh() {
+  local follower_binary="${MATCH_WS}/devel/lib/exploration_control/leader_safe_path_follower"
+  local stale_source
+  if [[ ! -x "${follower_binary}" ]]; then
+    printf '[错误] 缺少接力管理器：%s\n' "${follower_binary}"
+    printf '[处理] 请在 %s 重新编译 exploration_control 后再启动。\n' "${MATCH_WS}"
+    return 1
+  fi
+  stale_source="$(find \
+    "${MATCH_WS}/src/control/src/leader_safe_path_follower.cpp" \
+    "${MATCH_WS}/src/control/CMakeLists.txt" \
+    -newer "${follower_binary}" -print -quit)"
+  if [[ -n "${stale_source}" ]]; then
+    printf '[错误] 接力管理器二进制比源码旧：%s\n' "${stale_source}"
+    printf '[处理] 请重新编译 exploration_control；为避免误用旧逻辑，本屏停止启动。\n'
+    return 1
+  fi
+}
+
 pane_init() {
   local pane_number="$1" pane_name="$2"
   printf '\n========== UAV1 第 %s 屏：%s ==========\n' "${pane_number}" "${pane_name}"
@@ -257,11 +276,12 @@ run_pose_pane() {
 
 run_planner_pane() {
   pane_init 5 双机航点接力与UAV1 Diff
+  verify_follower_binary_fresh || keep_pane_open
   wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
   wait_for_topic_message "${CLOUD_TOPIC}" || keep_pane_open
   wait_for_topic_message /UAV0/fast_lio/Odom_high_freq || keep_pane_open
   printf '[启动] UAV1 航点接力管理器、坐标对齐、Diff-Planner与搜索降落节点\n'
-  printf '[安全] 不执行预设航点，只接收前机满足1m间距门槛后发布的接力目标。\n'
+  printf '[安全] 不执行预设航点，只接收前机满足0.70m放行门槛后发布的接力目标。\n'
   roslaunch exploration_control leader_safe_path_follower.launch
   printf '[退出] 双机航点接力分屏，返回码=%s\n' "$?"
   keep_pane_open

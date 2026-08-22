@@ -124,6 +124,8 @@
         <param name="max_target_step" value="0.55"/>
         <!-- 2026-07-15: 每次只沿前机历史折线前视0.30m，避免在U形/直角通道直接连远端滞后点切墙。 -->
         <param name="route_tracking_lookahead" value="0.30"/>
+        <!-- 跨机高频里程计积压时保持UAV1等待，禁止用超过0.5s的历史位置做放行判断。 -->
+        <param name="leader_odom_max_transport_age" value="0.50"/>
         <!-- 2026-07-21: 用最近0.45m实飞路线切线判定前进，不使用当前不随转弯更新的雷达yaw；
              投影<-0.20且累计倒退0.60m才暂停，正常直角/U形转弯可连续生成接力点。 -->
         <param name="forward_projection_ratio" value="-0.20"/>
