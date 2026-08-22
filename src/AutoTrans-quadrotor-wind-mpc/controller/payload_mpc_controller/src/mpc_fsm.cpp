@@ -2067,7 +2067,7 @@ namespace PayloadMPC
 	{
 		const RecoveryAttitudeCommand command = makeRecoveryAttitudeCommand(
 			force_attitude_odom_data.q, hover_yaw_,
-			params_.thr_map_.hover_percentage,
+			controller_.currentHoverPercentage(),
 			params_.thr_map_.max_normalized_thrust,
 			params_.safety_.mpc_recovery_max_thrust_comp_tilt_deg * kDegToRad);
 		if (!command.valid)

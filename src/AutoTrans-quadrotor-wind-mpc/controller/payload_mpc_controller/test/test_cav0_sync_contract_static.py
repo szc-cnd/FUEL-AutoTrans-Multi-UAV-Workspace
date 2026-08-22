@@ -56,6 +56,10 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("IGNORE_PITCH_RATE", attitude_publish)
         self.assertIn("IGNORE_YAW_RATE", attitude_publish)
         self.assertNotIn("IGNORE_ATTITUDE", attitude_publish)
+        self.assertIn("controller_.currentHoverPercentage()", attitude_publish)
+        self.assertNotIn("params_.thr_map_.hover_percentage", attitude_publish)
+        self.assertIn("double currentHoverPercentage() const;", header)
+        self.assertIn("weight / thrustscale_", controller)
 
         self.assertIn("std::mutex external_force_mutex_", header)
         setter = controller.split("void MpcController::setExternalForce", 1)[1]

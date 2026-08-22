@@ -803,6 +803,23 @@ namespace PayloadMPC
     debug.hover_percentage = params_.thr_map_.hover_percentage;
   }
 
+  double MpcController::currentHoverPercentage() const
+  {
+    const double weight = params_.gravity_ * params_.dyn_params_.mass_q;
+    if (!std::isfinite(weight) || weight <= 0.0 ||
+        !std::isfinite(thrustscale_) || thrustscale_ <= 0.0)
+    {
+      return params_.thr_map_.hover_percentage;
+    }
+    const double hover_percentage = weight / thrustscale_;
+    if (!std::isfinite(hover_percentage) || hover_percentage < 0.1 ||
+        hover_percentage > 0.8)
+    {
+      return params_.thr_map_.hover_percentage;
+    }
+    return hover_percentage;
+  }
+
   void MpcController::clearThrustCommandHistory(void)
   {
     std::queue<std::pair<ros::Time, double>> empty;

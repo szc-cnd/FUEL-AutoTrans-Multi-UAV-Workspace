@@ -106,11 +106,13 @@ namespace PayloadMPC
     std::queue<std::pair<ros::Time, double>> timed_thrust;
     double thr_scale_compensate;
     const double rho2 = 0.998; // do not change
-    double thrustscale_;
+    double thrustscale_{0.0};
     double P;
     quadrotor_msgs::Px4ctrlDebug debug;
 
     void resetThrustMapping(void);
+    // 返回当前在线推力映射对应的悬停比例，不向 RLS 历史队列写入样本。
+    double currentHoverPercentage() const;
     // 清除尚未与 RPM 对齐的推力指令，但保留最后有效 thrustscale 和 RLS 协方差。
     void clearThrustCommandHistory(void);
     double convertThrust(const double& thrust, const double voltage);
