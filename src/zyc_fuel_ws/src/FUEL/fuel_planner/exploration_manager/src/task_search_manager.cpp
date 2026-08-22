@@ -21,6 +21,8 @@ namespace fast_planner {
 
 void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/enabled", enabled_, true);
+  nh.param("fsm/use_diff_for_fuel_exploration",
+           hybrid_constraints_enabled_, false);
   // 2026-07-16: false只关闭三类识别对任务状态切换的阻塞，不删除话题订阅和后续接入接口。
   nh.param("mission/task_search/require_stage2_detections", require_stage2_detections_, true);
   nh.param("mission/task_search/world_frame", world_frame_, std::string("world"));
@@ -352,9 +354,10 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   publishLandingRequest(false);
 
   ROS_WARN("[task_search] stage-2 task search enabled=%d detections_required=%d, "
-           "z=[%.2f, %.2f], revisit=%.2f.",
+           "z=[%.2f, %.2f], revisit=%.2f, route_constraints=%s.",
            static_cast<int>(enabled_), static_cast<int>(require_stage2_detections_),
-           min_search_height_, max_search_height_, revisit_radius_);
+           min_search_height_, max_search_height_, revisit_radius_,
+           hybrid_constraints_enabled_ ? "FUEL_DIFF" : "NATIVE_FUEL");
   // 2026-07-22: 启动日志明确输出“终点预测不等于目标”和门后FREE分支门槛，便于现场核对参数生效。
   ROS_WARN("[exit_mission] endpoint-hint-only + corridor-wall-end validation enabled, grid=%.2f "
            "min_path=%.2f outside_route=%.2f confirm=%d landing_marker_required=%d "
@@ -534,7 +537,7 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
     latest_robot_pose_valid_ = true;
     ++latest_robot_pose_sequence_;
   }
-  if (segment_direction_.norm() > 1e-3) {
+  if (hybrid_constraints_enabled_ && segment_direction_.norm() > 1e-3) {
     const double progress =
         (pos.head<2>() - segment_origin_).dot(segment_direction_.normalized());
     if (!transition_active_)
@@ -1051,7 +1054,8 @@ int TaskSearchManager::selectSearchCandidate(
   // frontier的前后语义与恢复器使用同一条持久通道轴线。机头转动和避障斜飞
   // 都不能让候选排序跟着偏转；真实拐弯由累计地图确认后才更新该轴线。
   Eigen::Vector2d motion_forward = stableProgressDirection();
-  if (exploration_initial_yaw_frozen_ && !corridor_frame_received_)
+  if (hybrid_constraints_enabled_ && exploration_initial_yaw_frozen_ &&
+      !corridor_frame_received_)
     motion_forward = Eigen::Vector2d(std::cos(exploration_initial_yaw_),
                                      std::sin(exploration_initial_yaw_));
   if (motion_forward.norm() < 1e-3)
@@ -1441,6 +1445,10 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       const Eigen::Vector2d direction(
           std::cos(signed_angle) * travel.x() - std::sin(signed_angle) * travel.y(),
           std::sin(signed_angle) * travel.x() + std::cos(signed_angle) * travel.y());
+      if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
+          !task_search::insideForwardHalfPlane(direction,
+                                               corridor_dir_.head<2>()))
+        continue;
       const double free_length = knownFreeLength(contour_origin, direction);
       if (free_length < recovery_turn_min_free_length_ ||
           free_length < contour_forward_free + recovery_turn_min_free_gain_)
@@ -1520,30 +1528,35 @@ void TaskSearchManager::commitCorridorTurn(
   latest_turn_anchor_ = anchor;
   latest_turn_incoming_direction_ = incoming;
   latest_turn_anchor_valid_ = true;
-  CompletedGate gate;
-  gate.sequence = next_gate_sequence_++;
-  gate.center = anchor;
-  gate.normal = incoming;
-  gate.left_extent = 1.45;
-  gate.right_extent = 1.45;
-  gate.thickness = 0.30;
-  completed_gates_.push_back(gate);
-  if (completed_gates_.size() > 64) completed_gates_.erase(completed_gates_.begin());
-  transition_active_ = true;
-  transition_anchor_ = anchor;
-  transition_incoming_direction_ = incoming;
-  transition_outgoing_direction_ = outgoing;
-  transition_old_high_water_ = segment_high_water_;
-  segment_origin_ = anchor;
-  segment_direction_ = outgoing;
-  segment_high_water_ = 0.0;
+  if (hybrid_constraints_enabled_) {
+    CompletedGate gate;
+    gate.sequence = next_gate_sequence_++;
+    gate.center = anchor;
+    gate.normal = incoming;
+    gate.left_extent = 1.45;
+    gate.right_extent = 1.45;
+    gate.thickness = 0.30;
+    completed_gates_.push_back(gate);
+    if (completed_gates_.size() > 64)
+      completed_gates_.erase(completed_gates_.begin());
+    transition_active_ = true;
+    transition_anchor_ = anchor;
+    transition_incoming_direction_ = incoming;
+    transition_outgoing_direction_ = outgoing;
+    transition_old_high_water_ = segment_high_water_;
+    segment_origin_ = anchor;
+    segment_direction_ = outgoing;
+    segment_high_water_ = 0.0;
+  }
   stable_progress_direction_ = outgoing;
   stable_progress_direction_valid_ = true;
   // A confirmed turn starts a new FUEL segment. Keep the yaw reference tied to
   // that segment instead of letting the instantaneous body yaw redefine
   // which frontier is considered "in front".
-  exploration_initial_yaw_ = std::atan2(outgoing.y(), outgoing.x());
-  exploration_initial_yaw_frozen_ = true;
+  if (hybrid_constraints_enabled_) {
+    exploration_initial_yaw_ = std::atan2(outgoing.y(), outgoing.x());
+    exploration_initial_yaw_frozen_ = true;
+  }
   turn_yaw_follow_latch_.arm(outgoing);
   ROS_ERROR("[task_search] confirmed %s turn %.1fdeg at (%.2f,%.2f); "
             "new wall-parallel yaw=%.1fdeg and latest completed direction is no-return.",
@@ -1587,6 +1600,9 @@ Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
+  if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
+      !task_search::insideForwardHalfPlane(stable, corridor_dir_.head<2>()))
+    stable = corridor_dir_.head<2>().normalized();
   const Eigen::Vector3d travel(stable.x(), stable.y(), 0.0);
   Eigen::Vector3d occupancy_turn;
   double forward_free_length = 0.0;
@@ -1606,6 +1622,10 @@ Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
 // 2026-07-28: 与普通候选使用相同角度阈值，避免恢复器和frontier对“后退”的定义不一致。
 bool TaskSearchManager::isRecoveryDirectionBackward(
     const Eigen::Vector3d& direction, double cur_yaw) {
+  if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
+      !task_search::insideForwardHalfPlane(direction.head<2>(),
+                                           corridor_dir_.head<2>()))
+    return true;
   const Eigen::Vector3d forward = recoveryForwardDirection(cur_yaw);
   return direction.head<2>().norm() > 1e-3 &&
          direction.head<2>().normalized().dot(forward.head<2>()) <
@@ -1635,6 +1655,10 @@ std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_ya
   for (double offset : offsets) {
     const double yaw = wrapYaw(travel_yaw + offset);
     Eigen::Vector3d dir(std::cos(yaw), std::sin(yaw), 0.0);
+    if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
+        !task_search::insideForwardHalfPlane(dir.head<2>(),
+                                             corridor_dir_.head<2>()))
+      continue;
     const Eigen::Vector3d probe =
         visited_positions_.empty() ? dir : visited_positions_.back() + 1.2 * dir;
     const double novelty = minDistance2D(probe, visited_positions_);
@@ -1654,6 +1678,13 @@ std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_ya
 
 bool TaskSearchManager::isRecoveryCandidateUseful(const Eigen::Vector3d& candidate) const {
   // 恢复点只受入口和最终出口边界约束；历史航迹距离不能否决窄通道中的侧移绕障。
+  if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
+      !visited_positions_.empty()) {
+    const Eigen::Vector2d motion =
+        candidate.head<2>() - visited_positions_.back().head<2>();
+    if (!task_search::insideForwardHalfPlane(motion, stableProgressDirection()))
+      return false;
+  }
   return isTaskMotionAllowed(candidate);
 }
 
@@ -1691,6 +1722,13 @@ bool TaskSearchManager::isMissionBoundaryMotionAllowed(
 bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) const {
   if (!isMissionBoundaryMotionAllowed(candidate)) return false;
   if (!global_no_return_ || !corridor_frame_received_) return true;
+  if (!hybrid_constraints_enabled_) {
+    return !latest_turn_anchor_valid_ ||
+           task_search::passesLatestTurnNoReturn(
+               candidate.head<2>(), latest_turn_anchor_,
+               latest_turn_incoming_direction_, stableProgressDirection(),
+               recovery_turn_no_return_margin_);
+  }
   if (transition_active_ &&
       (candidate.head<2>() - transition_anchor_).norm() <= 0.80 + 1e-6)
     return true;
@@ -1734,6 +1772,8 @@ bool TaskSearchManager::isTaskPathAllowed(
     if (!isTaskMotionAllowed(point)) return false;
   }
 
+  if (!hybrid_constraints_enabled_) return true;
+
   // 解析检查每一段，保证端点合法但中途穿过历史门的路径仍被拒绝。
   // During the short turn transition the outgoing segment is allowed to leave
   // the anchor through the completed gate; the corridor envelope above is the
@@ -1765,7 +1805,24 @@ bool TaskSearchManager::isTaskPathAllowed(
 
 bool TaskSearchManager::isRecoveryPathAllowed(
     const std::vector<Eigen::Vector3d>& path, bool allow_initial_reverse) const {
-  (void)allow_initial_reverse;
+  if (!hybrid_constraints_enabled_) {
+    if (corridor_frame_received_ && path.size() >= 2) {
+      const Eigen::Vector2d progress_direction = stableProgressDirection();
+      const double start_progress =
+          path.front().head<2>().dot(progress_direction);
+      for (const auto& point : path) {
+        if (point.head<2>().dot(progress_direction) < start_progress - 1e-3)
+          return false;
+      }
+    }
+    if (!allow_initial_reverse) return isTaskPathAllowed(path);
+    if (!global_no_return_ || !corridor_frame_received_ || path.empty())
+      return true;
+    for (const auto& point : path) {
+      if (!isTaskMotionAllowed(point)) return false;
+    }
+    return true;
+  }
   if (!allow_initial_reverse) return isTaskPathAllowed(path);
   if (!global_no_return_ || !corridor_frame_received_ || path.empty()) return true;
 

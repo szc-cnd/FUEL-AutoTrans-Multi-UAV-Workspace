@@ -200,6 +200,8 @@ private:
   std::shared_ptr<SDFMap> sdf_map_;
 
   bool enabled_{true};
+  // Hybrid route history must not alter native FUEL exploration behavior.
+  bool hybrid_constraints_enabled_{false};
   // 2026-07-16: 颜色、普通二维码、温度识别接口始终保留；无摄像头时可关闭其任务完成门槛。
   bool require_stage2_detections_{true};
   bool corridor_frame_received_{false};
