@@ -34,6 +34,17 @@ private:
   bool active_{false};
 };
 
+inline bool corridorYawCorrectionNeeded(const Eigen::Vector2d& corridor_direction,
+                                        double current_yaw,
+                                        double correction_threshold) {
+  if (corridor_direction.norm() < 1e-6) return false;
+  const Eigen::Vector2d direction = corridor_direction.normalized();
+  const double target_yaw = std::atan2(direction.y(), direction.x());
+  const double error = std::atan2(std::sin(target_yaw - current_yaw),
+                                  std::cos(target_yaw - current_yaw));
+  return std::fabs(error) > std::max(0.0, correction_threshold);
+}
+
 inline bool isStationaryVerticalMotion(const Eigen::Vector3d& start,
                                        const Eigen::Vector3d& target,
                                        double xy_tolerance,

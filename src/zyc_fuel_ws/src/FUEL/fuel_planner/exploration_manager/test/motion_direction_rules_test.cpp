@@ -89,6 +89,17 @@ int main() {
                                      turn_direction));
   assert(!turn_latch.arm(Eigen::Vector2d::Zero()));
 
+  // 分段建立后，只有机头明显偏离实际通道轴线才校正；该判断不创建新分段。
+  assert(fast_planner::task_search::corridorYawCorrectionNeeded(
+      Eigen::Vector2d(0.0, 1.0), 60.0 * M_PI / 180.0,
+      15.0 * M_PI / 180.0));
+  assert(!fast_planner::task_search::corridorYawCorrectionNeeded(
+      Eigen::Vector2d(0.0, 1.0), 80.0 * M_PI / 180.0,
+      15.0 * M_PI / 180.0));
+  assert(fast_planner::task_search::corridorYawCorrectionNeeded(
+      Eigen::Vector2d(-1.0, 0.0), -170.0 * M_PI / 180.0,
+      5.0 * M_PI / 180.0));
+
   // 悬空障碍下探只豁免原地改变高度，带明显XY移动的斜向俯冲仍不能走该通道。
   assert(fast_planner::task_search::isStationaryVerticalMotion(
       Eigen::Vector3d(4.95, 1.28, 0.59),

@@ -40,6 +40,9 @@ public:
   bool astarNoReturnDirection(Eigen::Vector3d& direction) const;
   // 查询并锁存累计占据地图确认的真实转弯，直到机头对准新通道，防止位置恢复先消费结果。
   bool mappedCorridorDirection(double cur_yaw, Eigen::Vector3d& direction);
+  // 已建立分段后，机头偏离实际通道轴线时只校正yaw，不重复建立分段或禁回门。
+  bool corridorYawCorrectionDirection(double cur_yaw,
+                                      Eigen::Vector3d& direction) const;
   bool turnYawAlignmentPending() const { return turn_yaw_follow_latch_.active(); }
   bool isRecoveryDirectionBackward(const Eigen::Vector3d& direction,
                                    double cur_yaw);
@@ -359,7 +362,7 @@ private:
   double recovery_turn_wall_min_half_width_{0.35};
   double recovery_turn_wall_max_half_width_{1.05};
   int recovery_turn_min_wall_support_{2};
-  int recovery_turn_confirmation_count_{2};
+  int recovery_turn_confirmation_count_{1};
   double recovery_turn_confirmation_min_interval_{0.15};
   double recovery_turn_confirmation_angle_deg_{15.0};
   double recovery_turn_confirmation_accumulation_window_{8.0};

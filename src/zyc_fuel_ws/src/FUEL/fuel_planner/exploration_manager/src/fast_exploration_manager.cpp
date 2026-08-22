@@ -2533,17 +2533,29 @@ int FastExplorationManager::planExploreMotion(
   const bool mapped_turn_detected =
       mapped_turn_yaw_eligible && task_search_manager_ &&
       task_search_manager_->mappedCorridorDirection(yaw[0], mapped_direction);
-  if (mapped_turn_detected) {
+  const bool corridor_yaw_correction =
+      !mapped_turn_detected && corridor_yaw_lock_scope && task_search_manager_ &&
+      task_search_manager_->corridorYawCorrectionDirection(yaw[0], mapped_direction);
+  if (mapped_turn_detected || corridor_yaw_correction) {
     // 地图墙体轮廓独立于本次轨迹方向触发：yaw只朝向双墙确认的新通道轴线，
     // 不能跟随局部A*绕柱切线，否则一次普通侧绕也会带着机头误转。
     next_yaw = std::atan2(mapped_direction.y(), mapped_direction.x());
     look_forward_along_trajectory = false;
     camera_head_sweep_active = false;
     camera_continuous_rotation_active = false;
-    ROS_WARN("[turn_yaw_follow] mapped bilateral-wall turn latched; hold wall-parallel target yaw=%.1fdeg.",
-             next_yaw * 180.0 / M_PI);
-    // 若本轮普通规划才累计到第二票，丢弃刚生成的平移轨迹，先停住把机头转正。
-    if (buildTurnInPlacePlan(pos, yaw, mapped_direction)) return SUCCEED;
+    if (mapped_turn_detected) {
+      ROS_WARN("[turn_yaw_follow] mapped bilateral-wall turn latched; hold "
+               "wall-parallel target yaw=%.1fdeg.",
+               next_yaw * 180.0 / M_PI);
+    } else {
+      ROS_WARN("[corridor_yaw_correction] body yaw drifted from the current "
+               "segment axis; correct to %.1fdeg without creating a new segment.",
+               next_yaw * 180.0 / M_PI);
+    }
+    // 新通道首次确认时丢弃刚生成的平移轨迹并先对准机头；普通轴线校正继续平移。
+    if (mapped_turn_detected &&
+        buildTurnInPlacePlan(pos, yaw, mapped_direction))
+      return SUCCEED;
   } else if (task_search::holdYawInCorridor(
                  corridor_yaw_lock_scope, mapped_turn_detected)) {
     // 通道内除累计地图确认的真实拐弯外，任何位置运动都不能改变机头方向。

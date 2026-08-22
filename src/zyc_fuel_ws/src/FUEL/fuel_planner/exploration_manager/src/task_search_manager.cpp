@@ -96,7 +96,7 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/recovery/turn_min_wall_support",
            recovery_turn_min_wall_support_, 2);
   nh.param("mission/task_search/recovery/turn_confirmation_count",
-           recovery_turn_confirmation_count_, 2);
+           recovery_turn_confirmation_count_, 1);
   nh.param("mission/task_search/recovery/turn_confirmation_min_interval",
            recovery_turn_confirmation_min_interval_, 0.15);
   nh.param("mission/task_search/recovery/turn_confirmation_angle_deg",
@@ -727,6 +727,19 @@ Eigen::Vector2d TaskSearchManager::stableProgressDirection() const {
   if (corridor_frame_received_ && corridor_dir_.head<2>().norm() > 1e-3)
     return corridor_dir_.head<2>().normalized();
   return Eigen::Vector2d(std::cos(latest_robot_yaw_), std::sin(latest_robot_yaw_));
+}
+
+bool TaskSearchManager::corridorYawCorrectionDirection(
+    double cur_yaw, Eigen::Vector3d& direction) const {
+  if (!stable_progress_direction_valid_ && !corridor_frame_received_) return false;
+  const Eigen::Vector2d stable = stableProgressDirection();
+  const double correction_threshold =
+      std::max(0.0, recovery_turn_yaw_release_angle_deg_) * M_PI / 180.0;
+  if (!task_search::corridorYawCorrectionNeeded(
+          stable, cur_yaw, correction_threshold))
+    return false;
+  direction = Eigen::Vector3d(stable.x(), stable.y(), 0.0);
+  return true;
 }
 
 // 2026-07-23: 机体系点云仅按仰角保留近水平射线，再用最新XY/yaw放入1.5秒局部平面；

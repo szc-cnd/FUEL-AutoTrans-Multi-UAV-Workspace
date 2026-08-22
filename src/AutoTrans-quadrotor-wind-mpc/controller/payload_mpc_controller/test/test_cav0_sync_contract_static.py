@@ -73,12 +73,13 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         initialize = initialize.split("bool MpcWrapper::setCosts", 1)[0]
         self.assertNotIn("acado_preparationStep();", initialize)
 
-    def test_bridge_uses_latched_output_and_two_second_timeout_abort(self):
+    def test_bridge_uses_latched_output_and_post_trajectory_timeout_abort(self):
         bridge = (
             WORKSPACE / "src/autotrans_reference_bridge/src/fuel_autotrans_bridge_node.cpp"
         ).read_text(encoding="utf-8")
         self.assertIn("advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true)", bridge)
         self.assertIn('param("trajectory_timeout", trajectory_timeout_, 2.0)', bridge)
+        self.assertIn("abort_deadline_ = active_until", bridge)
         self.assertIn("createTimer", bridge)
         self.assertIn("ACTION_ABORT", bridge)
 

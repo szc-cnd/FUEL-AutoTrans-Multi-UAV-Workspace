@@ -28,3 +28,9 @@ def test_fuel_coefficients_match_autotrans_polynomial_column_order():
     assert "for (int i = DEGREE; i >= 0; i--)" in AUTOTRANS_POLYNOMIAL
     assert "for (int order = degree; order >= 0; --order)" in FUEL_SOURCE
     assert "output.data.push_back(coefficients(order, dim));" in FUEL_SOURCE
+
+
+def test_fuel_timeout_starts_after_active_trajectory_ends():
+    assert "trajectory_end > last_input_time_ ? trajectory_end : last_input_time_" in FUEL_SOURCE
+    assert "abort_deadline_ = active_until + ros::Duration(trajectory_timeout_)" in FUEL_SOURCE
+    assert "ros::Time::now() <= abort_deadline_" in FUEL_SOURCE

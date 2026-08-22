@@ -21,7 +21,8 @@ class FuelAutoTransBridge
 {
 public:
   FuelAutoTransBridge()
-      : nh_(), private_nh_("~"), last_input_time_(0), last_trajectory_id_(1), abort_sent_(false)
+      : nh_(), private_nh_("~"), last_input_time_(0), abort_deadline_(0),
+        last_trajectory_id_(1), abort_sent_(false)
   {
     private_nh_.param<std::string>("input_topic", input_topic_, "/UAV0/planning/bspline");
     private_nh_.param<std::string>("output_topic", output_topic_,
@@ -265,16 +266,32 @@ private:
     }
     output_pub_.publish(output);
     last_input_time_ = ros::Time::now();
+    double trajectory_duration = 0.0;
+    for (const auto& piece : output.trajectory)
+    {
+      trajectory_duration += piece.duration;
+    }
+    const ros::Time trajectory_end =
+        output.header.stamp + ros::Duration(trajectory_duration);
+    const ros::Time active_until =
+        trajectory_end > last_input_time_ ? trajectory_end : last_input_time_;
+    // trajectory_timeout_ is loss-of-command grace after the active trajectory ends,
+    // not a fixed lifetime measured from receipt. Long valid turns must finish first.
+    abort_deadline_ = active_until + ros::Duration(trajectory_timeout_);
     last_trajectory_id_ = output.trajectory_id;
     abort_sent_ = false;
-    ROS_INFO_THROTTLE(1.0, "[fuel_autotrans_bridge] Forward FUEL trajectory id=%u, pieces=%zu, yaw=enabled.",
-                      output.trajectory_id, output.trajectory.size());
+    ROS_INFO_THROTTLE(
+        1.0,
+        "[fuel_autotrans_bridge] Forward FUEL trajectory id=%u, pieces=%zu, "
+        "duration=%.2fs, yaw=enabled, abort grace=%.2fs after trajectory end.",
+        output.trajectory_id, output.trajectory.size(), trajectory_duration,
+        trajectory_timeout_);
   }
 
   void timeoutCallback(const ros::TimerEvent&)
   {
-    if (last_input_time_.isZero() || abort_sent_ ||
-        (ros::Time::now() - last_input_time_).toSec() <= trajectory_timeout_)
+    if (last_input_time_.isZero() || abort_deadline_.isZero() || abort_sent_ ||
+        ros::Time::now() <= abort_deadline_)
     {
       return;
     }
@@ -287,7 +304,9 @@ private:
     abort_message.has_yaw = false;
     output_pub_.publish(abort_message);
     abort_sent_ = true;
-    ROS_ERROR("[fuel_autotrans_bridge] FUEL B-spline timeout; ACTION_ABORT published.");
+    ROS_ERROR("[fuel_autotrans_bridge] FUEL B-spline expired and no replacement "
+              "arrived during %.2fs grace; ACTION_ABORT published.",
+              trajectory_timeout_);
   }
 
   ros::NodeHandle nh_;
@@ -300,6 +319,7 @@ private:
   std::string frame_id_;
   double trajectory_timeout_;
   ros::Time last_input_time_;
+  ros::Time abort_deadline_;
   uint32_t last_trajectory_id_;
   bool abort_sent_;
 };
