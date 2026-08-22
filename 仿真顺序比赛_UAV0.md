@@ -433,7 +433,7 @@ python .\target_reporting\scripts\target_report_server.py `
 C:\Users\Jayus\Documents\飞行器比赛\received_target_reports\$missionId\
 ```
 
-#### 前机 UAV0 机载端（192.168.31.21）
+#### 前机 UAV0 机载端（10.32.24.212）
 
 先按前面的步骤启动 FAST-LIO 和位姿回传，然后回到第 5 节选择方案 A 或方案 B，
 执行对应的一键命令一次即可。该入口会同时启动相机外参 TF、检测和目标上报，
@@ -455,7 +455,7 @@ image_port: 5001
 mission_id: "auto"  # 自动使用当天的 onboard_test_YYYYMMDD
 ```
 
-`192.168.31.21` 是前机 UAV0 的机载端地址，不能填到 `remote_host`；Windows 接收服务器
+`10.32.24.212` 是前机 UAV0 的机载端地址，不能填到 `remote_host`；Windows 接收服务器
 未启动时，检测、规划和 RViz 仍可运行，上报客户端会自动重试。候选结果只在机载端
 用于 RViz，不发送到 Windows；Windows 只接收检测器确认目标和带框证据图片。
 
