@@ -90,7 +90,7 @@
         <param name="down_search_min_vertical_separation" value="1.00"/>
         <!-- 2026-07-16: 前机公开发布滚动任务接力点，后续双计算机只需桥接这个低带宽Path话题。 -->
         <param name="relay_path_topic" value="/UAV0/mission/relay_waypoints"/>
-        <!-- 出口前沿前机实飞XY折线保持1.00m滞后；后机名义高度与起飞悬停统一为0.60m。 -->
+        <!-- 出口前沿前机实飞XY折线保持0.70m滞后；后机名义高度与起飞悬停统一为0.60m。 -->
         <!-- 2026-07-28: Diff按释放后的目标独立搜索避障轨迹，不再用50Hz移动目标追逐前机。 -->
         <param name="continuous_follow_before_exit" value="false"/>
         <!-- 2026-07-27: 后机通道连续跟随速度上限与前机 FUEL 的 0.5m/s 对齐，避免长期速度差持续放大跟随滞后。 -->
@@ -99,11 +99,11 @@
         <param name="leader_task_status_topic" value="/UAV0/mission/task_status"/>
         <!-- 后机在入门目标释放后独立开启LDOP。 -->
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
-        <param name="follow_distance" value="1.00"/>
-        <param name="release_path_length" value="1.00"/>
+        <param name="follow_distance" value="0.70"/>
+        <param name="release_path_length" value="0.70"/>
         <param name="min_separation" value="0.50"/>
-        <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到1m后，才向UAV1释放普通航点。 -->
-        <param name="waypoint_release_min_separation" value="1.00"/>
+        <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到0.70m后，才向UAV1释放普通航点。 -->
+        <param name="waypoint_release_min_separation" value="0.70"/>
         <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
         <param name="fixed_follow_height" value="0.60"/>
         <param name="follow_height_min" value="0.60"/>
@@ -132,9 +132,9 @@
         <param name="route_resume_radius" value="0.45"/>
         <!-- 2026-07-21: U形转弯负投影轨迹离开旧路线0.5m后确认为新分支，恢复接力且保留完整弯曲路径。 -->
         <param name="turn_branch_confirm_distance" value="0.50"/>
-        <!-- 门点及内部接力点都等前机沿路线清空1m，并通过上方实时双机距离检查。 -->
-        <param name="door_release_inside_distance" value="1.00"/>
-        <param name="relay_release_distance" value="1.00"/>
+        <!-- 门点及内部接力点都等前机沿路线清空0.70m，并通过上方实时双机距离检查。 -->
+        <param name="door_release_inside_distance" value="0.70"/>
+        <param name="relay_release_distance" value="0.70"/>
         <param name="relay_waypoint_spacing" value="2.50"/>
         <param name="relay_arrive_radius" value="0.25"/>
         <param name="relay_arrive_z_tolerance" value="0.20"/>
@@ -184,8 +184,7 @@
         <param name="recovery_attempt_timeout" value="1.50"/>
         <param name="recovery_success_distance" value="0.12"/>
         <param name="recovery_near_ignore" value="0.06"/>
-        <!-- 2026-07-27: 点云阻挡1秒触发局部脱困；非门点/非终点持续6秒不可达则跳过，避免队列永久锁死。 -->
+        <!-- 点云阻挡1秒触发局部脱困；当前缓存点未到达前始终保持，不允许自动跳点。 -->
         <param name="blocked_recovery_timeout" value="1.00"/>
-        <param name="waypoint_unreachable_timeout" value="6.00"/>
     </node>
 </launch>

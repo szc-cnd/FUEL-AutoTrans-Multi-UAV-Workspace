@@ -49,7 +49,7 @@ def test_waypoint_conversion_uses_rigid_transform_and_inverse():
     assert "StaticTransformBroadcaster" in publisher
 
 
-def test_relay_waypoints_require_one_meter_actual_separation():
+def test_relay_waypoints_release_after_seven_tenths_meter_clearance():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -59,11 +59,11 @@ def test_relay_waypoints_require_one_meter_actual_separation():
         item.attrib["name"]: item.attrib["value"]
         for item in follower.findall("param")
     }
-    assert params["follow_distance"] == "1.00"
-    assert params["release_path_length"] == "1.00"
-    assert params["waypoint_release_min_separation"] == "1.00"
-    assert params["door_release_inside_distance"] == "1.00"
-    assert params["relay_release_distance"] == "1.00"
+    assert params["follow_distance"] == "0.70"
+    assert params["release_path_length"] == "0.70"
+    assert params["waypoint_release_min_separation"] == "0.70"
+    assert params["door_release_inside_distance"] == "0.70"
+    assert params["relay_release_distance"] == "0.70"
 
     source = FOLLOWER.read_text(encoding="utf-8")
     gate = source.split("bool relayWaypointSeparationReady", 1)[1].split(
@@ -76,6 +76,30 @@ def test_relay_waypoints_require_one_meter_actual_separation():
     assert 'relayWaypointSeparationReady("DOOR")' in source
     assert 'relayWaypointSeparationReady("INTERNAL")' in source
     assert 'relayWaypointSeparationReady("EXIT")' in source
+
+
+def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
+    source = FOLLOWER.read_text(encoding="utf-8")
+    append = source.split("void appendRelayWaypoint", 1)[1].split(
+        "void leaderLandingTargetCallback", 1
+    )[0]
+    assert "relay_waypoints_.push_back(follower_point)" in append
+    publish = source.split("void publishRelayPath", 1)[1].split(
+        "void appendRelayWaypoint", 1
+    )[0]
+    assert "for (const RoutePoint& point : relay_waypoints_)" in publish
+    assert "relay_waypoints_.erase" not in source
+    assert "relay_waypoints_.pop_back" not in source
+    assert "relay_waypoints_.clear" not in source
+
+    continuous = source.split("bool handleContinuousFollowBeforeExit", 1)[1].split(
+        "bool handleDiffPlannerExecution", 1
+    )[0]
+    assert "++active_relay_index_" not in continuous
+    assert "CONTINUOUS passed relay waypoint" not in continuous
+    assert "SKIP unreachable internal waypoint" not in source
+    assert "skipped unreachable internal waypoint" not in source
+    assert source.count("++active_relay_index_") == 2
 
 
 def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():

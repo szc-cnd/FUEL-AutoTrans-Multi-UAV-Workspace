@@ -138,12 +138,12 @@ class LeaderSafePathFollower {
     follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
     follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
     // 双机普通接力只共享XY路线；后机名义高度与两机起飞悬停高度统一为0.60m。
-    pnh_.param("follow_distance", follow_distance_, 1.00);
-    pnh_.param("release_path_length", release_path_length_, 1.00);
+    pnh_.param("follow_distance", follow_distance_, 0.70);
+    pnh_.param("release_path_length", release_path_length_, 0.70);
     pnh_.param("min_separation", min_separation_, 0.50);
-    // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证1m净距。
+    // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证0.7m净距。
     pnh_.param("waypoint_release_min_separation",
-               waypoint_release_min_separation_, 1.00);
+               waypoint_release_min_separation_, 0.70);
     pnh_.param("fixed_follow_height", fixed_follow_height_, 0.60);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
@@ -225,13 +225,12 @@ class LeaderSafePathFollower {
     pnh_.param("recovery_attempt_timeout", recovery_attempt_timeout_, 1.50);
     pnh_.param("recovery_success_distance", recovery_success_distance_, 0.12);
     pnh_.param("recovery_near_ignore", recovery_near_ignore_, 0.06);
-    // 2026-07-27: 点云阻挡HOLD也必须能脱困；普通内部检查点长期不可达时允许跳过，解除串行队列死锁。
+    // 点云阻挡HOLD也必须能脱困，但当前缓存点未到达前禁止跳到下一点。
     pnh_.param("blocked_recovery_timeout", blocked_recovery_timeout_, 1.00);
-    pnh_.param("waypoint_unreachable_timeout", waypoint_unreachable_timeout_, 6.00);
     // 2026-07-16: 后机采用门点+滚动内部点+真实终点的任务接力；0表示内部点数量不限。
-    pnh_.param("relay_release_distance", relay_release_distance_, 1.00);
-    // 门点和内部点都等前机沿路线清空1.00m，再叠加实时双机1m净距门槛。
-    pnh_.param("door_release_inside_distance", door_release_inside_distance_, 1.00);
+    pnh_.param("relay_release_distance", relay_release_distance_, 0.70);
+    // 门点和内部点都等前机沿路线清空0.70m，再叠加实时双机0.70m净距门槛。
+    pnh_.param("door_release_inside_distance", door_release_inside_distance_, 0.70);
     pnh_.param("relay_waypoint_spacing", relay_waypoint_spacing_, 2.50);
     pnh_.param("relay_arrive_radius", relay_arrive_radius_, 0.25);
     pnh_.param("relay_arrive_z_tolerance", relay_arrive_z_tolerance_, 0.20);
@@ -1709,16 +1708,7 @@ class LeaderSafePathFollower {
 
     const geometry_msgs::Point follower_world =
         followerToWorld(follower_odom_.pose.pose.position);
-    // 连续跟踪已经实际经过的离散点只做通信/进度确认，不能在出口前重新逐点停车。
-    const double follower_progress = nearestRouteProgress(follower_world);
-    while (active_relay_index_ < relay_waypoints_.size() &&
-           active_relay_index_ != terminal_waypoint_index_ &&
-           relay_waypoints_[active_relay_index_].progress <=
-               follower_progress + relay_arrive_radius_) {
-      ROS_INFO("[safe_follower] CONTINUOUS passed relay waypoint %zu/%zu at route progress %.2fm.",
-               active_relay_index_ + 1, relay_waypoints_.size(), follower_progress);
-      ++active_relay_index_;
-    }
+    // 接力队列严格按到达条件消费。即使切回连续跟踪，也不能按路线进度批量跳过缓存点。
 
     const geometry_msgs::Point leader_world =
         leaderToWorld(leader_odom_.pose.pose.position);
@@ -2186,25 +2176,12 @@ class LeaderSafePathFollower {
               : chooseClearFollowerHeight(follower_odom_.pose.pose.position,
                                           &target_local, &obstacle_hits);
       if (!clear_path) {
-        // 2026-07-27: 原逻辑在此永久HOLD且active_relay_index不递增；现在先局部脱困，
-        // 普通内部检查点持续不可达再跳过，门点和最终降落点仍禁止盲跳。
+        // 当前点持续阻挡时保持该点并尝试局部脱困；禁止递增索引跳过缓存点。
         if (blocked_waypoint_index_ != active_relay_index_) {
           blocked_waypoint_index_ = active_relay_index_;
           blocked_since_ = now;
         }
         const double blocked_duration = (now - blocked_since_).toSec();
-        const bool skippable_internal = active_relay_index_ > 0 && !terminal_relay;
-        if (skippable_internal && blocked_duration >= waypoint_unreachable_timeout_) {
-          ROS_ERROR("[safe_follower] SKIP unreachable internal waypoint %zu/%zu after %.2fs; continue queue.",
-                    active_relay_index_ + 1, relay_waypoints_.size(), blocked_duration);
-          ++active_relay_index_;
-          blocked_since_ = ros::Time(0);
-          blocked_waypoint_index_ = std::numeric_limits<std::size_t>::max();
-          relay_arrival_stamp_ = ros::Time(0);
-          hold_target_latched_ = false;
-          hold("skipped unreachable internal waypoint");
-          return;
-        }
         if (blocked_duration >= blocked_recovery_timeout_ && !recovery_active_)
           startRecovery(now, "local path blocked while holding");
         hold("local path blocked by follower cloud");
@@ -2372,9 +2349,9 @@ class LeaderSafePathFollower {
   double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
   double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.5}, follower_start_height_{0.5};
-  // 默认1.00m路径间隔、1.00m航点发布门槛、0.50m紧急硬间隔。
-  double follow_distance_{1.00}, release_path_length_{1.00}, min_separation_{0.50};
-  double waypoint_release_min_separation_{1.00};
+  // 默认0.70m路径间隔、0.70m航点发布门槛、0.50m紧急硬间隔。
+  double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.50};
+  double waypoint_release_min_separation_{0.70};
   double fixed_follow_height_{0.60}, follow_height_min_{0.60}, follow_height_max_{0.70};
   double down_search_release_height_{1.80};
   double down_search_min_vertical_separation_{1.00};
@@ -2410,10 +2387,10 @@ class LeaderSafePathFollower {
   double stuck_detection_timeout_{1.50}, stuck_min_progress_{0.06};
   double recovery_step_{0.35}, recovery_speed_{0.20}, recovery_attempt_timeout_{1.50};
   double recovery_success_distance_{0.12}, recovery_near_ignore_{0.06};
-  double blocked_recovery_timeout_{1.00}, waypoint_unreachable_timeout_{6.00};
+  double blocked_recovery_timeout_{1.00};
   double last_command_dx_{0.0}, last_command_dy_{0.0}, recovery_yaw_{0.0};
   int obstacle_min_points_{3};
-  double relay_release_distance_{1.00}, door_release_inside_distance_{1.00};
+  double relay_release_distance_{0.70}, door_release_inside_distance_{0.70};
   double relay_waypoint_spacing_{2.50};
   double relay_arrive_radius_{0.25}, relay_arrive_z_tolerance_{0.20};
   // 终点仍使用较大停驻净空；普通接力点只查落点小体素并允许安全附件到达。

@@ -5,7 +5,7 @@
     <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
     <arg name="goal_topic" default="/UAV1/planning/goal"/>
     <arg name="position_cmd_topic" default="/UAV1/planning/pos_cmd"/>
-    <arg name="max_vel" default="0.50"/>
+    <arg name="max_vel" default="0.30"/>
     <arg name="max_acc" default="1.00"/>
     <arg name="enable_rviz" default="true"/>
     <!-- 接力入口已用标定参数发布该TF；独立调试时才允许本launch发布零偏移TF。 -->
@@ -35,9 +35,9 @@
         <arg name="enable_virtual_wall" value="true"/>
         <arg name="virtual_ceil" value="2.25"/>
         <arg name="virtual_ground" value="0.10"/>
-        <arg name="map_resolution" value="0.15"/>
-        <!-- 2026-07-28: 0.15m分辨率下0.18m会向上取整成2格(实际0.30m)并反包后机起点；改为精确1格0.15m，优化器0.18m净空仍保留。 -->
-        <arg name="inflation_size" value="0.15"/>
+        <arg name="map_resolution" value="0.10"/>
+        <!-- 0.10m分辨率配合0.099m膨胀保持单栅格安全边界，避免向上取整成双栅格反包后机起点。 -->
+        <arg name="inflation_size" value="0.099"/>
         <!-- 2026-07-28: UAV1门洞点云偶发假占据时用更强FREE射线及时清除，避免目标被改回当前位置。 -->
         <arg name="lidar_p_miss" value="0.35"/>
         <!-- 2026-07-28: 后机最新日志在第4个点出现start_occ=3并持续50s；3s衰减移动球/前机鬼影，
