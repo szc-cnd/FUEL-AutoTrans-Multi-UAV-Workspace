@@ -11,6 +11,7 @@
 #include "mpc_input.h"
 #include "mpc_controller.h"
 #include "odom_spike_guard.h"
+#include "recovery_control.h"
 #include "polynomial_trajectory.h"
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/CommandLong.h>
@@ -127,6 +128,7 @@ namespace PayloadMPC
 		bool direct_auto_land_active_{false};
 		bool planning_stop_sent_{false};
 		ros::Time mpc_recovery_start_time_{0};
+		ros::Time last_mpc_recovery_reset_time_{0};
 		int mpc_recovery_success_count_{0};
 
 		long int rmse_cnt_ = 0;
@@ -197,6 +199,8 @@ namespace PayloadMPC
 
 		void publish_bodyrate_ctrl(const Eigen::Ref<const Eigen::Matrix<real_t, kInputSize, 1>> predicted_input,
 									   const ros::Time &stamp);
+		void publish_recovery_attitude_ctrl(const ros::Time &stamp);
+		bool canReuseLastValidMpc(const ros::Time &now) const;
 		void publish_manual_ctrl(const ros::Time &stamp);
 		void publish_failsafe_hold(const ros::Time &stamp);
 		void enter_odom_failsafe(const char *reason);

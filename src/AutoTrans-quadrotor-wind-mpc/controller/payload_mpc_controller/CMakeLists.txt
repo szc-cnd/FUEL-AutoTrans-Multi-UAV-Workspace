@@ -111,6 +111,16 @@ if(CATKIN_ENABLE_TESTING)
       ${EIGEN3_INCLUDE_DIR}
     )
   endif()
+
+  catkin_add_gtest(test_recovery_control
+    test/test_recovery_control.cpp
+  )
+  if(TARGET test_recovery_control)
+    target_include_directories(test_recovery_control PRIVATE
+      include/payload_mpc_controller
+      ${EIGEN3_INCLUDE_DIR}
+    )
+  endif()
 endif()
 
 catkin_install_python(PROGRAMS

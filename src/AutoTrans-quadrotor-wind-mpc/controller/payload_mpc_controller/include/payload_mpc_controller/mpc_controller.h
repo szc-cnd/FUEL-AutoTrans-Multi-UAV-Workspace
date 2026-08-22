@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <thread>
 
 #include <Eigen/Eigen>
@@ -60,6 +61,7 @@ namespace PayloadMPC
                   "MpcController: Wrong model size. Number of inputs does not match.");
 
     MpcController(MpcParams &params);
+    ~MpcController();
 
     void execMPC(const Eigen::Matrix<real_t, kStateSize, kSamples + 1> &reference_state,
                  const Eigen::Matrix<real_t, kInputSize, kSamples + 1> &reference_input,
@@ -74,8 +76,7 @@ namespace PayloadMPC
     double getTimeStep(){return mpc_time_step_;}
     void setDynamicParams(const real_t mass_q)
       {mpc_wrapper_.setDynamicParams(mass_q);}
-    void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq)
-      {mpc_wrapper_.setExternalForce(fq); fq_=fq;}
+    void setExternalForce(const Eigen::Ref<const Eigen::Vector3d>& fq);
     bool lastMpcSolveSuccessful() const { return last_mpc_solve_success_; }
     bool hasRecentValidControl(const ros::Time &now, double max_age) const;
     const Eigen::Matrix<real_t, kInputSize, 1> &lastValidControlInput() const
@@ -83,22 +84,26 @@ namespace PayloadMPC
       return last_valid_control_input_;
     }
     void clearLastValidControl();
-    // Join the asynchronous preparation step and rebuild the complete ACADO
-    // workspace around the measured state and a fixed hover reference.
+    // 等待异步准备线程结束，再基于实测状态和固定悬停参考重建完整 ACADO 工作区。
     bool resetForHover(
       const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
       const Eigen::Ref<const Eigen::Vector3d> hover_position,
       double hover_yaw);
+    bool restoreNominalVelocityLimits();
+    bool recoveryVelocityLimitsRelaxed() const
+      { return recovery_velocity_limits_relaxed_; }
     void waitForPreparation();
     // Thrust to control
     std::queue<std::pair<ros::Time, double>> timed_thrust;
     double thr_scale_compensate;
     const double rho2 = 0.998; // do not change
-    double thrustscale_;
+    double thrustscale_{0.0};
     double P;
     quadrotor_msgs::Px4ctrlDebug debug;
 
     void resetThrustMapping(void);
+    // 返回当前在线推力映射对应的悬停比例，不向 RLS 历史队列写入样本。
+    double currentHoverPercentage() const;
     // 清除尚未与 RPM 对齐的推力指令，但保留最后有效 thrustscale 和 RLS 协方差。
     void clearThrustCommandHistory(void);
     double convertThrust(const double& thrust, const double voltage);
@@ -140,6 +145,7 @@ namespace PayloadMPC
     MpcParams& params_;
 
     Eigen::Vector3d fq_;
+    std::mutex external_force_mutex_;
     // MPC
     MpcWrapper mpc_wrapper_;
     const double mpc_time_step_;
@@ -151,6 +157,7 @@ namespace PayloadMPC
     real_t timing_feedback_, timing_preparation_;
     bool solve_from_scratch_;
     bool last_mpc_solve_success_{true};
+    bool recovery_velocity_limits_relaxed_{false};
     // 仅用于记录一次“求解失败 -> 有效输出恢复”的诊断边沿，不参与 NMPC 控制计算。
     bool mpc_failure_active_{false};
     // 仅缓存最近一次通过有限值检查的 MPC 首个控制输入，用于短时故障保持。

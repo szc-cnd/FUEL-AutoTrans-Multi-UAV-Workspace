@@ -170,8 +170,23 @@ land:
 safety:
     # NMPC 首次失败后，在锁存位置尝试恢复求解的告警阈值，单位 s；超时继续重试，不自动降落。
     mpc_recovery_timeout: 1.0
-    # 一次完整成功且输出有限的求解后，请求 Diff 从最新里程计重新规划。
-    mpc_recovery_success_cycles: 1
+    # 实际位置、速度和倾角同时收敛且 NMPC 连续成功该次数后，请求 Diff 从最新里程计重新规划。
+    mpc_recovery_success_cycles: 5
+    # 仅在当前姿态、速度和缓存角速度均安全时，短暂复用最后有效 MPC 输入，单位 s。
+    mpc_recovery_last_valid_hold: 0.05
+    mpc_recovery_last_valid_max_bodyrate: 0.25
+    # 连续求解失败时，基于最新可信状态完整重置 ACADO 工作区的周期，单位 s。
+    mpc_recovery_full_reset_period: 0.20
+    # 重置时速度硬约束相对当前实际速度增加的余量，单位 m/s；速度回到正常范围后恢复原约束。
+    mpc_recovery_velocity_margin_xy: 0.20
+    mpc_recovery_velocity_margin_z: 0.15
+    # 退出恢复前的三维位置误差、水平速度、垂直速度和机体倾角阈值。
+    mpc_recovery_exit_position_error: 0.15
+    mpc_recovery_exit_speed_xy: 0.15
+    mpc_recovery_exit_speed_z: 0.10
+    mpc_recovery_exit_tilt_deg: 8.0
+    # MPC 无有效输出时改发锁存 yaw 的水平姿态；倾斜推力补偿最多按该倾角计算，避免过推力。
+    mpc_recovery_max_thrust_comp_tilt_deg: 30.0
     # 人工或正常降落流程请求 PX4 AUTO.LAND 时的服务重试周期，单位 s。
     auto_land_retry_period: 1.0
 

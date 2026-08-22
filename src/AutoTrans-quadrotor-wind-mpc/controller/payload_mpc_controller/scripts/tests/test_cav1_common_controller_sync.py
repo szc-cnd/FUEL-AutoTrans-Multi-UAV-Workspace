@@ -45,15 +45,15 @@ def test_takeoff_wait_reason_only_reports_when_changed():
 def test_cav1_vehicle_parameters_match_latest_hover_calibration():
     config = CONFIG.read_text(encoding="utf-8")
     model_config = MODEL_CONFIG.read_text(encoding="utf-8")
-    assert "mass_q: 1.817" in model_config
+    assert "mass_q: 1.836" in model_config
     for token in (
         "hover_percentage: 0.54",
-        "target_z: 0.5",
+        "target_z: 0.6",
         "climb_rate: 0.15",
-        "Q_pos_xy:   220.0",
-        "R_pitchroll:  6.0",
-        "max_velocity_xy: 0.5",
-        "max_velocity_z: 0.5",
+        "Q_pos_xy:   200.0",
+        "R_pitchroll:  20.0",
+        "max_velocity_xy: 1.5",
+        "max_velocity_z: 1.0",
         "kf: 1.752e-8",
         "force_axis_gain_x: 1.0",
         "force_axis_gain_y: 1.0",

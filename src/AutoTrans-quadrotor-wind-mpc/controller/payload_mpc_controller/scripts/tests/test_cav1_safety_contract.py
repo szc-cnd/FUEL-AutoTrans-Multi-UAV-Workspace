@@ -22,8 +22,8 @@ def test_velocity_limits_are_configured_and_forwarded():
     assert "max_velocity_z" in wrapper_h
     assert "params_.max_velocity_xy_" in controller
     assert "params_.max_velocity_z_" in controller
-    assert "max_velocity_xy: 0.5" in yaml
-    assert "max_velocity_z: 0.5" in yaml
+    assert "max_velocity_xy: 1.5" in yaml
+    assert "max_velocity_z: 1.0" in yaml
 
 
 def test_solver_exposes_three_affine_velocity_constraints_and_runtime_overrides_them():
@@ -75,7 +75,11 @@ def test_nmpc_recovery_latches_hover_and_gates_trajectories():
     assert "resetForHover" in fsm
     assert "mpc_recovery_success_cycles" in params
     assert "mpc_recovery_timeout: 1.0" in yaml
-    assert "mpc_recovery_success_cycles: 1" in yaml
+    assert "mpc_recovery_success_cycles: 5" in yaml
+    assert "mpc_recovery_exit_position_error: 0.15" in yaml
+    assert "mpc_recovery_exit_tilt_deg: 8.0" in yaml
+    assert "recoveryStateConverged" in fsm
+    assert "publish_recovery_attitude_ctrl" in fsm
     assert "trajectory_acceptance_enabled" in input_h
     assert "pMsg->header.stamp <= accept_trajectory_after" in input_cpp
     assert "planning_restart_pub_.publish(restart_msg);" in fsm
@@ -113,9 +117,56 @@ def test_short_mpc_hold_uses_only_recent_valid_solver_output():
     fsm = (SRC / "mpc_fsm.cpp").read_text(encoding="utf-8")
     assert "hasRecentValidControl" in header
     assert "last_valid_control_time_ = ros::Time::now();" in controller
-    assert "kLastValidMpcHoldSeconds = 0.2" in fsm
+    assert "mpc_recovery_last_valid_hold: 0.05" in (CONFIG / "mpc.yaml").read_text(encoding="utf-8")
+    assert "canReuseLastValidMpc" in fsm
+    assert "conservativeLastValidInput" in fsm
+    reuse_guard = fsm.split("bool MPCFSM::canReuseLastValidMpc", 1)[1]
+    reuse_guard = reuse_guard.split("void MPCFSM::publish_recovery_attitude_ctrl", 1)[0]
+    assert "odom_spike_guard_.faultActive()" in reuse_guard
     assert "controller_.lastValidControlInput()" in fsm
     assert "controller_.clearLastValidControl();" in fsm
+
+
+def test_recovery_reinitializes_failed_solver_and_prepared_state_is_strict():
+    controller = (SRC / "mpc_controller.cpp").read_text(encoding="utf-8")
+    wrapper = (SRC / "mpc_wrapper.cpp").read_text(encoding="utf-8")
+    fsm = (SRC / "mpc_fsm.cpp").read_text(encoding="utf-8")
+    assert "mpc_recovery_full_reset_period" in fsm
+    assert "resetForHover(est_state_, hover_pose_, hover_yaw_)" in fsm
+    assert "acado_is_prepared_ = false;" in wrapper
+    initialize = wrapper.split("void MpcWrapper::initialize", 1)[1]
+    initialize = initialize.split("bool MpcWrapper::setCosts", 1)[0]
+    assert "acado_preparationStep();" not in initialize
+    assert "std::thread(&MpcController::preparationThread, this)" in controller
+    restore_limits = controller.split("bool MpcController::restoreNominalVelocityLimits", 1)[1]
+    restore_limits = restore_limits.split("void MpcController::waitForPreparation", 1)[0]
+    assert "last_mpc_solve_success_ = false;" in restore_limits
+
+
+def test_external_force_online_data_is_written_only_by_serialized_solver_paths():
+    header = (INCLUDE / "mpc_controller.h").read_text(encoding="utf-8")
+    controller = (SRC / "mpc_controller.cpp").read_text(encoding="utf-8")
+    assert "std::mutex external_force_mutex_" in header
+    setter = controller.split("void MpcController::setExternalForce", 1)[1]
+    setter = setter.split("bool MpcController::resetForHover", 1)[0]
+    assert "fq_ = fq;" in setter
+    assert "mpc_wrapper_.setExternalForce" not in setter
+    preparation = controller.split("void MpcController::preparationThread", 1)[1]
+    preparation = preparation.split("double MpcController::angle_limit", 1)[0]
+    assert "std::lock_guard<std::mutex>" in preparation
+    assert "mpc_wrapper_.setExternalForce(external_force);" in preparation
+
+
+def test_recovery_attitude_uses_current_online_thrust_mapping():
+    header = (INCLUDE / "mpc_controller.h").read_text(encoding="utf-8")
+    controller = (SRC / "mpc_controller.cpp").read_text(encoding="utf-8")
+    fsm = (SRC / "mpc_fsm.cpp").read_text(encoding="utf-8")
+    assert "double currentHoverPercentage() const;" in header
+    assert "weight / thrustscale_" in controller
+    recovery_output = fsm.split("void MPCFSM::publish_recovery_attitude_ctrl", 1)[1]
+    recovery_output = recovery_output.split("void MPCFSM::publish_bodyrate_ctrl", 1)[0]
+    assert "controller_.currentHoverPercentage()" in recovery_output
+    assert "params_.thr_map_.hover_percentage" not in recovery_output
 
 
 def test_dynamic_yaw_is_continuous_across_replans_and_advances_once_per_cycle():

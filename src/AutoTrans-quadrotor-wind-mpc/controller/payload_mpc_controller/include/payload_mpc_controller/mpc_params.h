@@ -153,8 +153,23 @@ namespace PayloadMPC
 		{
 			// NMPC 首次失败后允许固定点恢复求解的告警阈值，单位 s；超时继续重试，不自动降落。
 			double mpc_recovery_timeout{0.5};
-			// 获得该次数的完整成功求解后，才请求规划器从里程计重新规划。
-			int mpc_recovery_success_cycles{1};
+			// 位置、速度和倾角同时收敛且 NMPC 连续成功该次数后，才请求规划器重新规划。
+			int mpc_recovery_success_cycles{5};
+			// 仅在姿态、速度和缓存角速度均安全时短暂复用最后有效输入，单位 s。
+			double mpc_recovery_last_valid_hold{0.05};
+			double mpc_recovery_last_valid_max_bodyrate{0.25};
+			// 连续失败时重新初始化完整 ACADO 工作区的周期，单位 s。
+			double mpc_recovery_full_reset_period{0.20};
+			// 重置时临时放宽速度硬约束，避免当前速度已越界导致恢复问题不可行，单位 m/s。
+			double mpc_recovery_velocity_margin_xy{0.20};
+			double mpc_recovery_velocity_margin_z{0.15};
+			// 退出恢复模式前必须满足的实际状态阈值。
+			double mpc_recovery_exit_speed_xy{0.15};
+			double mpc_recovery_exit_speed_z{0.10};
+			double mpc_recovery_exit_tilt_deg{8.0};
+			double mpc_recovery_exit_position_error{0.15};
+			// 拉平阶段倾斜推力补偿采用的最大倾角，单位 deg。
+			double mpc_recovery_max_thrust_comp_tilt_deg{30.0};
 			// PX4 拒绝或未确认 AUTO.LAND 时的服务重试周期，单位 s。
 			double auto_land_retry_period{1.0};
 		};
@@ -321,14 +336,46 @@ namespace PayloadMPC
 
 			read_essential_param(nh, "safety/mpc_recovery_timeout", safety_.mpc_recovery_timeout);
 			read_essential_param(nh, "safety/mpc_recovery_success_cycles", safety_.mpc_recovery_success_cycles);
+			read_essential_param(nh, "safety/mpc_recovery_last_valid_hold", safety_.mpc_recovery_last_valid_hold);
+			read_essential_param(nh, "safety/mpc_recovery_last_valid_max_bodyrate", safety_.mpc_recovery_last_valid_max_bodyrate);
+			read_essential_param(nh, "safety/mpc_recovery_full_reset_period", safety_.mpc_recovery_full_reset_period);
+			read_essential_param(nh, "safety/mpc_recovery_velocity_margin_xy", safety_.mpc_recovery_velocity_margin_xy);
+			read_essential_param(nh, "safety/mpc_recovery_velocity_margin_z", safety_.mpc_recovery_velocity_margin_z);
+			read_essential_param(nh, "safety/mpc_recovery_exit_speed_xy", safety_.mpc_recovery_exit_speed_xy);
+			read_essential_param(nh, "safety/mpc_recovery_exit_speed_z", safety_.mpc_recovery_exit_speed_z);
+			read_essential_param(nh, "safety/mpc_recovery_exit_tilt_deg", safety_.mpc_recovery_exit_tilt_deg);
+			read_essential_param(nh, "safety/mpc_recovery_exit_position_error", safety_.mpc_recovery_exit_position_error);
+			read_essential_param(nh, "safety/mpc_recovery_max_thrust_comp_tilt_deg", safety_.mpc_recovery_max_thrust_comp_tilt_deg);
 			read_essential_param(nh, "safety/auto_land_retry_period", safety_.auto_land_retry_period);
 			if (!std::isfinite(safety_.mpc_recovery_timeout) ||
 				safety_.mpc_recovery_timeout <= 0.0 ||
 				safety_.mpc_recovery_success_cycles <= 0 ||
+				!std::isfinite(safety_.mpc_recovery_last_valid_hold) ||
+				safety_.mpc_recovery_last_valid_hold < 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_last_valid_max_bodyrate) ||
+				safety_.mpc_recovery_last_valid_max_bodyrate <= 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_full_reset_period) ||
+				safety_.mpc_recovery_full_reset_period <= 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_velocity_margin_xy) ||
+				safety_.mpc_recovery_velocity_margin_xy < 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_velocity_margin_z) ||
+				safety_.mpc_recovery_velocity_margin_z < 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_exit_speed_xy) ||
+				safety_.mpc_recovery_exit_speed_xy <= 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_exit_speed_z) ||
+				safety_.mpc_recovery_exit_speed_z <= 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_exit_tilt_deg) ||
+				safety_.mpc_recovery_exit_tilt_deg <= 0.0 ||
+				safety_.mpc_recovery_exit_tilt_deg >= 90.0 ||
+				!std::isfinite(safety_.mpc_recovery_exit_position_error) ||
+				safety_.mpc_recovery_exit_position_error <= 0.0 ||
+				!std::isfinite(safety_.mpc_recovery_max_thrust_comp_tilt_deg) ||
+				safety_.mpc_recovery_max_thrust_comp_tilt_deg <= 0.0 ||
+				safety_.mpc_recovery_max_thrust_comp_tilt_deg >= 90.0 ||
 				!std::isfinite(safety_.auto_land_retry_period) ||
 				safety_.auto_land_retry_period <= 0.0)
 			{
-				ROS_ERROR("[参数] safety 恢复超时、连续成功次数和 AUTO.LAND 重试周期必须为正值。");
+				ROS_ERROR("[参数] safety 恢复参数无效：时间、误差和速度阈值必须为有限正值，倾角必须小于 90 deg。");
 				ROS_BREAK();
 			}
 

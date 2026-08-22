@@ -31,7 +31,8 @@ namespace PayloadMPC
     reference_inputs_ = hover_input_;
 
     mpc_wrapper_.initialize(Q, R, initial_state, initial_input, params_.state_cost_exponential_, params_.input_cost_exponential_);
-    mpc_wrapper_.setExternalForce(Eigen::Vector3d::Zero());
+    fq_.setZero();
+    mpc_wrapper_.setExternalForce(fq_);
     mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
         params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
@@ -41,9 +42,14 @@ namespace PayloadMPC
     solve_from_scratch_ = false;
     timing_feedback_ = 0;
     timing_preparation_ = 0;
-    preparation_thread_ = std::thread(&MpcWrapper::prepare, mpc_wrapper_);
+    preparation_thread_ = std::thread(&MpcController::preparationThread, this);
     
     
+  }
+
+  MpcController::~MpcController()
+  {
+    waitForPreparation();
   }
 
   void MpcController::execMPC(const Eigen::Matrix<real_t, kStateSize, kSamples + 1> &reference_states,
@@ -76,10 +82,10 @@ namespace PayloadMPC
     if (!last_mpc_solve_success_)
     {
       mpc_failure_active_ = true;
-      // 求解失败时直接使用悬停输入：T 为物理总推力 N，角速度为机体系 rad/s。
+      // 这里只写入有限占位值；FSM 会在恢复状态发布拉平姿态目标。
       predicted_states = estimated_state.replicate(1, kSamples + 1);
       control_inputs = hover_input_.leftCols(kSamples);
-      ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，切换到悬停安全输入。");
+      ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 求解失败，等待恢复状态输出安全姿态。");
     }
     else
     {
@@ -91,7 +97,7 @@ namespace PayloadMPC
         mpc_failure_active_ = true;
         predicted_states = estimated_state.replicate(1, kSamples + 1);
         control_inputs = hover_input_.leftCols(kSamples);
-        ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 输出含非有限值，切换到悬停安全输入。");
+        ROS_ERROR_THROTTLE(5.0, "[OUTPUT] NMPC 输出含非有限值，等待恢复状态输出安全姿态。");
       }
       else
       {
@@ -123,6 +129,13 @@ namespace PayloadMPC
     execMPC(reference_states_, reference_inputs_, estimated_state, predicted_states, control_inputs);
   }
 
+  void MpcController::setExternalForce(
+      const Eigen::Ref<const Eigen::Vector3d> &fq)
+  {
+    std::lock_guard<std::mutex> lock(external_force_mutex_);
+    fq_ = fq;
+  }
+
   bool MpcController::resetForHover(
       const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> estimated_state,
       const Eigen::Ref<const Eigen::Vector3d> hover_position,
@@ -134,8 +147,7 @@ namespace PayloadMPC
       return false;
     }
 
-    // ACADO uses global workspace memory.  Never clear/reinitialize it while
-    // the previous preparation step is still running.
+    // ACADO 使用全局工作区；完整重置前必须等待上一轮准备线程结束。
     if (preparation_thread_.joinable())
       preparation_thread_.join();
 
@@ -159,15 +171,47 @@ namespace PayloadMPC
              << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0)
             .finished();
 
+    Eigen::Matrix<real_t, kStateSize, 1> reset_state = estimated_state;
+    Eigen::Quaterniond measured_attitude(
+        reset_state(kOriW), reset_state(kOriX), reset_state(kOriY), reset_state(kOriZ));
+    if (!measured_attitude.coeffs().allFinite() || measured_attitude.norm() <= 1.0e-6)
+    {
+      ROS_ERROR("[NMPC恢复] 无法重置求解器：测量姿态四元数无效。");
+      return false;
+    }
+    measured_attitude.normalize();
+    Eigen::Quaterniond hover_attitude(Eigen::AngleAxisd(hover_yaw, Eigen::Vector3d::UnitZ()));
+    if (measured_attitude.coeffs().dot(hover_attitude.coeffs()) < 0.0)
+      measured_attitude.coeffs() = -measured_attitude.coeffs();
+    reset_state(kOriW) = measured_attitude.w();
+    reset_state(kOriX) = measured_attitude.x();
+    reset_state(kOriY) = measured_attitude.y();
+    reset_state(kOriZ) = measured_attitude.z();
+
+    const double measured_velocity_xy = std::max(
+        std::abs(static_cast<double>(reset_state(kVelX))),
+        std::abs(static_cast<double>(reset_state(kVelY))));
+    const double measured_velocity_z = std::abs(static_cast<double>(reset_state(kVelZ)));
+    const real_t recovery_velocity_xy = static_cast<real_t>(std::max(
+        static_cast<double>(params_.max_velocity_xy_),
+        measured_velocity_xy + params_.safety_.mpc_recovery_velocity_margin_xy));
+    const real_t recovery_velocity_z = static_cast<real_t>(std::max(
+        static_cast<double>(params_.max_velocity_z_),
+        measured_velocity_z + params_.safety_.mpc_recovery_velocity_margin_z));
+
     mpc_wrapper_.setDynamicParams(params_.dyn_params_.mass_q);
-    mpc_wrapper_.initialize(Q, R, estimated_state, initial_input,
+    recovery_velocity_limits_relaxed_ = false;
+    mpc_wrapper_.initialize(Q, R, reset_state, initial_input,
                             params_.state_cost_exponential_, params_.input_cost_exponential_);
     const bool limits_ok = mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
         params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
-        params_.max_velocity_xy_, params_.max_velocity_z_);
-    fq_.setZero();
-    mpc_wrapper_.setExternalForce(fq_);
+        recovery_velocity_xy, recovery_velocity_z);
+    recovery_velocity_limits_relaxed_ = limits_ok &&
+        (recovery_velocity_xy > params_.max_velocity_xy_ + 1.0e-6 ||
+         recovery_velocity_z > params_.max_velocity_z_ + 1.0e-6);
+    setExternalForce(Eigen::Vector3d::Zero());
+    mpc_wrapper_.setExternalForce(Eigen::Vector3d::Zero());
     hover_input_ = initial_input.replicate(1, kSamples + 1);
     setHoverReference(hover_position, hover_yaw);
     const bool reference_ok = mpc_wrapper_.setTrajectory(reference_states_, reference_inputs_);
@@ -179,6 +223,34 @@ namespace PayloadMPC
     preparation_thread_ = std::thread(&MpcController::preparationThread, this);
     ROS_WARN("[NMPC恢复] 已基于当前状态完整重置 ACADO 求解器。");
     return limits_ok && reference_ok;
+  }
+
+  bool MpcController::restoreNominalVelocityLimits()
+  {
+    if (!recovery_velocity_limits_relaxed_)
+    {
+      // 离开自动状态时也要用最新缓存外力重新准备，避免下次进入时沿用旧 OnlineData。
+      last_mpc_solve_success_ = false;
+      if (!preparation_thread_.joinable())
+        preparation_thread_ = std::thread(&MpcController::preparationThread, this);
+      return true;
+    }
+
+    if (preparation_thread_.joinable())
+      preparation_thread_.join();
+    const bool limits_ok = mpc_wrapper_.setLimits(
+        params_.min_thrust_, params_.max_thrust_,
+        params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
+        params_.max_velocity_xy_, params_.max_velocity_z_);
+    if (limits_ok)
+    {
+      recovery_velocity_limits_relaxed_ = false;
+      // 改回正常硬约束后，必须重新准备并在新约束下成功求解，旧解不能计入恢复次数。
+      last_mpc_solve_success_ = false;
+      preparation_thread_ = std::thread(&MpcController::preparationThread, this);
+      ROS_INFO("[NMPC恢复] 实际速度已回到正常范围，恢复配置的速度硬约束。");
+    }
+    return limits_ok;
   }
 
   void MpcController::waitForPreparation()
@@ -324,6 +396,13 @@ namespace PayloadMPC
   {
     const clock_t start = clock();
 
+    Eigen::Vector3d external_force;
+    {
+      std::lock_guard<std::mutex> lock(external_force_mutex_);
+      external_force = fq_;
+    }
+    // ACADO OnlineData 只在准备线程或已 join 的完整重置路径中写入。
+    mpc_wrapper_.setExternalForce(external_force);
     mpc_wrapper_.prepare();
 
     // Timing
@@ -633,6 +712,23 @@ namespace PayloadMPC
     P = 1e6;
     clearThrustCommandHistory();
     debug.hover_percentage = params_.thr_map_.hover_percentage;
+  }
+
+  double MpcController::currentHoverPercentage() const
+  {
+    const double weight = params_.gravity_ * params_.dyn_params_.mass_q;
+    if (!std::isfinite(weight) || weight <= 0.0 ||
+        !std::isfinite(thrustscale_) || thrustscale_ <= 0.0)
+    {
+      return params_.thr_map_.hover_percentage;
+    }
+    const double hover_percentage = weight / thrustscale_;
+    if (!std::isfinite(hover_percentage) || hover_percentage < 0.1 ||
+        hover_percentage > 0.8)
+    {
+      return params_.thr_map_.hover_percentage;
+    }
+    return hover_percentage;
   }
 
   void MpcController::clearThrustCommandHistory(void)
