@@ -1051,6 +1051,9 @@ int TaskSearchManager::selectSearchCandidate(
   // frontier的前后语义与恢复器使用同一条持久通道轴线。机头转动和避障斜飞
   // 都不能让候选排序跟着偏转；真实拐弯由累计地图确认后才更新该轴线。
   Eigen::Vector2d motion_forward = stableProgressDirection();
+  if (exploration_initial_yaw_frozen_ && !corridor_frame_received_)
+    motion_forward = Eigen::Vector2d(std::cos(exploration_initial_yaw_),
+                                     std::sin(exploration_initial_yaw_));
   if (motion_forward.norm() < 1e-3)
     motion_forward = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
   motion_forward.normalize();
