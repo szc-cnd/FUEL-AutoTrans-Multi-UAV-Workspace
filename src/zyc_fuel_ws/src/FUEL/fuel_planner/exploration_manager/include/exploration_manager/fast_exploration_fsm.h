@@ -111,6 +111,7 @@ private:
   void setEndpointHold(bool active, const string& reason);
   void requestActiveTrajectoryBrake(const string& reason);
   void setDynamicDetectionEnable(bool active, const string& reason, bool force = false);
+  void activateExternalExploration(const geometry_msgs::PoseStamped& entry_trigger);
 
   /* ROS functions */
   void FSMCallback(const ros::TimerEvent& e);

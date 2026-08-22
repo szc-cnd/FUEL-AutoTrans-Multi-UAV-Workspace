@@ -48,5 +48,12 @@ inline bool shouldReplanForCoveredFrontier(bool frontier_covered,
   return frontier_covered && !narrow_corridor_stage && trajectory_time > minimum_time;
 }
 
+inline bool shouldActivateExternalExploration(bool use_diff_for_exploration,
+                                              bool entry_trigger_received,
+                                              bool external_exploration_active) {
+  return use_diff_for_exploration && entry_trigger_received &&
+         !external_exploration_active;
+}
+
 }  // namespace exploration_policy
 }  // namespace fast_planner

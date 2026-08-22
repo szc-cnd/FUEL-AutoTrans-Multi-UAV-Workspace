@@ -192,21 +192,23 @@ void FastExplorationFSM::missionStatusCallback(const std_msgs::StringConstPtr &m
     external_exploration_active_ = false;
     external_goal_pending_ = false;
     setSafetyHold(true, "landing handoff");
-  } else if (use_diff_for_fuel_exploration_ &&
-             state.find("SEARCH_CORRIDOR") == 0 && !external_exploration_active_) {
-    external_exploration_active_ = true;
-    external_goal_pending_ = false;
-    external_next_select_at_ = ros::Time::now();
-    if (fd_->have_odom_)
-      expl_manager_->freezeExplorationInitialYaw(fd_->odom_yaw_);
-    geometry_msgs::PoseStamped trigger;
-    trigger.header.stamp = ros::Time::now();
-    trigger.header.frame_id = "world";
-    trigger.pose = external_last_pose_;
-    external_trigger_pub_.publish(trigger);
-    setSafetyHold(true, "DIFF owns fuel exploration execution");
-    ROS_WARN("[fuel_diff] external DIFF execution activated after corridor handoff.");
   }
+}
+
+void FastExplorationFSM::activateExternalExploration(
+    const geometry_msgs::PoseStamped& entry_trigger) {
+  external_exploration_active_ = true;
+  external_goal_pending_ = false;
+  external_next_select_at_ = ros::Time::now();
+  if (fd_->have_odom_)
+    expl_manager_->freezeExplorationInitialYaw(fd_->odom_yaw_);
+
+  geometry_msgs::PoseStamped trigger = entry_trigger;
+  trigger.header.stamp = ros::Time::now();
+  if (trigger.header.frame_id.empty()) trigger.header.frame_id = "world";
+  external_trigger_pub_.publish(trigger);
+  setSafetyHold(true, "DIFF owns fuel exploration execution");
+  ROS_WARN("[fuel_diff] external DIFF execution activated by entry trigger.");
 }
 
 bool FastExplorationFSM::publishExternalViewpoint() {
@@ -737,10 +739,21 @@ void FastExplorationFSM::frontierCallback(const ros::TimerEvent& e) {
 }
 
 void FastExplorationFSM::triggerCallback(const nav_msgs::PathConstPtr& msg) {
+  if (msg->poses.empty()) {
+    ROS_ERROR("[fuel_diff] ignore empty entry trigger path.");
+    return;
+  }
   if (msg->poses[0].pose.position.z < -0.1) return;
   if (state_ != WAIT_TRIGGER) return;
   fd_->trigger_ = true;
   cout << "Triggered!" << endl;
+  if (use_diff_for_fuel_exploration_) {
+    if (exploration_policy::shouldActivateExternalExploration(
+            true, true, external_exploration_active_)) {
+      activateExternalExploration(msg->poses[0]);
+    }
+    return;
+  }
   transitState(PLAN_TRAJ, "triggerCallback");
 }
 

@@ -10,6 +10,7 @@ int main() {
   using fast_planner::exploration_policy::shouldBrakePublishedTrajectory;
   using fast_planner::exploration_policy::shouldMonitorPublishedTrajectory;
   using fast_planner::exploration_policy::shouldReplanForCoveredFrontier;
+  using fast_planner::exploration_policy::shouldActivateExternalExploration;
 
   // 新规划失败时，仍然安全的当前轨迹不能被提前截断。
   assert(!shouldInterruptCurrentTrajectory(false));
@@ -44,5 +45,11 @@ int main() {
   assert(!shouldReplanForCoveredFrontier(true, true, 1.0, 0.5));
   assert(shouldReplanForCoveredFrontier(true, false, 1.0, 0.5));
   assert(!shouldReplanForCoveredFrontier(false, false, 1.0, 0.5));
+
+  // 初始 SEARCH_CORRIDOR 状态不能启动混合探索；必须收到入口完成触发。
+  assert(!shouldActivateExternalExploration(true, false, false));
+  assert(shouldActivateExternalExploration(true, true, false));
+  assert(!shouldActivateExternalExploration(true, true, true));
+  assert(!shouldActivateExternalExploration(false, true, false));
   return 0;
 }
