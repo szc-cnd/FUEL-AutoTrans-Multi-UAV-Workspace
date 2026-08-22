@@ -49,8 +49,8 @@ def main():
         raise AssertionError("launch high-frequency topic is not vehicle-namespaced")
     if 'default="/$(arg vehicle_ns)/livox/imu_mps2"' not in LAUNCH:
         raise AssertionError("converted IMU topic is not vehicle-namespaced")
-    if '<arg name="imu_topic" default="/UAV1/mavros/imu/data"/>' not in INTEGRATION_LAUNCH:
-        raise AssertionError("AutoTrans does not subscribe to the body-aligned MAVROS IMU topic")
+    if '<arg name="imu_topic" default="/UAV1/livox/imu_mps2"/>' not in INTEGRATION_LAUNCH:
+        raise AssertionError("AutoTrans does not subscribe to the body-aligned MID360 IMU topic")
     if '<arg name="force_attitude_odom_topic" default="$(arg odom_topic)"/>' not in INTEGRATION_LAUNCH:
         raise AssertionError("AutoTrans force estimator does not share the FAST-LIO high-frequency attitude source")
 
