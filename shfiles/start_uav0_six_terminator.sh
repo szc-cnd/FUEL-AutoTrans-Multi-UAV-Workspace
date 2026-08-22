@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# UAV0 传感器、FUEL 规划和 AutoTrans 的 Terminator 六分屏入口。
+# UAV0 传感器、检测、FUEL 规划和 AutoTrans 的 Terminator 七分屏入口。
 # 不自动解锁、不切换 OFFBOARD、不发布目标点。
 
 set -o pipefail
@@ -33,8 +33,8 @@ usage() {
   bash shfiles/start_uav0_six_terminator.sh
   bash shfiles/start_uav0_six_terminator.sh stop
 
-六屏依次为：MAVROS、MID360、FAST-LIO、高频视觉位姿、FUEL/RViz、
-FUEL bridge + AutoTrans NMPC + logger + rosbag。
+七屏依次为：MAVROS、MID360、FAST-LIO、高频视觉位姿、检测与上报、
+FUEL/RViz、FUEL bridge + AutoTrans NMPC + logger + rosbag。
 
 脚本不自动解锁、不切换 OFFBOARD、不发送目标点。
 EOF
@@ -116,7 +116,7 @@ run_existing_pane() {
 }
 
 run_controller_pane() {
-  printf '\n========== UAV0 第 6 屏：AutoTrans 控制器与日志 ==========\n'
+  printf '\n========== UAV0 第 7 屏：AutoTrans 控制器与日志 ==========\n'
   source_ros || keep_open
   wait_for_mavros || keep_open
   wait_for_topic "${ODOM_TOPIC}" || keep_open
@@ -139,7 +139,7 @@ case "${1:-}" in
   --pane)
     PANE="${2:-}"
     case "${PANE}" in
-      mavros|mid360|fastlio|pose|planner) run_existing_pane "${PANE}" ;;
+      mavros|mid360|fastlio|pose|detection|planner) run_existing_pane "${PANE}" ;;
       controller) run_controller_pane ;;
       *) log "未知分屏：${PANE}"; exit 2 ;;
     esac
@@ -164,9 +164,9 @@ command -v timeout >/dev/null 2>&1 || { log '缺少 timeout 命令'; exit 1; }
 [[ -n "${DISPLAY:-}" ]] || { log '没有 DISPLAY，请在 Ubuntu 图形桌面终端中运行'; exit 1; }
 
 sed "s|__UAV0_SIX_SCRIPT__|${SCRIPT_PATH}|g" "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
-log '打开 UAV0 Terminator 六分屏'
+log '打开 UAV0 Terminator 七分屏'
 log '上排：1 MAVROS | 2 MID360 | 3 FAST-LIO'
-log '下排：4 视觉位姿 | 5 FUEL/RViz | 6 AutoTrans/logger/rosbag'
+log '下排：4 视觉位姿 | 5 检测/上报 | 6 FUEL/RViz | 7 AutoTrans/logger/rosbag'
 nohup terminator --no-dbus --maximise --config="${RUNTIME_CONFIG}" --layout=uav0_six \
   >"${TERMINATOR_LOG}" 2>&1 &
 terminator_pid=$!

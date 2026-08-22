@@ -83,18 +83,19 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("createTimer", bridge)
         self.assertIn("ACTION_ABORT", bridge)
 
-    def test_six_pane_entry_uses_uav0_high_frequency_chain(self):
+    def test_seven_pane_entry_uses_uav0_high_frequency_chain(self):
         script = (WORKSPACE / "shfiles/start_uav0_six_terminator.sh").read_text(
             encoding="utf-8"
         )
         layout = (WORKSPACE / "shfiles/terminator_uav0_six.conf").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(layout.count("type = Terminal"), 6)
+        self.assertEqual(layout.count("type = Terminal"), 7)
+        self.assertIn("--pane detection", layout)
         for value in (
             "/UAV0/fast_lio/Odom_high_freq",
             "/UAV0/mavros/local_position/odom",
-            "/drone_0_traj_server/heartbeat",
+            "/fuel_traj_server",
             "uav0_autotrans_controller.launch",
         ):
             self.assertIn(value, script)
