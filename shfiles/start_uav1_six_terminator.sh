@@ -29,6 +29,7 @@ LIDAR_IMU_TOPIC="/UAV1/livox/imu"
 HIGH_FREQ_ODOM_TOPIC="/UAV1/fast_lio/Odom_high_freq"
 ODOM_TOPIC="${HIGH_FREQ_ODOM_TOPIC}"
 CLOUD_TOPIC="/UAV1/fast_lio/cloud_registered"
+DOWN_CAMERA_TOPIC="/UAV1/down_camera/image_raw"
 PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"
 VISION_POSE_TOPIC="/UAV1/mavros/vision_pose/pose"
 VISION_STABILIZE_SECONDS="${UAV1_SIX_VISION_STABILIZE_SECONDS:-8}"
@@ -50,7 +51,8 @@ usage() {
 作用：
   打开一个 Terminator 六分屏窗口并依次等待、启动：
   1 MAVROS、2 MID360、3 FAST-LIO、4 高频视觉位姿回传、
-  5 航点接力管理器/UAV1 Diff、6 AutoTrans 控制器/桥接/日志/自动 rosbag。
+  5 下视相机/航点接力管理器/UAV1 Diff/RViz、
+  6 AutoTrans 控制器/桥接/日志/自动 rosbag。
 
 说明：
   - 不自动解锁、不切换 OFFBOARD、不发送目标点。
@@ -275,15 +277,41 @@ run_pose_pane() {
 }
 
 run_planner_pane() {
+  local down_camera_pid=""
+
+  stop_owned_down_camera() {
+    if [[ -n "${down_camera_pid}" ]] && kill -0 "${down_camera_pid}" 2>/dev/null; then
+      printf '[停止] 关闭本分屏启动的 UAV1 下视相机（PID %s）\n' "${down_camera_pid}"
+      kill -INT "${down_camera_pid}" 2>/dev/null || true
+      wait "${down_camera_pid}" 2>/dev/null || true
+    fi
+  }
+
   pane_init 5 双机航点接力与UAV1 Diff
   verify_follower_binary_fresh || keep_pane_open
   wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
   wait_for_topic_message "${CLOUD_TOPIC}" || keep_pane_open
   wait_for_topic_message /UAV0/fast_lio/Odom_high_freq || keep_pane_open
-  printf '[启动] UAV1 航点接力管理器、坐标对齐、Diff-Planner与搜索降落节点\n'
+  if timeout 2 rostopic echo -n 1 "${DOWN_CAMERA_TOPIC}" >/dev/null 2>&1; then
+    printf '[复用] UAV1 下视相机已经发布：%s\n' "${DOWN_CAMERA_TOPIC}"
+  else
+    printf '[启动] UAV1 下视相机；合并标注画面将在 Diff RViz 中显示\n'
+    sh "${MATCH_WS}/shfiles/run_uav1_sensor_stack.sh" landing &
+    down_camera_pid=$!
+  fi
+  trap stop_owned_down_camera EXIT INT TERM
+  if ! wait_for_topic_message "${DOWN_CAMERA_TOPIC}"; then
+    stop_owned_down_camera
+    trap - EXIT INT TERM
+    keep_pane_open
+  fi
+  printf '[启动] UAV1 航点接力管理器、坐标对齐、Diff-Planner、RViz与搜索降落节点\n'
   printf '[安全] 不执行预设航点，只接收前机满足0.70m放行门槛后发布的接力目标。\n'
   roslaunch exploration_control leader_safe_path_follower.launch
-  printf '[退出] 双机航点接力分屏，返回码=%s\n' "$?"
+  local launch_status=$?
+  stop_owned_down_camera
+  trap - EXIT INT TERM
+  printf '[退出] 双机航点接力分屏，返回码=%s\n' "${launch_status}"
   keep_pane_open
 }
 

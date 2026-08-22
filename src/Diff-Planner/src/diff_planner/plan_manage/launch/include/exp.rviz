@@ -540,6 +540,18 @@ Visualization Manager:
               Queue Size: 100
               Value: true
             - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/landing/combined_debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: UAV1 landing down camera
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
               Enabled: false
               Image Topic: /drone_1_pcl_render_node/depth
               Max Value: 1

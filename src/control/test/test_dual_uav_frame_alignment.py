@@ -15,6 +15,11 @@ RELAY_LAUNCH = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_uav1_relay_diff.launch"
 )
 FAST_LIO_LAUNCH = ROOT.parent / "FAST_LIO/launch/mapping_mid360.launch"
+UAV1_DIFF_RVIZ = (
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/include/exp.rviz"
+)
+UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -225,6 +230,35 @@ def test_collaboration_launch_has_one_alignment_tf_and_enables_uav1_diff_rviz():
         if node.attrib.get("type") == "rviz"
     )
     assert rviz_node.attrib["name"] == "UAV1_diff_rviz"
+
+
+def test_uav1_six_starts_down_camera_and_shows_combined_image_in_diff_rviz():
+    script = UAV1_SIX_SCRIPT.read_text(encoding="utf-8")
+    planner = script.split("run_planner_pane()", 1)[1].split(
+        "run_controller_pane()", 1
+    )[0]
+    assert 'run_uav1_sensor_stack.sh" landing &' in planner
+    assert 'wait_for_topic_message "${DOWN_CAMERA_TOPIC}"' in planner
+    assert "stop_owned_down_camera" in planner
+
+    rviz = yaml.safe_load(UAV1_DIFF_RVIZ.read_text(encoding="utf-8"))
+
+    def dictionaries(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from dictionaries(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from dictionaries(child)
+
+    image = next(
+        item for item in dictionaries(rviz)
+        if item.get("Class") == "rviz/Image"
+        and item.get("Image Topic") == "/UAV1/landing/combined_debug_image"
+    )
+    assert image["Enabled"] is True
+    assert image["Value"] is True
 
 
 def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
