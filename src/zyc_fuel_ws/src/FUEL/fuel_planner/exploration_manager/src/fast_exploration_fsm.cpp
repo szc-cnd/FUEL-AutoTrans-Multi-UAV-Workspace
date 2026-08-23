@@ -438,6 +438,11 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         clearVisMarker();
       } else if (res == FAIL) {
         // Still in PLAN_TRAJ state, keep replanning
+        // 转弯可能恰好在普通重规划阶段确认，此时安全定时器不在EXEC分支，必须在这里
+        // 主动截断旧平移轨迹；随后只等待静止确认和原地转向候选，不能继续向旧轴推进。
+        if (expl_manager_->turnInPlaceAlignmentPending())
+          requestActiveTrajectoryBrake(
+              "turn-in-place alignment pending; stop old translation");
         // 2026-07-13: 新轨迹未生成时立即悬停，旧 bspline 不允许继续把机体带向障碍物。
         if (hold_on_plan_failure_) setSafetyHold(true, "planning failed");
         // 2026-07-14: FSM 定时器为 100 Hz，连续不可达时限制重复日志，保留悬停和后续重规划行为。
@@ -531,7 +536,10 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         active_traj_valid_ = true;
         active_traj_braked_ = false;
         active_turn_in_place_ = pending_turn_in_place_;
-        if (active_turn_in_place_) turn_alignment_since_ = ros::Time(0);
+        if (active_turn_in_place_) {
+          turn_alignment_since_ = ros::Time(0);
+          expl_manager_->markTurnInPlaceSegmentPublished();
+        }
         // 2026-07-27: 发布顺序固定为“轨迹先、检测使能后”，满足入口目标下发后才开始识别。
         if (!first_corridor_traj_published_) {
           first_corridor_traj_published_ = true;
@@ -565,18 +573,30 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       if (active_turn_in_place_) {
         // 原地转向要执行到yaw终点，不能按普通平移轨迹在“剩余1秒”时提前打断。
         if (time_to_end <= 0.05) {
-          const double yaw_error =
+          const double segment_yaw_error =
+              expl_manager_->turnInPlaceSegmentYawError(fd_->odom_yaw_);
+          const double final_yaw_error =
               expl_manager_->turnInPlaceFinalYawError(fd_->odom_yaw_);
           const double tolerance =
               expl_manager_->turnInPlaceCompletionTolerance();
-          if (std::fabs(yaw_error) > tolerance) {
+          if (std::fabs(segment_yaw_error) > tolerance) {
+            turn_alignment_since_ = ros::Time(0);
+            active_turn_in_place_ = false;
+            fd_->static_state_ = true;
+            transitState(PLAN_TRAJ, "turn-in-place-segment-retry");
+            ROS_WARN("[turn_in_place] published segment missed its target by "
+                     "%.1fdeg; re-anchor and retry from live yaw.",
+                     segment_yaw_error * 180.0 / M_PI);
+            return;
+          }
+          if (std::fabs(final_yaw_error) > tolerance) {
             turn_alignment_since_ = ros::Time(0);
             active_turn_in_place_ = false;
             fd_->static_state_ = true;
             transitState(PLAN_TRAJ, "turn-in-place-next-segment");
-            ROS_WARN("[turn_in_place] segment ended with actual final-yaw error "
-                     "%.1fdeg; continue next segment.",
-                     yaw_error * 180.0 / M_PI);
+            ROS_WARN("[turn_in_place] segment target reached; final-yaw error "
+                     "%.1fdeg, plan next segment from live odometry.",
+                     final_yaw_error * 180.0 / M_PI);
             return;
           }
           const ros::Time now = ros::Time::now();

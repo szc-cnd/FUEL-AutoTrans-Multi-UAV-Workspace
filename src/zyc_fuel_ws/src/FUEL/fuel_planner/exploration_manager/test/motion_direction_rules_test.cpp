@@ -2,6 +2,7 @@
 #include "path_searching/directional_progress_policy.h"
 
 #include <cassert>
+#include <limits>
 
 int main() {
   Eigen::Vector2d corridor(1.0, 0.0);
@@ -105,6 +106,13 @@ int main() {
   assert(std::fabs(fast_planner::task_search::boundedYawStep(
                        170.0 * M_PI / 180.0, -170.0 * M_PI / 180.0,
                        max_yaw_step) - 190.0 * M_PI / 180.0) < 1e-9);
+
+  // 原地转向必须先连续静止；速度和稳定时间任一不满足都不能建立转向段。
+  assert(!fast_planner::task_search::stationaryTurnReady(0.13, 0.12, 0.20, 0.15));
+  assert(!fast_planner::task_search::stationaryTurnReady(0.10, 0.12, 0.14, 0.15));
+  assert(fast_planner::task_search::stationaryTurnReady(0.12, 0.12, 0.15, 0.15));
+  assert(!fast_planner::task_search::stationaryTurnReady(
+      std::numeric_limits<double>::quiet_NaN(), 0.12, 0.20, 0.15));
 
   // 分段建立后，只有机头明显偏离实际通道轴线才校正；该判断不创建新分段。
   assert(fast_planner::task_search::corridorYawCorrectionNeeded(

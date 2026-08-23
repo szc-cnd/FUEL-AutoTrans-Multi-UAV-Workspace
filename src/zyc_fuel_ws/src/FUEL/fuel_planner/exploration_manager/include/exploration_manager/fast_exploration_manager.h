@@ -51,11 +51,16 @@ public:
   bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
   bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }
+  bool turnInPlaceAlignmentPending() const {
+    return turn_in_place_session_active_;
+  }
+  double turnInPlaceSegmentYawError(double current_yaw) const;
   double turnInPlaceFinalYawError(double current_yaw) const;
   double turnInPlaceCompletionTolerance() const;
   double turnInPlaceCompletionConfirmTime() const {
     return turn_in_place_completion_confirm_time_;
   }
+  void markTurnInPlaceSegmentPublished();
   void completeTurnInPlace();
 
   // Benchmark method, classic frontier and rapid frontier
@@ -170,11 +175,15 @@ private:
   bool turn_in_place_session_active_{false};
   Vector3d turn_in_place_anchor_{0.0, 0.0, 0.0};
   double turn_in_place_final_yaw_{0.0};
+  double turn_in_place_segment_target_yaw_{0.0};
   int turn_in_place_segment_index_{0};
   double turn_in_place_yaw_rate_deg_{30.0};
-  double turn_in_place_max_segment_angle_deg_{30.0};
-  double turn_in_place_completion_tolerance_deg_{6.0};
-  double turn_in_place_completion_confirm_time_{0.25};
+  double turn_in_place_max_segment_angle_deg_{45.0};
+  double turn_in_place_completion_tolerance_deg_{8.0};
+  double turn_in_place_completion_confirm_time_{0.15};
+  double turn_in_place_max_stationary_speed_{0.12};
+  double turn_in_place_still_confirm_time_{0.15};
+  ros::Time turn_in_place_still_since_;
   double turn_in_place_min_duration_{1.0};
   double turn_in_place_max_duration_{4.0};
   // 水平绕障全部失败后的三维恢复。下绕必须先原地下降并连续确认，不能生成斜向俯冲轨迹。
@@ -240,7 +249,8 @@ private:
                              double current_height) const;
   bool planInflationHistoryEscape(const Vector3d& pos, const Vector3d& vel,
                                   const Vector3d& acc, const Vector3d& yaw);
-  bool buildTurnInPlacePlan(const Vector3d& pos, const Vector3d& yaw,
+  bool buildTurnInPlacePlan(const Vector3d& pos, const Vector3d& vel,
+                            const Vector3d& yaw,
                             const Vector3d& turn_direction);
   bool buildVerticalDetourFallback(const Vector3d& pos, double cur_yaw,
                                    const Vector3d& forward, Vector3d& next_pos,

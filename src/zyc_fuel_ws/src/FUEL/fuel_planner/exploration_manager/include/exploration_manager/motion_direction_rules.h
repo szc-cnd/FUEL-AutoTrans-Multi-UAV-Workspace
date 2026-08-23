@@ -52,6 +52,14 @@ inline double boundedYawStep(double current_yaw, double final_yaw,
   return current_yaw + std::max(-limit, std::min(limit, error));
 }
 
+inline bool stationaryTurnReady(double speed, double max_speed,
+                                double stable_elapsed,
+                                double required_stable_time) {
+  return std::isfinite(speed) && std::isfinite(stable_elapsed) &&
+         speed <= std::max(0.0, max_speed) &&
+         stable_elapsed >= std::max(0.0, required_stable_time);
+}
+
 inline bool corridorYawCorrectionNeeded(const Eigen::Vector2d& corridor_direction,
                                         double current_yaw,
                                         double correction_threshold) {
