@@ -202,6 +202,8 @@
         <!-- 2026-07-28: 普通接力点进入15cm后先锁点0.45s，避免轨迹结束与速度门槛之间形成到点死锁。 -->
         <param name="diff_endpoint_capture_radius" value="0.15"/>
         <param name="diff_endpoint_capture_dwell" value="0.45"/>
+        <!-- Diff裁短终点超过0.20m时只算中间步，禁止误报原接力点到达。 -->
+        <param name="diff_accepted_goal_tolerance" value="0.20"/>
         <!-- 2026-07-28: PositionCommand停止0.8s且尚未到点时重发当前Diff目标。 -->
         <param name="diff_command_stale_timeout" value="0.80"/>
         <!-- 2026-07-16: 0表示不限制内部接力点数量，避免长赛道在固定5点耗尽后永久等待。 -->

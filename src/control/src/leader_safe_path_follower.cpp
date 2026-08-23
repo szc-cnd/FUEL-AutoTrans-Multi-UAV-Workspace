@@ -286,6 +286,13 @@ class LeaderSafePathFollower {
     // 2026-07-28: Diff末端速度差分可能尚未降到严格门槛；小半径内先锁点，再用停驻时间完成接力点。
     pnh_.param("diff_endpoint_capture_radius", diff_endpoint_capture_radius_, 0.15);
     pnh_.param("diff_endpoint_capture_dwell", diff_endpoint_capture_dwell_, 0.45);
+    // Diff可能因局部占据裁短轨迹终点；裁短量超过该值时只能视作中间步，不能消费接力点。
+    pnh_.param("diff_accepted_goal_tolerance", diff_accepted_goal_tolerance_, 0.20);
+    if (!std::isfinite(diff_accepted_goal_tolerance_) ||
+        diff_accepted_goal_tolerance_ < diff_endpoint_capture_radius_) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: diff_accepted_goal_tolerance must be >= diff_endpoint_capture_radius");
+    }
     // 2026-07-28: 直接监测UAV1 PositionCommand输出；轨迹结束但未到点时允许重新下发当前目标。
     pnh_.param("diff_command_stale_timeout", diff_command_stale_timeout_, 0.80);
     pnh_.param("max_internal_relay_points", max_internal_relay_points_, 0);
@@ -2301,6 +2308,32 @@ class LeaderSafePathFollower {
                        : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
+    // 入口后的内部接力必须沿UAV0已经实飞的稠密折线逐步推进。此前这里直接把相邻的
+    // 2.5m接力点交给Diff，转弯时Diff会把终点裁到近处；跟随器又会误把裁短点当作
+    // 原接力点完成，导致后续目标跨度持续增大。子目标一旦选定，在完成或明确失败前保持不变。
+    if (!terminal_relay && active_relay_index_ > 0 &&
+        !diff_recovery_requested_ && !diff_recovery_retreat_requested_ &&
+        !diff_recovery_goal_valid_ && !diff_route_subgoal_valid_ &&
+        !diff_goal_published_) {
+      RoutePoint route_step_world;
+      if (getRelayRouteTarget(followerToWorld(current_local), desired_world,
+                              &route_step_world)) {
+        const geometry_msgs::Point candidate =
+            useFollowerCruiseHeight(worldToFollower(route_step_world.position));
+        const double candidate_to_relay = distance3d(candidate, desired_local);
+        const double candidate_step = distance3d(candidate, current_local);
+        if (candidate_to_relay > relay_arrive_radius_ &&
+            candidate_step > diff_endpoint_capture_radius_) {
+          diff_route_subgoal_local_ = candidate;
+          diff_route_subgoal_valid_ = true;
+          ROS_WARN("[safe_follower] relay %zu/%zu use verified-route subgoal "
+                   "local=(%.2f,%.2f,%.2f), remaining=%.2fm.",
+                   active_relay_index_ + 1, relay_waypoints_.size(), candidate.x,
+                   candidate.y, candidate.z, candidate_to_relay);
+        }
+      }
+    }
+
     // 原接力点规划失败后先沿前机已验证的稠密路线后退，再从开阔位置重发原目标。
     // Diff可能把占据的退让目标投影到附近安全点，因此以实际接受点作为到达判据。
     const geometry_msgs::Point recovery_arrival_goal =
@@ -2388,14 +2421,19 @@ class LeaderSafePathFollower {
         return true;
       }
     }
-    const geometry_msgs::Point command_local =
-        diff_recovery_goal_valid_ ? diff_recovery_goal_local_ : desired_local;
+    const geometry_msgs::Point command_local = diff_recovery_goal_valid_
+        ? diff_recovery_goal_local_
+        : (diff_route_subgoal_valid_ ? diff_route_subgoal_local_ : desired_local);
     // 恢复点只负责把后机带离规划失败位置，绝不能消费正常接力点。恢复状态完全
     // 清空后才允许进入接力点到达判定。
     const bool normal_relay_arrival_enabled =
         !diff_recovery_requested_ && !diff_recovery_retreat_requested_ &&
         !diff_recovery_goal_valid_;
-    // 2026-07-28: 普通接力点允许以Diff返回的附近安全点完成；真实降落终点仍必须到原点。
+    const bool accepted_matches_command = diff_accepted_goal_valid_ &&
+        distance3d(diff_accepted_goal_local_, command_local) <=
+            diff_accepted_goal_tolerance_;
+    // Diff实际终点用于判断本段轨迹是否结束，但只有它仍接近当前命令点时才有资格完成
+    // 子目标或接力点；被大幅裁短的终点到达后只重发当前命令。
     const geometry_msgs::Point arrival_goal =
         (!terminal_relay && normal_relay_arrival_enabled && diff_accepted_goal_valid_)
             ? diff_accepted_goal_local_
@@ -2465,6 +2503,29 @@ class LeaderSafePathFollower {
       const double required_dwell = captured_dwell_complete ? 0.0 : relay_arrive_dwell_;
       if ((now - relay_arrival_stamp_).toSec() < required_dwell) return true;
 
+      const bool clipped_endpoint_reached = diff_accepted_goal_valid_ &&
+                                            !accepted_matches_command;
+      if (diff_route_subgoal_valid_ || clipped_endpoint_reached) {
+        const bool route_subgoal_completed =
+            diff_route_subgoal_valid_ && !clipped_endpoint_reached;
+        ROS_WARN("[safe_follower] UAV1 Diff reached %s endpoint (%.2f,%.2f,%.2f); "
+                 "keep relay %zu/%zu active and continue along verified route.",
+                 route_subgoal_completed ? "verified-route subgoal" : "clipped",
+                 arrival_goal.x, arrival_goal.y, arrival_goal.z,
+                 active_relay_index_ + 1, relay_waypoints_.size());
+        setDiffWaitPositionHold(
+            true, route_subgoal_completed ? "verified-route subgoal reached"
+                                          : "clipped endpoint reached; retry current subgoal");
+        if (route_subgoal_completed) diff_route_subgoal_valid_ = false;
+        relay_arrival_stamp_ = ros::Time(0);
+        diff_endpoint_capture_stamp_ = ros::Time(0);
+        diff_goal_published_ = false;
+        diff_plan_response_received_ = false;
+        diff_accepted_goal_valid_ = false;
+        diff_command_seen_for_goal_ = false;
+        return true;
+      }
+
       if (terminal_relay) {
         if (!follower_landing_requested_) {
           std_msgs::Bool request;
@@ -2495,6 +2556,7 @@ class LeaderSafePathFollower {
       diff_recovery_retreat_requested_ = false;
       diff_recovery_goal_valid_ = false;
       diff_recovery_goal_is_retreat_ = false;
+      diff_route_subgoal_valid_ = false;
       diff_accepted_goal_valid_ = false;
       diff_failure_retreat_attempts_ = 0;
       return true;
@@ -2960,6 +3022,7 @@ class LeaderSafePathFollower {
   double diff_failure_retreat_distance_{0.40};  // 规划失败后沿已验证路线后退的距离。
   double diff_failure_retreat_arrive_radius_{0.10};
   double diff_endpoint_capture_radius_{0.15}, diff_endpoint_capture_dwell_{0.45};
+  double diff_accepted_goal_tolerance_{0.20};
   double diff_command_stale_timeout_{0.80};  // 2026-07-28: 与控制器0.60s轨迹超时错开0.20s。
   double follower_odom_jump_speed_{2.0}, follower_odom_jump_vertical_speed_{1.2};
   int follower_odom_jump_confirm_samples_{3};
@@ -3006,6 +3069,8 @@ class LeaderSafePathFollower {
   geometry_msgs::Point diff_recovery_goal_local_;  // 2026-07-28: 当前已验证路线短子目标。
   geometry_msgs::Point separation_recovery_goal_local_;  // 双机过近时的逐步退让目标。
   geometry_msgs::Point diff_accepted_goal_local_;  // 2026-07-28: Diff对占据原目标修正后的真正落点。
+  geometry_msgs::Point diff_route_subgoal_local_;  // UAV0已验证折线上的当前短步目标。
+  bool diff_route_subgoal_valid_{false};
   int recovery_attempt_count_{0};
   int diff_planning_failure_events_{0};  // 2026-07-28: Diff连续失败诊断计数。
   int diff_failure_retreat_attempts_{0};

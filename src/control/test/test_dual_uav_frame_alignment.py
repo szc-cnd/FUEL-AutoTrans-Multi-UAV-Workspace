@@ -145,6 +145,45 @@ def test_diff_recovery_subgoal_cannot_complete_relay_and_status_is_sequenced():
     assert source.count("stampDiffGoalId(&goal);") == 2
 
 
+def test_internal_diff_relay_uses_verified_route_subgoals_without_consuming_relay():
+    source = FOLLOWER.read_text(encoding="utf-8")
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    assert "active_relay_index_ > 0" in execution
+    assert "getRelayRouteTarget(followerToWorld(current_local), desired_world" in execution
+    assert "diff_route_subgoal_local_ = candidate" in execution
+    assert "diff_route_subgoal_valid_ ? diff_route_subgoal_local_ : desired_local" in execution
+
+    intermediate = execution.split(
+        "if (diff_route_subgoal_valid_ || clipped_endpoint_reached)", 1
+    )[1].split("if (terminal_relay)", 1)[0]
+    assert "++active_relay_index_" not in intermediate
+    assert "diff_goal_published_ = false" in intermediate
+    assert "diff_accepted_goal_valid_ = false" in intermediate
+
+
+def test_diff_clipped_endpoint_cannot_complete_original_relay():
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["diff_accepted_goal_tolerance"] == "0.20"
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    assert "distance3d(diff_accepted_goal_local_, command_local)" in execution
+    assert "diff_accepted_goal_tolerance_" in execution
+    assert "clipped endpoint reached; retry current subgoal" in execution
+
+
 def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     source = FOLLOWER.read_text(encoding="utf-8")
     append = source.split("void appendRelayWaypoint", 1)[1].split(
