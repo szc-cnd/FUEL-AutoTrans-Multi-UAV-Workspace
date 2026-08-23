@@ -39,10 +39,12 @@ struct FSMParam {
   double hard_tracking_error_z_;
   // 2026-07-22: 失败重试周期与100Hz FSM定时器解耦，悬停期间等待地图真正更新。
   double plan_failure_retry_interval_;
-  // 2026-07-28: 新轨迹需经过刷新地图上的连续确认，并限制轨迹起点与真实里程计的交接误差。
+  // 新轨迹需经过刷新地图上的连续确认，并限制发布瞬间位置、速度、加速度的交接误差。
   double trajectory_release_confirm_time_;
   double trajectory_release_check_interval_;
   double trajectory_release_max_start_error_;
+  double trajectory_release_max_velocity_error_;
+  double trajectory_release_max_acceleration_error_;
   // 预测旧轨迹将碰撞时，traj_server 只沿当前样条再执行这段时间，然后停在短段末端。
   double emergency_brake_horizon_;
 };

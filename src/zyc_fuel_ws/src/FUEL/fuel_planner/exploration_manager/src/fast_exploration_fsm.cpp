@@ -44,11 +44,15 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/fuel_diff_status_topic", external_status_topic_, external_status_topic_);
   nh.param("fsm/fuel_diff_cancel_topic", external_cancel_topic_, external_cancel_topic_);
   nh.param("fsm/fuel_diff_trigger_topic", external_trigger_topic_, external_trigger_topic_);
-  // 2026-07-28: 连续复核覆盖至少两次20Hz地图/安全周期；起点误差过大则从真实里程计重规划。
+  // 连续复核覆盖至少两次20Hz地图/安全周期；任一起点状态过期都先短刹并从最新里程计重规划。
   nh.param("fsm/trajectory_release_confirm_time", fp_->trajectory_release_confirm_time_, 0.12);
   nh.param("fsm/trajectory_release_check_interval", fp_->trajectory_release_check_interval_, 0.04);
   nh.param("fsm/trajectory_release_max_start_error",
-           fp_->trajectory_release_max_start_error_, 0.25);
+           fp_->trajectory_release_max_start_error_, 0.08);
+  nh.param("fsm/trajectory_release_max_velocity_error",
+           fp_->trajectory_release_max_velocity_error_, 0.15);
+  nh.param("fsm/trajectory_release_max_acceleration_error",
+           fp_->trajectory_release_max_acceleration_error_, 0.50);
   nh.param("fsm/emergency_brake_horizon", fp_->emergency_brake_horizon_, 0.12);
 
   /* Initialize main modules */
@@ -454,7 +458,29 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
             now + ros::Duration(std::max(0.02, fp_->trajectory_release_check_interval_));
         auto& trajectory = planner_manager_->local_data_.position_traj_;
         const Eigen::Vector3d trajectory_start = trajectory.evaluateDeBoorT(0.0);
+        const Eigen::Vector3d trajectory_start_velocity =
+            planner_manager_->local_data_.velocity_traj_.evaluateDeBoorT(0.0);
+        const Eigen::Vector3d trajectory_start_acceleration =
+            planner_manager_->local_data_.acceleration_traj_.evaluateDeBoorT(0.0);
+        Eigen::Vector3d release_reference_acceleration = Eigen::Vector3d::Zero();
+        if (active_traj_valid_ && !active_traj_braked_) {
+          const double active_time = std::max(
+              0.0, std::min((now - active_traj_.start_time_).toSec(),
+                            active_traj_.duration_));
+          release_reference_acceleration =
+              active_traj_.acceleration_traj_.evaluateDeBoorT(active_time);
+        }
         const double start_error = (trajectory_start - fd_->odom_pos_).norm();
+        const double velocity_error =
+            (trajectory_start_velocity - fd_->odom_vel_).norm();
+        const double acceleration_error =
+            (trajectory_start_acceleration - release_reference_acceleration).norm();
+        const bool release_state_continuous =
+            exploration_policy::isTrajectoryReleaseStateContinuous(
+                start_error, velocity_error, acceleration_error,
+                fp_->trajectory_release_max_start_error_,
+                fp_->trajectory_release_max_velocity_error_,
+                fp_->trajectory_release_max_acceleration_error_);
         const bool controlled_escape_start =
             planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
         const bool starts_in_inflation = planner_manager_->isPositionInflated(fd_->odom_pos_);
@@ -465,14 +491,22 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
             planner_manager_->trajectoryClearsInflation(
                 0.80, 0.02, controlled_escape_start);
         const bool release_safe = raw_start_safe && clears_inflation &&
-                                  start_error <= fp_->trajectory_release_max_start_error_ &&
+                                  release_state_continuous &&
                                   planner_manager_->isTrajectorySafe(
                                       0.03, controlled_escape_start);
         if (!release_safe) {
-          ROS_ERROR("[trajectory_release] reject before publish: start_error=%.2fm raw_safe=%d "
-                    "inflated=%d clears=%d.",
-                    start_error, static_cast<int>(raw_start_safe),
+          ROS_ERROR("[trajectory_release] reject before publish: position_error=%.3fm "
+                    "velocity_error=%.3fm/s acceleration_error=%.3fm/s^2 continuous=%d "
+                    "raw_safe=%d inflated=%d clears=%d.",
+                    start_error, velocity_error, acceleration_error,
+                    static_cast<int>(release_state_continuous),
+                    static_cast<int>(raw_start_safe),
                     static_cast<int>(starts_in_inflation), static_cast<int>(clears_inflation));
+          if (!release_state_continuous) {
+            requestActiveTrajectoryBrake("stale trajectory start state before publish");
+            if (!active_traj_valid_)
+              setSafetyHold(true, "initial trajectory start state is stale");
+          }
           pending_traj_safe_since_ = ros::Time(0);
           fd_->static_state_ = true;
           next_plan_retry_time_ =

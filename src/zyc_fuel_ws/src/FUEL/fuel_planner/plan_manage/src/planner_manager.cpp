@@ -10,6 +10,8 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <visualization_msgs/Marker.h>
 
+#include <cmath>
+
 namespace fast_planner {
 // SECTION interfaces for setup and query
 
@@ -558,6 +560,10 @@ bool FastPlannerManager::planExploreTraj(const vector<Eigen::Vector3d>& tour,
     ROS_ERROR("[trajectory_input] reject exploration path with only %zu waypoint(s).", tour.size());
     return false;
   }
+  if (!cur_vel.allFinite() || !cur_acc.allFinite()) {
+    ROS_ERROR("[trajectory_input] reject non-finite boundary velocity or acceleration.");
+    return false;
+  }
   for (size_t i = 1; i < tour.size(); ++i) {
     if (!tour[i].allFinite() || (tour[i] - tour[i - 1]).norm() < 1e-3) {
       ROS_ERROR("[trajectory_input] reject invalid or duplicate waypoint at index %zu.", i);
@@ -678,6 +684,42 @@ bool FastPlannerManager::planExploreTraj(const vector<Eigen::Vector3d>& tour,
               optimized_end.allFinite() ? (optimized_end - tour.back()).norm() : -1.0);
     local_data_.position_traj_.setUniformBspline(
         boundary_ctrl_pts, pp_.bspline_degree_, duration / double(seg_num));
+  }
+
+  // 优化器中的 FEASI 是软代价，不能保证发布轨迹满足物理约束。发布前对最终样条执行
+  // 控制点导数硬检查；通过拉长内部 knot 降低速度和加速度，同时保留起终端边界状态。
+  // 若当前边界状态已经略高于配置上限，则只把该不可瞬时改变的边界值作为本次上限，
+  // 禁止轨迹内部在此基础上继续放大。
+  auto& final_traj = local_data_.position_traj_;
+  const double velocity_limit = std::max(
+      pp_.max_vel_, cur_vel.cwiseAbs().maxCoeff() + 1e-3);
+  const double acceleration_limit = std::max(
+      pp_.max_acc_, cur_acc.cwiseAbs().maxCoeff() + 1e-3);
+  if (!(velocity_limit > 0.0) || !(acceleration_limit > 0.0) ||
+      !std::isfinite(velocity_limit) || !std::isfinite(acceleration_limit)) {
+    ROS_ERROR("[trajectory_dynamics] invalid limits velocity=%.3f acceleration=%.3f.",
+              velocity_limit, acceleration_limit);
+    return false;
+  }
+  final_traj.setPhysicalLimits(velocity_limit, acceleration_limit);
+  const double duration_before_reallocation = final_traj.getTimeSum();
+  int reallocation_iterations = 0;
+  while (!final_traj.checkFeasibility(false) && reallocation_iterations < 30) {
+    final_traj.reallocateTime(false);
+    ++reallocation_iterations;
+  }
+  if (!final_traj.checkFeasibility(false)) {
+    ROS_ERROR("[trajectory_dynamics] reject infeasible final spline after %d time "
+              "reallocation iteration(s), limits=(%.3fm/s %.3fm/s^2).",
+              reallocation_iterations, velocity_limit, acceleration_limit);
+    return false;
+  }
+  const double duration_after_reallocation = final_traj.getTimeSum();
+  if (duration_after_reallocation > duration_before_reallocation + 1e-3) {
+    ROS_WARN("[trajectory_dynamics] lengthened final spline %.3fs -> %.3fs in %d "
+             "local adjustment iteration(s), limits=(%.3fm/s %.3fm/s^2).",
+             duration_before_reallocation, duration_after_reallocation,
+             reallocation_iterations, velocity_limit, acceleration_limit);
   }
 
   updateTrajInfo();

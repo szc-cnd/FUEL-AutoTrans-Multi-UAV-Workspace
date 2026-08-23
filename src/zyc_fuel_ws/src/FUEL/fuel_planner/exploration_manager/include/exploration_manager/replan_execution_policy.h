@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 
 namespace fast_planner {
 namespace exploration_policy {
@@ -53,6 +54,18 @@ inline bool shouldActivateExternalExploration(bool use_diff_for_exploration,
                                               bool external_exploration_active) {
   return use_diff_for_exploration && entry_trigger_received &&
          !external_exploration_active;
+}
+
+inline bool isTrajectoryReleaseStateContinuous(
+    double position_error, double velocity_error, double acceleration_error,
+    double max_position_error, double max_velocity_error,
+    double max_acceleration_error) {
+  return std::isfinite(position_error) && std::isfinite(velocity_error) &&
+         std::isfinite(acceleration_error) && max_position_error >= 0.0 &&
+         max_velocity_error >= 0.0 && max_acceleration_error >= 0.0 &&
+         position_error <= max_position_error &&
+         velocity_error <= max_velocity_error &&
+         acceleration_error <= max_acceleration_error;
 }
 
 }  // namespace exploration_policy

@@ -150,10 +150,12 @@
     <param name="fsm/tracking_error_grace_time" value="0.35" type="double"/>
     <param name="fsm/hard_tracking_error_xy" value="0.65" type="double"/>
     <param name="fsm/hard_tracking_error_z" value="0.50" type="double"/>
-    <!-- 2026-07-28: 发布前跨多次地图刷新连续确认，且轨迹起点必须贴合真实里程计。 -->
+    <!-- 发布前跨多次地图刷新连续确认；位置、速度和加速度任一跳变都先短刹并重规划。 -->
     <param name="fsm/trajectory_release_confirm_time" value="0.12" type="double"/>
     <param name="fsm/trajectory_release_check_interval" value="0.04" type="double"/>
-    <param name="fsm/trajectory_release_max_start_error" value="0.25" type="double"/>
+    <param name="fsm/trajectory_release_max_start_error" value="0.08" type="double"/>
+    <param name="fsm/trajectory_release_max_velocity_error" value="0.15" type="double"/>
+    <param name="fsm/trajectory_release_max_acceleration_error" value="0.50" type="double"/>
     <param name="fsm/emergency_brake_horizon" value="0.12" type="double"/>
 
     <!-- Exploration manager -->

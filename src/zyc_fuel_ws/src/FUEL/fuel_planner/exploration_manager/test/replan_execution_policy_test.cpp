@@ -1,4 +1,5 @@
 #include <cassert>
+#include <limits>
 
 #include "exploration_manager/replan_execution_policy.h"
 
@@ -11,6 +12,7 @@ int main() {
   using fast_planner::exploration_policy::shouldMonitorPublishedTrajectory;
   using fast_planner::exploration_policy::shouldReplanForCoveredFrontier;
   using fast_planner::exploration_policy::shouldActivateExternalExploration;
+  using fast_planner::exploration_policy::isTrajectoryReleaseStateContinuous;
 
   // 新规划失败时，仍然安全的当前轨迹不能被提前截断。
   assert(!shouldInterruptCurrentTrajectory(false));
@@ -51,5 +53,13 @@ int main() {
   assert(shouldActivateExternalExploration(true, true, false));
   assert(!shouldActivateExternalExploration(true, true, true));
   assert(!shouldActivateExternalExploration(false, true, false));
+
+  // 发布前必须同时满足位置、速度和加速度连续性，边界值允许通过。
+  assert(isTrajectoryReleaseStateContinuous(0.08, 0.15, 0.50, 0.08, 0.15, 0.50));
+  assert(!isTrajectoryReleaseStateContinuous(0.081, 0.15, 0.50, 0.08, 0.15, 0.50));
+  assert(!isTrajectoryReleaseStateContinuous(0.08, 0.151, 0.50, 0.08, 0.15, 0.50));
+  assert(!isTrajectoryReleaseStateContinuous(0.08, 0.15, 0.501, 0.08, 0.15, 0.50));
+  assert(!isTrajectoryReleaseStateContinuous(
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0, 0.08, 0.15, 0.50));
   return 0;
 }

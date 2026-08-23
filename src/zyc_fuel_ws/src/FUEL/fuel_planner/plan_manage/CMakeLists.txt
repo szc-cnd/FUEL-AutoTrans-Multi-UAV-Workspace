@@ -90,3 +90,9 @@ target_link_libraries( proc_msg2
     ${catkin_LIBRARIES} 
     ${PCL_LIBRARIES}
     )  
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(trajectory_dynamics_test test/trajectory_dynamics_test.cpp)
+  target_link_libraries(trajectory_dynamics_test bspline ${catkin_LIBRARIES})
+  add_test(NAME trajectory_dynamics_test COMMAND trajectory_dynamics_test)
+endif()
