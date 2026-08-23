@@ -23,6 +23,7 @@
   <!-- MID360 原始加速度以 g 发布；该并行话题按 FAST-LIO 初始化尺度转换为 m/s^2。 -->
   <arg name="imu_mps2_topic" default="/$(arg vehicle_ns)/livox/imu_mps2" />
   <arg name="odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odometry" />
+  <arg name="publish_odometry" default="true" />
   <arg name="high_freq_odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odom_high_freq" />
   <arg name="cloud_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered" />
   <arg name="cloud_body_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered_body" />
@@ -53,6 +54,7 @@
     <param name="common/imu_topic" value="$(arg imu_topic)" />
     <param name="publish/imu_mps2_topic" value="$(arg imu_mps2_topic)" />
     <param name="publish/odometry_topic" value="$(arg odom_topic)" />
+    <param name="publish/odometry_enable" value="$(arg publish_odometry)" />
     <param name="publish/high_freq_odom_topic" value="$(arg high_freq_odom_topic)" />
     <param name="publish/cloud_registered_topic" value="$(arg cloud_topic)" />
     <param name="publish/cloud_registered_body_topic" value="$(arg cloud_body_topic)" />

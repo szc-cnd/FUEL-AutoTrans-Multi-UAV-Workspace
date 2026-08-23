@@ -73,6 +73,7 @@ double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_pl
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+bool   odometry_pub_en = true;
 /**************************/
 
 float res_last[100000] = {0.0};
@@ -763,7 +764,10 @@ void publish_odometry(const ros::Publisher & pubOdomAftMapped)
         odomAftMapped.pose.covariance[i*6 + 5] = P(k, 2);
     }
     // 【修改点 2：移到最后发布】确保 covariance 填好后再发
-    pubOdomAftMapped.publish(odomAftMapped);
+    if (odometry_pub_en)
+    {
+        pubOdomAftMapped.publish(odomAftMapped);
+    }
 
     static tf::TransformBroadcaster br;
     tf::Transform                   transform;
@@ -932,6 +936,7 @@ int main(int argc, char** argv)
     nh.param<string>("publish/cloud_effected_topic", cloud_effected_topic, "/cloud_effected");
     nh.param<string>("publish/laser_map_topic", laser_map_topic, "/Laser_map");
     nh.param<string>("publish/odometry_topic", odometry_topic, "/Odometry");
+    nh.param<bool>("publish/odometry_enable", odometry_pub_en, true);
     nh.param<string>("publish/path_topic", path_topic, "/path");
     nh.param<string>("publish/high_freq_odom_topic", high_freq_odom_topic, "/Odom_high_freq");
     nh.param<string>("publish/imu_mps2_topic", imu_mps2_topic, "/livox/imu_mps2");
@@ -1025,8 +1030,12 @@ int main(int argc, char** argv)
             (cloud_effected_topic, 100000);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
             (laser_map_topic, 100000);
-    ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
-            (odometry_topic, 100000);
+    ros::Publisher pubOdomAftMapped;
+    if (odometry_pub_en)
+    {
+        pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>
+                (odometry_topic, 100000);
+    }
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             (path_topic, 100000);
     // 高频预测里程计：仅供独立验证，频率由输入 IMU 回调决定，不替换普通点云校正里程计。
