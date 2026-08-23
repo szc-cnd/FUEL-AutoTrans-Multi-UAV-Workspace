@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <iostream>
 #include <nav_msgs/Path.h>
@@ -124,6 +125,8 @@ namespace diff_planner
     bool swing_wait_active_;
     double swing_clear_since_;
     uint32_t swing_wait_obstacle_id_;
+    // 当前外部目标序号随每条规划状态回传，供接力管理器过滤锁存/延迟回执。
+    uint32_t active_external_goal_seq_{0U};
     FSM_EXEC_STATE exec_state_;
     int continously_called_times_{0};
 

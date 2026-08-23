@@ -124,6 +124,27 @@ def test_diff_execution_continuously_holds_and_retreats_for_uav_spacing():
     assert "accepted_improves_separation" in status
 
 
+def test_diff_recovery_subgoal_cannot_complete_relay_and_status_is_sequenced():
+    source = FOLLOWER.read_text(encoding="utf-8")
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    assert "const bool normal_relay_arrival_enabled" in execution
+    assert "!diff_recovery_requested_" in execution
+    assert "!diff_recovery_retreat_requested_" in execution
+    assert "!diff_recovery_goal_valid_" in execution
+    assert "normal_relay_arrival_enabled && position_reached" in execution
+    assert "normal_relay_arrival_enabled && !terminal_relay" in execution
+
+    status = source.split("void diffStatusCallback", 1)[1].split(
+        "bool getLaggedTarget", 1
+    )[0]
+    assert 'const std::string sequence_prefix = "goal_seq="' in status
+    assert "response_sequence != diff_active_goal_sequence_" in status
+    assert "ignore stale UAV1 Diff status" in status
+    assert source.count("stampDiffGoalSequence(&goal);") == 2
+
+
 def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     source = FOLLOWER.read_text(encoding="utf-8")
     append = source.split("void appendRelayWaypoint", 1)[1].split(

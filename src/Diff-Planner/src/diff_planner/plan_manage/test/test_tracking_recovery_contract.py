@@ -80,3 +80,19 @@ def test_trajectory_sampling_rejects_non_progressing_loops():
     assert "MIN_SAMPLE_STEP = 1.0e-4" in optimizer
     assert "MAX_TRAJECTORY_SAMPLES = 1000000U" in optimizer
     assert "while (sample_count++ < max_samples)" in optimizer
+
+
+def test_planning_status_echoes_external_goal_sequence():
+    header = FSM_HEADER.read_text(encoding="utf-8")
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    callback = source.split("void DiffReplanFSM::waypointCallback", 1)[1].split(
+        "void DiffReplanFSM::publishPlanningStatus", 1
+    )[0]
+    status = source.split("void DiffReplanFSM::publishPlanningStatus", 1)[1].split(
+        "void DiffReplanFSM::readGivenWpsAndPlan", 1
+    )[0]
+
+    assert "active_external_goal_seq_" in header
+    assert "active_external_goal_seq_ = msg->header.seq;" in callback
+    assert 'stream << status << " goal_seq=" << active_external_goal_seq_' in status
+    assert 'stream << " " << final_goal_.x()' in status

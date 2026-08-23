@@ -68,6 +68,11 @@ geometry_msgs::Point interpolate(const geometry_msgs::Point& a,
 class LeaderSafePathFollower {
  public:
   LeaderSafePathFollower() : nh_(), pnh_("~") {
+    // 为每次下发给Diff的外部目标生成跨本进程唯一的序号；随机化起点也避免
+    // 跟随器重启后误接收规划器锁存的上一进程回执。
+    diff_goal_sequence_counter_ =
+        static_cast<uint32_t>(ros::WallTime::now().toNSec() & 0xffffffffULL);
+    if (diff_goal_sequence_counter_ == 0U) diff_goal_sequence_counter_ = 1U;
     // 2026-07-27: 所有双机默认话题前缀统一为 UAV0/UAV1；公共坐标偏移和安全阈值仍可由 launch 标定。
     pnh_.param<std::string>("leader_odom_topic", leader_odom_topic_,
                             "/UAV0/fast_lio/Odom_high_freq");
@@ -1134,6 +1139,13 @@ class LeaderSafePathFollower {
               active ? "ACTIVE" : "RELEASED", reason.c_str());
   }
 
+  void stampDiffGoalSequence(geometry_msgs::PoseStamped* goal) {
+    ++diff_goal_sequence_counter_;
+    if (diff_goal_sequence_counter_ == 0U) ++diff_goal_sequence_counter_;
+    goal->header.seq = diff_goal_sequence_counter_;
+    diff_active_goal_sequence_ = goal->header.seq;
+  }
+
   void leaderTaskStatusCallback(const std_msgs::String::ConstPtr& msg) {
     if (!enable_search_landing_) {
       leader_outside_exit_ = false;
@@ -1154,7 +1166,36 @@ class LeaderSafePathFollower {
   void diffStatusCallback(const std_msgs::String::ConstPtr& msg) {
     std::istringstream stream(msg->data);
     std::string status;
-    stream >> status;
+    std::string sequence_token;
+    stream >> status >> sequence_token;
+    uint32_t response_sequence = 0U;
+    bool response_sequence_valid = false;
+    const std::string sequence_prefix = "goal_seq=";
+    if (sequence_token.compare(0, sequence_prefix.size(), sequence_prefix) == 0) {
+      std::istringstream sequence_stream(sequence_token.substr(sequence_prefix.size()));
+      unsigned long parsed_sequence = 0UL;
+      char trailing = '\0';
+      if ((sequence_stream >> parsed_sequence) && !(sequence_stream >> trailing) &&
+          parsed_sequence <= std::numeric_limits<uint32_t>::max()) {
+        response_sequence = static_cast<uint32_t>(parsed_sequence);
+        response_sequence_valid = true;
+      }
+    }
+
+    // planning/status为锁存话题且规划线程可能延迟完成。只有目标序号、接力索引都
+    // 与当前活动目标一致的回执才可改变HOLD/恢复状态，上一条退让轨迹不能污染重发目标。
+    if (!response_sequence_valid || !diff_goal_published_ ||
+        diff_goal_index_ != active_relay_index_ ||
+        response_sequence != diff_active_goal_sequence_) {
+      const std::string response_sequence_label =
+          response_sequence_valid ? std::to_string(response_sequence) : "invalid";
+      ROS_WARN("[safe_follower] ignore stale UAV1 Diff status=%s goal_seq=%s; "
+               "active=%d relay=%zu/%zu active_seq=%u.",
+               status.c_str(), response_sequence_label.c_str(),
+               static_cast<int>(diff_goal_published_), diff_goal_index_ + 1,
+               active_relay_index_ + 1, diff_active_goal_sequence_);
+      return;
+    }
     geometry_msgs::Point accepted;
     const bool accepted_valid =
         status == "TRAJECTORY_PUBLISHED" &&
@@ -1212,13 +1253,6 @@ class LeaderSafePathFollower {
                   "actual_goal=(%.2f,%.2f,%.2f).", accepted.x, accepted.y, accepted.z);
         return;
       }
-    }
-    // Ignore a latched/delayed failure when there is no active goal to recover.
-    if ((status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") &&
-        (!diff_goal_published_ || diff_goal_index_ != active_relay_index_)) {
-      ROS_WARN("[safe_follower] ignore stale UAV1 Diff status=%s without an active relay goal.",
-               status.c_str());
-      return;
     }
     // A non-stale status is the planner's response to the current goal.
     diff_plan_response_received_ = true;
@@ -2193,6 +2227,7 @@ class LeaderSafePathFollower {
     const double local_yaw = worldYawToFollower(retreat_world.yaw);
     goal.pose.orientation.w = std::cos(local_yaw * 0.5);
     goal.pose.orientation.z = std::sin(local_yaw * 0.5);
+    stampDiffGoalSequence(&goal);
     diff_goal_pub_.publish(goal);
     diff_goal_index_ = active_relay_index_;
     diff_goal_published_ = true;
@@ -2355,9 +2390,16 @@ class LeaderSafePathFollower {
     }
     const geometry_msgs::Point command_local =
         diff_recovery_goal_valid_ ? diff_recovery_goal_local_ : desired_local;
+    // 恢复点只负责把后机带离规划失败位置，绝不能消费正常接力点。恢复状态完全
+    // 清空后才允许进入接力点到达判定。
+    const bool normal_relay_arrival_enabled =
+        !diff_recovery_requested_ && !diff_recovery_retreat_requested_ &&
+        !diff_recovery_goal_valid_;
     // 2026-07-28: 普通接力点允许以Diff返回的附近安全点完成；真实降落终点仍必须到原点。
     const geometry_msgs::Point arrival_goal =
-        (!terminal_relay && diff_accepted_goal_valid_) ? diff_accepted_goal_local_ : desired_local;
+        (!terminal_relay && normal_relay_arrival_enabled && diff_accepted_goal_valid_)
+            ? diff_accepted_goal_local_
+            : desired_local;
     const double horizontal_error =
         std::hypot(arrival_goal.x - current_local.x, arrival_goal.y - current_local.y);
     const double vertical_error = std::fabs(arrival_goal.z - current_local.z);
@@ -2394,13 +2436,13 @@ class LeaderSafePathFollower {
     const bool position_reached = horizontal_error <= relay_arrive_radius_ &&
                                   vertical_error <= relay_arrive_z_tolerance_;
     const bool strict_arrival =
-        position_reached &&
+        normal_relay_arrival_enabled && position_reached &&
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
     // 2026-07-28: 普通接力点进入更小的安全半径后立即捕获当前位置；避免轨迹先结束、
     // FAST-LIO差分速度后收敛而形成“到点但永远不ARRIVED”的循环死锁。
     const bool endpoint_capture =
-        !terminal_relay && diff_accepted_goal_valid_ &&
+        normal_relay_arrival_enabled && !terminal_relay && diff_accepted_goal_valid_ &&
         horizontal_error <= diff_endpoint_capture_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_;
     if (endpoint_capture && diff_endpoint_capture_stamp_.isZero()) {
@@ -2495,6 +2537,7 @@ class LeaderSafePathFollower {
       const double local_yaw = worldYawToFollower(desired_world.yaw);
       goal.pose.orientation.w = std::cos(local_yaw * 0.5);
       goal.pose.orientation.z = std::sin(local_yaw * 0.5);
+      stampDiffGoalSequence(&goal);
       diff_goal_pub_.publish(goal);
       diff_goal_index_ = active_relay_index_;
       diff_goal_published_ = true;
@@ -2851,6 +2894,7 @@ class LeaderSafePathFollower {
   bool follower_precision_landing_active_{false};
   bool follower_detection_enabled_{false};  // 2026-07-27: 锁存的UAV1检测会话状态。
   bool diff_goal_published_{false}, diff_dynamic_hold_active_{false}; // 2026-07-28: UAV1 Diff目标与动态紧停状态。
+  uint32_t diff_goal_sequence_counter_{0U}, diff_active_goal_sequence_{0U};
   bool enable_dynamic_obstacle_detection_{false};
   bool diff_wait_hold_active_{false};  // 2026-07-28: 接力点之间使用MAVROS位置闭环锁点，区别于动态临时HOLD。
   bool diff_plan_response_received_{false}, diff_accepted_goal_valid_{false}; // 2026-07-28: Diff应答与实际落点。

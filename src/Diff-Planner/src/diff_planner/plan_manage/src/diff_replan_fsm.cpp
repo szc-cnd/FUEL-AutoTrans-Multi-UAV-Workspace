@@ -1556,6 +1556,7 @@ namespace diff_planner
 
   void DiffReplanFSM::waypointCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
+    active_external_goal_seq_ = msg->header.seq;
     Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
     if (planner_manager_->grid_map_->getInflateOccupancy(end_wp) == -1)
     {
@@ -1573,18 +1574,17 @@ namespace diff_planner
 
   void DiffReplanFSM::publishPlanningStatus(const std::string &status)
   {
-    // 2026-07-28: 使用String保持现有消息依赖不变；成功时附带Diff实际接受的
-    // final_goal，避免上层仍等待已被占据的原始接力点而永久卡住。
+    // 使用String保持现有消息依赖不变。所有状态回传当前外部目标序号，成功时再
+    // 附带Diff实际接受的final_goal，避免延迟/锁存回执污染刚重发的新目标。
     std_msgs::String msg;
+    std::ostringstream stream;
+    stream << status << " goal_seq=" << active_external_goal_seq_;
     if (status == "TRAJECTORY_PUBLISHED")
     {
-      std::ostringstream stream;
-      stream << status << " " << final_goal_.x() << " " << final_goal_.y() << " "
+      stream << " " << final_goal_.x() << " " << final_goal_.y() << " "
              << final_goal_.z();
-      msg.data = stream.str();
     }
-    else
-      msg.data = status;
+    msg.data = stream.str();
     planning_status_pub_.publish(msg);
   }
 
