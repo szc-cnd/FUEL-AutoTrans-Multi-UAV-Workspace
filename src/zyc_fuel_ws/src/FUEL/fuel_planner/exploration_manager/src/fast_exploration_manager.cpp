@@ -1152,9 +1152,10 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   int rejected_position = 0;
   int rejected_astar = 0;
   int rejected_path = 0;
-  // 窄通道恢复只做当前高度的水平推进；柱体上下宽度相近时升高不会增加可通行性。
+  // 普通水平恢复始终回到任务巡航高度，不能把转弯期间的实际掉高固化成新目标。
+  // 明确的上下避障仍由 vertical_detour 独立选择临时高度。
   const double recovery_z =
-      task_search_manager_ ? task_search_manager_->clampSearchHeight(pos.z()) : pos.z();
+      task_search_manager_ ? task_search_manager_->preferredSearchHeight() : pos.z();
   struct RecoveryChoice {
     bool valid{false};
     Vector3d position{0.0, 0.0, 0.0};
