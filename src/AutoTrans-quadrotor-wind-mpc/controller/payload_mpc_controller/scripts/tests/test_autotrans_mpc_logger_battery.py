@@ -4,8 +4,10 @@ import importlib.util
 import math
 import pathlib
 import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 def install_ros_stubs():
@@ -80,6 +82,28 @@ class BatteryLoggingTest(unittest.TestCase):
     def test_missing_battery_sample_writes_empty_columns(self):
         logger = self.make_logger()
         self.assertEqual(logger.extract_battery_values(), ["", ""])
+
+    def test_evo_report_starts_in_independent_session(self):
+        logger = self.make_logger()
+        logger.enable_evo_report = True
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger.run_dir = temp_dir
+            logger.csv_path = str(pathlib.Path(temp_dir) / "setpoint.csv")
+            logger.trajectory_path = str(pathlib.Path(temp_dir) / "trajectory.csv")
+            process = types.SimpleNamespace(pid=4321)
+            with mock.patch.object(
+                    self.module.subprocess, "Popen", return_value=process) as popen:
+                with mock.patch.object(self.module.rospy, "loginfo", create=True):
+                    logger.start_evo_report()
+
+            command = popen.call_args.args[0]
+            options = popen.call_args.kwargs
+            self.assertIn("generate_evo_report.py", command[1])
+            self.assertEqual(options["stdin"], self.module.subprocess.DEVNULL)
+            self.assertTrue(options["start_new_session"])
+            self.assertTrue(options["close_fds"])
+            self.assertTrue(
+                (pathlib.Path(temp_dir) / "evo_report" / "postprocess.log").exists())
 
 
 if __name__ == "__main__":

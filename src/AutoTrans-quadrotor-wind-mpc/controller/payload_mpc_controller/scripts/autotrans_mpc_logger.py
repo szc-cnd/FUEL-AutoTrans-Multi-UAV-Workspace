@@ -346,13 +346,15 @@ class AutoTransMpcLogger:
             self.rosbag_console_file.close()
             self.rosbag_console_file = None
 
-    def generate_evo_report(self):
-        """原始日志关闭后同步生成报告；失败不能阻断 logger 退出。"""
+    def start_evo_report(self):
+        """原始日志关闭后在独立会话中启动报告生成，不阻塞 ROS 退出。"""
         if not self.enable_evo_report:
             return
 
         script_path = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "generate_evo_report.py")
+        report_dir = os.path.join(self.run_dir, "evo_report")
+        console_path = os.path.join(report_dir, "postprocess.log")
         command = [
             sys.executable,
             script_path,
@@ -364,27 +366,25 @@ class AutoTransMpcLogger:
             self.trajectory_path,
         ]
         try:
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                timeout=60.0,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            rospy.logwarn("[autotrans_mpc_logger] evo report failed: %s", exc)
+            os.makedirs(report_dir, exist_ok=True)
+            with open(console_path, "a") as console_file:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=console_file,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    start_new_session=True,
+                )
+        except (OSError, ValueError) as exc:
+            rospy.logwarn("[autotrans_mpc_logger] evo report start failed: %s", exc)
             return
 
-        output = (result.stdout or "").strip()
-        if result.returncode == 0:
-            rospy.loginfo("[autotrans_mpc_logger] %s", output)
-        else:
-            rospy.logwarn(
-                "[autotrans_mpc_logger] evo report exited with code %d: %s",
-                result.returncode,
-                output,
-            )
+        rospy.loginfo(
+            "[autotrans_mpc_logger] evo report started independently: pid=%d, log=%s",
+            process.pid,
+            console_path,
+        )
 
     def odom_cb(self, msg):
         self.latest_odom = msg
@@ -754,7 +754,8 @@ class AutoTransMpcLogger:
         self.csv_file.close()
         self.text_file.flush()
         self.text_file.close()
-        self.generate_evo_report()
+        # 后处理必须最后启动；独立会话可避免 ROS/Terminator 退出信号中断 EVO。
+        self.start_evo_report()
 
 
 if __name__ == "__main__":
