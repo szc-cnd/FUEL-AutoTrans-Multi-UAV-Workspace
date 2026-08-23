@@ -15,6 +15,14 @@ RELAY_LAUNCH = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_uav1_relay_diff.launch"
 )
 FAST_LIO_LAUNCH = ROOT.parent / "FAST_LIO/launch/mapping_mid360.launch"
+ADVANCED_DIFF_LAUNCH = (
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/include/advanced_param_exp.xml"
+)
+RVIZ_CONFIG = (
+    ROOT.parent
+    / "zyc_fuel_ws/src/FUEL/fuel_planner/plan_manage/config/traj.rviz"
+)
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -172,6 +180,40 @@ def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
     }
     assert "publish_world_to_follower_tf" in relay_args
     assert "enable_rviz" in relay_args
+
+
+def test_uav1_planning_visualization_uses_aligned_local_frame_in_shared_rviz():
+    relay_root = ET.parse(RELAY_LAUNCH).getroot()
+    diff_include = next(
+        item for item in relay_root.findall("include")
+        if "advanced_param_exp.xml" in item.attrib.get("file", "")
+    )
+    include_args = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in diff_include.findall("arg")
+    }
+    assert include_args["visualization_frame_id"] == "UAV1/camera_init"
+
+    advanced_root = ET.parse(ADVANCED_DIFF_LAUNCH).getroot()
+    advanced_args = {
+        item.attrib["name"]: item.attrib.get("default")
+        for item in advanced_root.findall("arg")
+    }
+    assert advanced_args["visualization_frame_id"] == "world"
+    planner = next(
+        node for node in advanced_root.findall("node")
+        if node.attrib.get("type") == "diff_planner_node"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in planner.findall("param")
+    }
+    assert params["visualization/frame_id"] == "$(arg visualization_frame_id)"
+
+    rviz = RVIZ_CONFIG.read_text(encoding="utf-8")
+    assert "Marker Topic: /UAV1/odom_visualization/robot" in rviz
+    assert "Topic: /UAV1/odom_visualization/path" in rviz
+    assert "Marker Topic: /drone_1_diff_planner_node/optimal_list" in rviz
 
 
 def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
