@@ -352,29 +352,16 @@ private:
   double failed_goal_cooldown_{2.0};
   double inside_return_margin_{0.10};
   double entry_path_direction_grace_distance_{1.50};
-  // 2026-07-28: 恢复器仅在旧前向受阻、侧向已知FREE明显更长且左右墙连续时采用地图拐弯方向。
+  // 单通道转弯：旧轴前方终止后，直接从占据图选择仍在延伸的自由分支。
   bool recovery_occupancy_turn_enabled_{true};
   double recovery_turn_probe_length_{1.50};
   double recovery_turn_probe_step_{0.10};
-  double recovery_turn_min_free_length_{0.50};
-  double recovery_turn_min_free_gain_{0.15};
   double recovery_turn_min_angle_deg_{30.0};
   double recovery_turn_max_angle_deg_{120.0};
-  double recovery_turn_wall_min_half_width_{0.35};
-  double recovery_turn_wall_max_half_width_{1.05};
-  int recovery_turn_min_wall_support_{2};
   int recovery_turn_confirmation_count_{1};
   double recovery_turn_confirmation_min_interval_{0.15};
   double recovery_turn_confirmation_angle_deg_{15.0};
   double recovery_turn_confirmation_accumulation_window_{8.0};
-  double recovery_turn_long_view_length_{4.50};
-  double recovery_turn_long_view_step_{0.25};
-  double recovery_turn_long_view_min_depth_{2.00};
-  int recovery_turn_long_view_min_free_sections_{5};
-  int recovery_turn_long_view_min_wall_sections_{3};
-  int recovery_turn_long_view_min_paired_wall_sections_{4};
-  double recovery_turn_long_view_width_tolerance_{0.30};
-  double recovery_turn_long_view_center_tolerance_{0.25};
   double recovery_turn_no_return_margin_{0.20};
   double recovery_turn_yaw_release_angle_deg_{15.0};
 

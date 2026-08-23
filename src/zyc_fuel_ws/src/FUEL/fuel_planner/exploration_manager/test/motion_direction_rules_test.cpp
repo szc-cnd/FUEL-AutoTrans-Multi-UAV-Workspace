@@ -66,13 +66,6 @@ int main() {
   assert(fast_planner::task_search::holdYawForLateralTranslation(0.70));
   assert(!fast_planner::task_search::holdYawForLateralTranslation(0.71));
 
-  // 拐角近场允许只有外墙连续；远场还会单独要求新方向重新形成稳定双墙。
-  assert(fast_planner::task_search::mappedContourSupportsTurn(true, 3, 0, 2));
-  assert(fast_planner::task_search::mappedContourSupportsTurn(true, 0, 3, 2));
-  // An isolated obstacle has no continuous wall contour and must remain a lateral detour.
-  assert(!fast_planner::task_search::mappedContourSupportsTurn(true, 1, 0, 2));
-  assert(!fast_planner::task_search::mappedContourSupportsTurn(false, 3, 0, 2));
-
   // 地图确认转弯后，位置恢复先读取新方向不能把偏航跟随状态消费掉。
   fast_planner::task_search::TurnYawFollowLatch turn_latch;
   assert(turn_latch.arm(Eigen::Vector2d(0.0, 1.0)));
@@ -132,21 +125,5 @@ int main() {
   // 入口、出口和降落等非通道搜索状态沿用各自已有的yaw规则。
   assert(!fast_planner::task_search::holdYawInCorridor(false, false));
 
-  // 只有约1m的近场侧绕空间不能被当成新通道。
-  assert(!fast_planner::task_search::longRangeTurnViewSupported(
-      1.0, 5, 1.0, 3, 0.8, 2, 0.8, 2, 2,
-      2.0, 5, 3, 4));
-  // 只有单侧长墙时可能只是圆柱边缘或障碍物后的旧墙，不能确认转弯。
-  assert(!fast_planner::task_search::longRangeTurnViewSupported(
-      3.5, 9, 3.2, 5, 0.8, 1, 0.8, 1, 1,
-      2.0, 5, 3, 4));
-  // 允许中间被障碍物遮挡，但远端必须重新形成宽度/中心稳定的双墙通道。
-  assert(fast_planner::task_search::longRangeTurnViewSupported(
-      3.5, 9, 3.2, 6, 3.0, 5, 3.0, 5, 4,
-      2.0, 5, 3, 4));
-  // 双墙虽然都有零散命中，但没有足够的同截面稳定配对，仍按普通绕障处理。
-  assert(!fast_planner::task_search::longRangeTurnViewSupported(
-      3.5, 9, 3.2, 5, 3.0, 4, 3.0, 3, 2,
-      2.0, 5, 3, 4));
   return 0;
 }

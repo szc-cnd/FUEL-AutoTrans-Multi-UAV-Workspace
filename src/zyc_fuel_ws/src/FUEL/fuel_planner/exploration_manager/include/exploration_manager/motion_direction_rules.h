@@ -117,42 +117,6 @@ inline bool holdYawInCorridor(bool corridor_search_active,
   return corridor_search_active && !mapped_turn_detected;
 }
 
-inline bool longRangeTurnViewSupported(
-    double farthest_free_depth, int free_sections,
-    double farthest_left_wall_depth, int left_wall_sections,
-    double farthest_right_wall_depth, int right_wall_sections,
-    double farthest_paired_wall_depth, int paired_wall_sections,
-    int consistent_paired_wall_sections,
-    double minimum_visible_depth, int minimum_free_sections,
-    int minimum_wall_sections, int minimum_paired_wall_sections) {
-  const bool far_free =
-      farthest_free_depth + 1e-6 >= minimum_visible_depth &&
-      free_sections >= std::max(1, minimum_free_sections);
-  const bool far_left_wall =
-      farthest_left_wall_depth + 1e-6 >= minimum_visible_depth &&
-      left_wall_sections >= std::max(1, minimum_wall_sections);
-  const bool far_right_wall =
-      farthest_right_wall_depth + 1e-6 >= minimum_visible_depth &&
-      right_wall_sections >= std::max(1, minimum_wall_sections);
-  const bool paired_corridor =
-      farthest_paired_wall_depth + 1e-6 >= minimum_visible_depth &&
-      paired_wall_sections >= std::max(1, minimum_paired_wall_sections) &&
-      consistent_paired_wall_sections >=
-          std::max(1, minimum_paired_wall_sections);
-  // 一侧墙只能说明有墙，不能说明它是新通道。真正转弯允许近角处一侧被遮挡，
-  // 但远端必须重新看到同截面的左右墙，并且墙宽和中心保持一致。
-  return far_free && far_left_wall && far_right_wall && paired_corridor;
-}
-
-inline bool mappedContourSupportsTurn(bool front_wall_blocked,
-                                      int left_wall_support,
-                                      int right_wall_support,
-                                      int minimum_wall_support) {
-  minimum_wall_support = std::max(1, minimum_wall_support);
-  return front_wall_blocked &&
-         std::max(left_wall_support, right_wall_support) >= minimum_wall_support;
-}
-
 inline bool passesMissionBoundaryNoReturn(double door_progress,
                                           double inside_return_margin,
                                           bool final_exit_guard_active,

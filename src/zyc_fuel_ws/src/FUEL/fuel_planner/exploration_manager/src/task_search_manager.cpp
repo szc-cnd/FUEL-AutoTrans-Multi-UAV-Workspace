@@ -81,20 +81,10 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            recovery_turn_probe_length_, 1.50);
   nh.param("mission/task_search/recovery/turn_probe_step",
            recovery_turn_probe_step_, 0.10);
-  nh.param("mission/task_search/recovery/turn_min_free_length",
-           recovery_turn_min_free_length_, 0.50);
-  nh.param("mission/task_search/recovery/turn_min_free_gain",
-           recovery_turn_min_free_gain_, 0.15);
   nh.param("mission/task_search/recovery/turn_min_angle_deg",
            recovery_turn_min_angle_deg_, 30.0);
   nh.param("mission/task_search/recovery/turn_max_angle_deg",
            recovery_turn_max_angle_deg_, 120.0);
-  nh.param("mission/task_search/recovery/turn_wall_min_half_width",
-           recovery_turn_wall_min_half_width_, 0.35);
-  nh.param("mission/task_search/recovery/turn_wall_max_half_width",
-           recovery_turn_wall_max_half_width_, 1.05);
-  nh.param("mission/task_search/recovery/turn_min_wall_support",
-           recovery_turn_min_wall_support_, 2);
   nh.param("mission/task_search/recovery/turn_confirmation_count",
            recovery_turn_confirmation_count_, 1);
   nh.param("mission/task_search/recovery/turn_confirmation_min_interval",
@@ -103,22 +93,6 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
            recovery_turn_confirmation_angle_deg_, 15.0);
   nh.param("mission/task_search/recovery/turn_confirmation_accumulation_window",
            recovery_turn_confirmation_accumulation_window_, 8.0);
-  nh.param("mission/task_search/recovery/turn_long_view_length",
-           recovery_turn_long_view_length_, 4.50);
-  nh.param("mission/task_search/recovery/turn_long_view_step",
-           recovery_turn_long_view_step_, 0.25);
-  nh.param("mission/task_search/recovery/turn_long_view_min_depth",
-           recovery_turn_long_view_min_depth_, 2.00);
-  nh.param("mission/task_search/recovery/turn_long_view_min_free_sections",
-           recovery_turn_long_view_min_free_sections_, 5);
-  nh.param("mission/task_search/recovery/turn_long_view_min_wall_sections",
-           recovery_turn_long_view_min_wall_sections_, 3);
-  nh.param("mission/task_search/recovery/turn_long_view_min_paired_wall_sections",
-           recovery_turn_long_view_min_paired_wall_sections_, 4);
-  nh.param("mission/task_search/recovery/turn_long_view_width_tolerance",
-           recovery_turn_long_view_width_tolerance_, 0.30);
-  nh.param("mission/task_search/recovery/turn_long_view_center_tolerance",
-           recovery_turn_long_view_center_tolerance_, 0.25);
   nh.param("mission/task_search/recovery/turn_no_return_margin",
            recovery_turn_no_return_margin_, 0.20);
   nh.param("mission/task_search/recovery/turn_yaw_release_angle_deg",
@@ -1311,145 +1285,23 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
     }
     return free_length;
   };
-  auto wallSupport = [&](const Eigen::Vector3d& probe_origin,
-                         const Eigen::Vector2d& direction, double side_sign) {
-    const Eigen::Vector2d lateral(-direction.y(), direction.x());
-    int supported_sections = 0;
-    for (double along : {0.20, 0.40, 0.60}) {
-      bool section_supported = false;
-      for (double half_width = recovery_turn_wall_min_half_width_;
-           half_width <= recovery_turn_wall_max_half_width_ + 1e-6;
-           half_width += 0.10) {
-        Eigen::Vector3d wall_probe = probe_origin;
-        wall_probe.head<2>() += along * direction + side_sign * half_width * lateral;
-        if (mapRelativeColumnOccupied(wall_probe, probe_origin.z())) {
-          section_supported = true;
-          break;
-        }
-      }
-      if (section_supported) ++supported_sections;
-    }
-    return supported_sections;
-  };
-  struct LongViewEvidence {
-    double farthest_free{0.0};
-    int free_sections{0};
-    double farthest_left_wall{0.0};
-    int left_wall_sections{0};
-    double farthest_right_wall{0.0};
-    int right_wall_sections{0};
-    double farthest_paired_wall{0.0};
-    int paired_wall_sections{0};
-    int consistent_paired_wall_sections{0};
-  };
-  auto longViewEvidence = [&](const Eigen::Vector3d& probe_origin,
-                              const Eigen::Vector2d& direction) {
-    LongViewEvidence evidence;
-    const Eigen::Vector2d lateral(-direction.y(), direction.x());
-    const double view_step = std::max(0.10, recovery_turn_long_view_step_);
-    auto wallDistanceAtSection = [&](double along, double side_sign) {
-      for (double half_width = recovery_turn_wall_min_half_width_;
-           half_width <= recovery_turn_wall_max_half_width_ + 1e-6;
-           half_width += 0.10) {
-        Eigen::Vector3d wall_probe = probe_origin;
-        wall_probe.head<2>() += along * direction + side_sign * half_width * lateral;
-        if (mapRelativeColumnOccupied(wall_probe, probe_origin.z())) return half_width;
-      }
-      return std::numeric_limits<double>::infinity();
-    };
-    struct PairedWallSection {
-      double depth;
-      double width;
-      double center_offset;
-    };
-    std::vector<PairedWallSection> paired_sections;
-    for (double along = view_step;
-         along <= recovery_turn_long_view_length_ + 1e-6; along += view_step) {
-      bool band_free = false;
-      for (double lateral_offset : {-0.17, 0.0, 0.17}) {
-        Eigen::Vector3d free_probe = probe_origin;
-        free_probe.head<2>() += along * direction + lateral_offset * lateral;
-        if (sdf_map_->isInMap(free_probe) &&
-            sdf_map_->getOccupancy(free_probe) == SDFMap::FREE) {
-          band_free = true;
-          break;
-        }
-      }
-      if (band_free) {
-        evidence.farthest_free = along;
-        ++evidence.free_sections;
-      }
-      const double left_wall_distance = wallDistanceAtSection(along, 1.0);
-      const double right_wall_distance = wallDistanceAtSection(along, -1.0);
-      if (std::isfinite(left_wall_distance)) {
-        evidence.farthest_left_wall = along;
-        ++evidence.left_wall_sections;
-      }
-      if (std::isfinite(right_wall_distance)) {
-        evidence.farthest_right_wall = along;
-        ++evidence.right_wall_sections;
-      }
-      // 同一截面必须中心可见且左右墙同时存在，才算通道截面。这样柱体的一条边和
-      // 数米外另一面墙不能被拼成转弯；中间被障碍遮住的截面则留空，允许远端重现。
-      if (band_free && std::isfinite(left_wall_distance) &&
-          std::isfinite(right_wall_distance)) {
-        paired_sections.push_back(
-            {along, left_wall_distance + right_wall_distance,
-             0.5 * (left_wall_distance - right_wall_distance)});
-      }
-    }
-    evidence.paired_wall_sections = static_cast<int>(paired_sections.size());
-    if (!paired_sections.empty()) {
-      std::vector<double> widths;
-      std::vector<double> centers;
-      widths.reserve(paired_sections.size());
-      centers.reserve(paired_sections.size());
-      for (const auto& section : paired_sections) {
-        widths.push_back(section.width);
-        centers.push_back(section.center_offset);
-      }
-      auto median = [](std::vector<double> values) {
-        std::sort(values.begin(), values.end());
-        const size_t middle = values.size() / 2;
-        if (values.size() % 2 == 0)
-          return 0.5 * (values[middle - 1] + values[middle]);
-        return values[middle];
-      };
-      const double median_width = median(widths);
-      const double median_center = median(centers);
-      for (const auto& section : paired_sections) {
-        if (std::fabs(section.width - median_width) <=
-                recovery_turn_long_view_width_tolerance_ &&
-            std::fabs(section.center_offset - median_center) <=
-                recovery_turn_long_view_center_tolerance_) {
-          ++evidence.consistent_paired_wall_sections;
-          evidence.farthest_paired_wall = section.depth;
-        }
-      }
-    }
-    return evidence;
-  };
-
   forward_free_length = knownFreeLength(origin, travel);
-  // 在旧通道中心线前方找到实际墙面；仅UNKNOWN截止不能作为转弯结构证据。
-  Eigen::Vector3d front_wall_probe = origin;
-  front_wall_probe.head<2>() +=
+  Eigen::Vector3d forward_end = origin;
+  forward_end.head<2>() +=
       std::min(recovery_turn_probe_length_, forward_free_length + probe_step) * travel;
-  const bool front_wall_blocked =
+  // 旧通道前方必须有雷达已建图的实际占据，UNKNOWN不算死路。
+  // 确认旧轴已终止后，不再用新旧自由长度差或固定最小延伸距离否决转弯。
+  const bool old_direction_blocked =
       forward_free_length + probe_step < recovery_turn_probe_length_ + 1e-6 &&
-      mapRelativeColumnOccupied(front_wall_probe, origin.z());
-  if (!front_wall_blocked) return false;
+      mapRelativeColumnOccupied(forward_end, origin.z());
+  if (!old_direction_blocked) return false;
 
   // 不从无人机当前位置横向打射线，而把虚拟观察点提前放到前方墙前。这样地图刚形成明显
   // L形/弧形轮廓时就能看到侧向通道，无需先横移进入新通道1m以上。
   Eigen::Vector3d contour_origin = origin;
   contour_origin.head<2>() += std::max(0.0, forward_free_length - 0.20) * travel;
-  const double contour_forward_free = knownFreeLength(contour_origin, travel);
   double best_score = -std::numeric_limits<double>::infinity();
   Eigen::Vector2d best_direction = travel;
-  int best_left_support = 0;
-  int best_right_support = 0;
-  LongViewEvidence best_long_view;
   const double min_angle = recovery_turn_min_angle_deg_ * M_PI / 180.0;
   const double max_angle = recovery_turn_max_angle_deg_ * M_PI / 180.0;
   for (double angle = min_angle; angle <= max_angle + 1e-6; angle += M_PI / 12.0) {
@@ -1463,41 +1315,12 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
                                                corridor_dir_.head<2>()))
         continue;
       const double free_length = knownFreeLength(contour_origin, direction);
-      if (free_length < recovery_turn_min_free_length_ ||
-          free_length < contour_forward_free + recovery_turn_min_free_gain_)
-        continue;
-      const int left_support = wallSupport(contour_origin, direction, 1.0);
-      const int right_support = wallSupport(contour_origin, direction, -1.0);
-      // 拐角近场允许内侧墙终止、只保留外墙；下面的长视野还必须在新方向重新找到
-      // 宽度和中心稳定的双墙，孤立柱体或一段单墙不能改变通道主方向。
-      if (!task_search::mappedContourSupportsTurn(
-              front_wall_blocked, left_support, right_support,
-              recovery_turn_min_wall_support_))
-        continue;
-      const LongViewEvidence long_view = longViewEvidence(contour_origin, direction);
-      if (!task_search::longRangeTurnViewSupported(
-              long_view.farthest_free, long_view.free_sections,
-              long_view.farthest_left_wall, long_view.left_wall_sections,
-              long_view.farthest_right_wall, long_view.right_wall_sections,
-              long_view.farthest_paired_wall, long_view.paired_wall_sections,
-              long_view.consistent_paired_wall_sections,
-              recovery_turn_long_view_min_depth_,
-              recovery_turn_long_view_min_free_sections_,
-              recovery_turn_long_view_min_wall_sections_,
-              recovery_turn_long_view_min_paired_wall_sections_))
-        continue;
-      // 2026-07-28: 先选自由延伸最长的双墙通道，同等长度才轻微偏好小转角。
-      const double score = long_view.farthest_free +
-                           0.08 * (long_view.left_wall_sections +
-                                   long_view.right_wall_sections) -
-                           0.05 * std::fabs(angle);
+      if (free_length <= 1e-6) continue;
+      const double score = free_length - 0.05 * std::fabs(angle);
       if (score > best_score) {
         best_score = score;
         best_direction = direction;
         turn_free_length = free_length;
-        best_left_support = left_support;
-        best_right_support = right_support;
-        best_long_view = long_view;
       }
     }
   }
@@ -1505,18 +1328,11 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   turn_direction = Eigen::Vector3d(best_direction.x(), best_direction.y(), 0.0);
   ROS_ERROR_THROTTLE(
       0.5,
-      "[task_search] OCCUPANCY TURN selected yaw=%.1fdeg old_free=%.2fm new_free=%.2fm "
-      "wall_support=%d/%d long_view free=%.2fm/%d wall=%.2fm/%d|%.2fm/%d "
-      "paired=%.2fm/%d consistent=%d "
-      "contour_probe=(%.2f,%.2f); mapped wall contour selected.",
+      "[task_search] OCCUPANCY TURN selected yaw=%.1fdeg old_free=%.2fm "
+      "branch_free=%.2fm contour_probe=(%.2f,%.2f); old direction stopped and "
+      "the single free branch was selected.",
       std::atan2(best_direction.y(), best_direction.x()) * 180.0 / M_PI,
-      forward_free_length, turn_free_length, best_left_support, best_right_support,
-      best_long_view.farthest_free, best_long_view.free_sections,
-      best_long_view.farthest_left_wall, best_long_view.left_wall_sections,
-      best_long_view.farthest_right_wall, best_long_view.right_wall_sections,
-      best_long_view.farthest_paired_wall, best_long_view.paired_wall_sections,
-      best_long_view.consistent_paired_wall_sections,
-      contour_origin.x(), contour_origin.y());
+      forward_free_length, turn_free_length, contour_origin.x(), contour_origin.y());
   return true;
 }
 

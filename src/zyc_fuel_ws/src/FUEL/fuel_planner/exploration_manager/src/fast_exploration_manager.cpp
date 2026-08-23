@@ -941,23 +941,24 @@ bool FastExplorationManager::buildWideSideBypass(
 
     // 从障碍物边缘分别向左右数连续的已知自由栅格。未知区域不增加宽度，
     // 但也不会直接否决另一侧；最终能否飞仍由统一A*和足迹检查决定。
-    int left_count = 0;
-    for (int idx = obstacle_min_idx - 1; idx >= -side_samples; --idx) {
-      if (!knownFree(ahead, idx * sample_step)) break;
-      ++left_count;
-    }
+    // lateral 指向行进方向的几何左侧：正偏移是左，负偏移是右。
     int right_count = 0;
-    for (int idx = obstacle_max_idx + 1; idx <= side_samples; ++idx) {
+    for (int idx = obstacle_min_idx - 1; idx >= -side_samples; --idx) {
       if (!knownFree(ahead, idx * sample_step)) break;
       ++right_count;
     }
+    int left_count = 0;
+    for (int idx = obstacle_max_idx + 1; idx <= side_samples; ++idx) {
+      if (!knownFree(ahead, idx * sample_step)) break;
+      ++left_count;
+    }
     split.left_width = left_count * sample_step;
     split.right_width = right_count * sample_step;
-    split.left_free_max = split.obstacle_min_offset - sample_step;
-    split.left_free_min = split.left_free_max -
+    split.left_free_min = split.obstacle_max_offset + sample_step;
+    split.left_free_max = split.left_free_min +
                           std::max(0, left_count - 1) * sample_step;
-    split.right_free_min = split.obstacle_max_offset + sample_step;
-    split.right_free_max = split.right_free_min +
+    split.right_free_max = split.obstacle_min_offset - sample_step;
+    split.right_free_min = split.right_free_max -
                            std::max(0, right_count - 1) * sample_step;
     break;
   }
@@ -979,7 +980,7 @@ bool FastExplorationManager::buildWideSideBypass(
   const double lane_min = choose_right ? split.right_free_min : split.left_free_min;
   const double lane_max = choose_right ? split.right_free_max : split.left_free_max;
   const double lane_center = 0.5 * (lane_min + lane_max);
-  const double side_sign = choose_right ? 1.0 : -1.0;
+  const double side_sign = choose_right ? -1.0 : 1.0;
 
   struct BypassChoice {
     bool valid{false};
