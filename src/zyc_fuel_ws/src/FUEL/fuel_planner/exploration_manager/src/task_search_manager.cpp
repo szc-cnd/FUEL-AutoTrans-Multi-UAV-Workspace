@@ -1408,6 +1408,18 @@ bool TaskSearchManager::mappedCorridorDirection(
     return true;
   }
 
+  // 已确认的转弯尚未沿新通道离开转角时，不得把同一片转角地图再次解释成
+  // 另一条新通道。保持刚提交的通道方向，走出既有0.60m过渡区后再恢复检测。
+  if (transition_active_) {
+    clearPendingTurnEvidence();
+    ROS_INFO_THROTTLE(
+        0.5,
+        "[task_search] turn transition active; keep committed corridor direction "
+        "and suppress repeated turn detection."
+    );
+    return false;
+  }
+
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
