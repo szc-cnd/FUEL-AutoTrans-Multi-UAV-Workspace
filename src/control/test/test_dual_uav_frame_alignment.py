@@ -107,6 +107,39 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     assert source.count("++active_relay_index_") == 2
 
 
+def test_diff_relay_goal_keeps_half_meter_clearance_and_backtracks_current_cache():
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["relay_goal_clearance_radius"] == "0.50"
+    assert params["relay_goal_clearance_min_points"] == "1"
+    assert params["relay_goal_backtrack_max_distance"] == "1.00"
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    selector = source.split("bool chooseClearRelayGoal", 1)[1].split(
+        "void publishCommand", 1
+    )[0]
+    assert "route_.rbegin()" in selector
+    assert "relay_goal_backtrack_max_distance_" in selector
+    assert "previous_progress + path_sample_spacing_" in selector
+    assert "relayGoalHasClearance" in selector
+
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    adjustment = execution.split(
+        "if (!terminal_relay && !diff_goal_published_", 1
+    )[1].split("const geometry_msgs::Point desired_local", 1)[0]
+    assert "relay_waypoints_[active_relay_index_] = selected_world" in adjustment
+    assert "++active_relay_index_" not in adjustment
+
+
 def test_leader_odometry_uses_latest_low_latency_sample_and_rejects_delay():
     source = FOLLOWER.read_text(encoding="utf-8")
     assert "leader_odom_topic_, 1" in source
@@ -259,6 +292,52 @@ def test_uav1_six_starts_down_camera_and_shows_combined_image_in_diff_rviz():
     )
     assert image["Enabled"] is True
     assert image["Value"] is True
+
+
+def test_uav1_diff_rviz_shows_high_frequency_odometry_and_moving_drone_mesh():
+    rviz = yaml.safe_load(UAV1_DIFF_RVIZ.read_text(encoding="utf-8"))
+
+    def dictionaries(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from dictionaries(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from dictionaries(child)
+
+    displays = list(dictionaries(rviz))
+    odometry = next(
+        item for item in displays
+        if item.get("Class") == "rviz/Odometry"
+        and item.get("Topic") == "/UAV1/fast_lio/Odom_high_freq"
+    )
+    assert odometry["Enabled"] is True
+    assert odometry["Value"] is True
+
+    robot = next(
+        item for item in displays
+        if item.get("Class") == "rviz/Marker"
+        and item.get("Marker Topic") == "/drone_1_odom_visualization/robot"
+    )
+    assert robot["Enabled"] is True
+    assert robot["Value"] is True
+
+    relay_root = ET.parse(RELAY_LAUNCH).getroot()
+    visualizer = next(
+        node for node in relay_root.findall("node")
+        if node.attrib.get("type") == "odom_visualization"
+    )
+    remaps = {
+        item.attrib["from"]: item.attrib["to"]
+        for item in visualizer.findall("remap")
+    }
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in visualizer.findall("param")
+    }
+    assert remaps["~odom"] == "$(arg odom_topic)"
+    assert params["robot_scale"] == "0.35"
 
 
 def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():

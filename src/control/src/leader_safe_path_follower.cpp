@@ -247,6 +247,12 @@ class LeaderSafePathFollower {
     pnh_.param("relay_point_occupied_min_points", relay_point_occupied_min_points_, 2);
     pnh_.param("relay_point_check_distance", relay_point_check_distance_, 0.45);
     pnh_.param("relay_occupied_attachment_radius", relay_occupied_attachment_radius_, 0.35);
+    // Diff目标必须远离静态点云；若原接力点贴障碍，则只沿前机已飞路线向后找安全点。
+    pnh_.param("relay_goal_clearance_radius", relay_goal_clearance_radius_, 0.50);
+    pnh_.param("relay_goal_clearance_z_margin", relay_goal_clearance_z_margin_, 0.30);
+    pnh_.param("relay_goal_clearance_min_points", relay_goal_clearance_min_points_, 1);
+    pnh_.param("relay_goal_backtrack_max_distance",
+                relay_goal_backtrack_max_distance_, 1.00);
     pnh_.param("relay_slowdown_radius", relay_slowdown_radius_, 0.55);
     pnh_.param("relay_approach_speed", relay_approach_speed_, 0.20);
     pnh_.param("relay_arrive_max_horizontal_speed", relay_arrive_max_horizontal_speed_, 0.10);
@@ -1583,6 +1589,67 @@ class LeaderSafePathFollower {
     return false;
   }
 
+  bool relayGoalHasClearance(const geometry_msgs::Point& target_local,
+                             int* hit_count) const {
+    *hit_count = 0;
+    if (!obstacle_check_enabled_ || !follower_cloud_) return true;
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*follower_cloud_, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_y(*follower_cloud_, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> iter_z(*follower_cloud_, "z");
+      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) ||
+            !std::isfinite(*iter_z))
+          continue;
+        if (std::hypot(*iter_x - target_local.x, *iter_y - target_local.y) >=
+            relay_goal_clearance_radius_)
+          continue;
+        if (std::fabs(*iter_z - target_local.z) > relay_goal_clearance_z_margin_)
+          continue;
+        if (++(*hit_count) >= relay_goal_clearance_min_points_) return false;
+      }
+    } catch (const std::runtime_error& error) {
+      ROS_ERROR_THROTTLE(1.0, "[safe_follower] invalid relay-goal cloud fields: %s",
+                         error.what());
+      return false;
+    }
+    return true;
+  }
+
+  bool chooseClearRelayGoal(const RoutePoint& requested_world,
+                            RoutePoint* selected_world,
+                            int* requested_hit_count) const {
+    *selected_world = requested_world;
+    const geometry_msgs::Point requested_local =
+        useFollowerCruiseHeight(worldToFollower(requested_world.position));
+    if (relayGoalHasClearance(requested_local, requested_hit_count)) return true;
+
+    const double previous_progress =
+        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].progress
+                                : -std::numeric_limits<double>::infinity();
+    const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+    for (auto iter = route_.rbegin(); iter != route_.rend(); ++iter) {
+      const double backtrack = requested_world.progress - iter->progress;
+      if (backtrack < path_sample_spacing_) continue;
+      if (backtrack > relay_goal_backtrack_max_distance_ + 1e-6) break;
+      // 不允许退到上一个已完成点，否则会把当前点瞬间判为到达并跳到下一点。
+      if (iter->progress <= previous_progress + path_sample_spacing_) continue;
+
+      RoutePoint candidate = *iter;
+      candidate.position = followerCruisePointToWorld(iter->position);
+      const geometry_msgs::Point candidate_local =
+          useFollowerCruiseHeight(worldToFollower(candidate.position));
+      if (std::hypot(candidate_local.x - current_local.x,
+                     candidate_local.y - current_local.y) <= relay_arrive_radius_)
+        continue;
+      int candidate_hits = 0;
+      if (!relayGoalHasClearance(candidate_local, &candidate_hits)) continue;
+      *selected_world = candidate;
+      return true;
+    }
+    return false;
+  }
+
   void publishCommand(const geometry_msgs::Point& target_local, double target_yaw,
                       bool moving, double speed_limit = -1.0) {
     // 2026-07-28: Diff模式的唯一控制指令发布者必须是UAV1 traj_server；防止遗留分支意外形成双发布者。
@@ -1805,9 +1872,41 @@ class LeaderSafePathFollower {
       return true;
     }
 
-    const RoutePoint& desired_world = relay_waypoints_[active_relay_index_];
+    RoutePoint desired_world = relay_waypoints_[active_relay_index_];
     const bool terminal_relay = terminal_mode_active_ &&
                                 active_relay_index_ == terminal_waypoint_index_;
+    if (!terminal_relay && !diff_goal_published_ && !diff_recovery_goal_valid_) {
+      if (require_fresh_cloud_ &&
+          (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
+        setDiffWaitPositionHold(true, "relay goal clearance cloud stale");
+        publishState("DIFF_WAIT_RELAY_CLEARANCE_CLOUD", 1.0, 0.4, 0.0);
+        return true;
+      }
+      RoutePoint selected_world;
+      int requested_hits = 0;
+      if (!chooseClearRelayGoal(desired_world, &selected_world, &requested_hits)) {
+        setDiffWaitPositionHold(true, "no clear relay goal on cached route");
+        publishState("DIFF_WAIT_CLEAR_RELAY_GOAL", 1.0, 0.2, 0.0);
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "[safe_follower] HOLD relay %zu/%zu: requested goal has %d cloud hits "
+            "inside %.2fm and no clear cached point within %.2fm behind it.",
+            active_relay_index_ + 1, relay_waypoints_.size(), requested_hits,
+            relay_goal_clearance_radius_, relay_goal_backtrack_max_distance_);
+        return true;
+      }
+      const double backtrack = desired_world.progress - selected_world.progress;
+      if (backtrack >= path_sample_spacing_) {
+        relay_waypoints_[active_relay_index_] = selected_world;
+        desired_world = selected_world;
+        publishRelayPath();
+        ROS_WARN("[safe_follower] relay %zu/%zu too close to obstacle (%d hits < %.2fm); "
+                 "cache a point %.2fm backward on leader route at (%.2f,%.2f,%.2f).",
+                 active_relay_index_ + 1, relay_waypoints_.size(), requested_hits,
+                 relay_goal_clearance_radius_, backtrack, desired_world.position.x,
+                 desired_world.position.y, desired_world.position.z);
+      }
+    }
     const geometry_msgs::Point desired_local =
         terminal_relay ? worldToFollower(desired_world.position)
                        : useFollowerCruiseHeight(worldToFollower(desired_world.position));
@@ -2415,12 +2514,15 @@ class LeaderSafePathFollower {
   double relay_endpoint_clearance_radius_{0.38}, relay_endpoint_z_margin_{0.28};
   double relay_point_occupied_radius_{0.12}, relay_point_occupied_z_margin_{0.18};
   double relay_point_check_distance_{0.45}, relay_occupied_attachment_radius_{0.35};
+  double relay_goal_clearance_radius_{0.50}, relay_goal_clearance_z_margin_{0.30};
+  double relay_goal_backtrack_max_distance_{1.00};
   double relay_slowdown_radius_{0.55}, relay_approach_speed_{0.20};
   double relay_arrive_max_horizontal_speed_{0.10}, relay_arrive_max_vertical_speed_{0.08};
   double relay_arrive_dwell_{0.50};
   double follower_horizontal_speed_{0.0}, follower_vertical_speed_{0.0};
   int relay_endpoint_min_points_{2};
   int relay_point_occupied_min_points_{2};
+  int relay_goal_clearance_min_points_{1};
   double leader_route_progress_{0.0}, last_relay_selection_progress_{0.0};
   int max_internal_relay_points_{0}, internal_relay_count_{0};
   std::size_t active_relay_index_{0}, terminal_waypoint_index_{std::numeric_limits<std::size_t>::max()};
