@@ -1296,6 +1296,25 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
+  // 真正的通道终点应当横跨旧通道；若只挡住中心或半边，则保持原通道方向，
+  // 让普通A*从障碍物另一侧绕行，不能把绕障斜线锁存成新通道。
+  const Eigen::Vector2d lateral(-travel.y(), travel.x());
+  const double front_span_half_width =
+      std::max(0.25, 0.75 * exit_portal_min_half_width_);
+  Eigen::Vector3d left_front = forward_end;
+  Eigen::Vector3d right_front = forward_end;
+  left_front.head<2>() -= front_span_half_width * lateral;
+  right_front.head<2>() += front_span_half_width * lateral;
+  if (!mapRelativeColumnOccupied(left_front, origin.z()) ||
+      !mapRelativeColumnOccupied(right_front, origin.z())) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[task_search] forward obstacle does not span the corridor; keep the "
+        "current corridor yaw and leave the detour to A*."
+    );
+    return false;
+  }
+
   // 不从无人机当前位置横向打射线，而把虚拟观察点提前放到前方墙前。这样地图刚形成明显
   // L形/弧形轮廓时就能看到侧向通道，无需先横移进入新通道1m以上。
   Eigen::Vector3d contour_origin = origin;

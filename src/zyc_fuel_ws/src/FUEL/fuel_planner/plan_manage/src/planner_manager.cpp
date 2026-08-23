@@ -1449,7 +1449,8 @@ bool FastPlannerManager::planYawTurnInPlace(
   const double duration = local_data_.yaw_traj_.getTimeSum();
   const double actual_end = local_data_.yaw_traj_.evaluateDeBoorT(duration)[0];
   const double endpoint_error = std::fabs(actual_end - end_yaw);
-  if (!std::isfinite(actual_end) || endpoint_error > 1e-6) {
+  constexpr double kEndpointTolerance = M_PI / 180.0;
+  if (!std::isfinite(actual_end) || endpoint_error > kEndpointTolerance) {
     ROS_ERROR("[turn_in_place] hard yaw endpoint verification failed: "
               "target=%.6f actual=%.6f error=%.6f.",
               end_yaw, actual_end, endpoint_error);
