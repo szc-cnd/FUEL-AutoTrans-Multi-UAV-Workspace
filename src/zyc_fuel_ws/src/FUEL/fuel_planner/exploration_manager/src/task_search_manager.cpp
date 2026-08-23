@@ -1396,6 +1396,12 @@ void TaskSearchManager::commitCorridorTurn(
 
 bool TaskSearchManager::mappedCorridorDirection(
     double cur_yaw, Eigen::Vector3d& direction) {
+  // 入口后的第一段直线尚未走完时，门外开放区和门框遮挡不是拐弯。
+  if (entryForwardPhaseActive()) {
+    clearPendingTurnEvidence();
+    return false;
+  }
+
   Eigen::Vector2d latched_direction;
   if (turn_yaw_follow_latch_.lockedDirection(latched_direction)) {
     direction = Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
@@ -1421,28 +1427,32 @@ bool TaskSearchManager::mappedCorridorDirection(
   return true;
 }
 
-// 2026-07-28: 局部恢复先采用累计地图确认的通道拐弯轴线；没有结构证据时才使用最近实飞切线。
+bool TaskSearchManager::entryForwardPhaseActive() const {
+  if (!corridor_frame_received_) return true;
+  Eigen::Vector3d position = visited_positions_.empty()
+                                 ? corridor_origin_
+                                 : visited_positions_.back();
+  {
+    std::lock_guard<std::mutex> lock(body_cloud_mutex_);
+    if (latest_robot_pose_valid_) position = latest_robot_pos_;
+  }
+  return (position - corridor_origin_).dot(corridor_dir_) <
+         entry_forward_distance_;
+}
+
+// 局部恢复只读取已确认的通道轴线，不在候选排序过程中检测或提交转弯。
 Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
+  Eigen::Vector2d latched_direction;
+  if (turn_yaw_follow_latch_.lockedDirection(latched_direction))
+    return Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
+
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
   if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
       !task_search::insideForwardHalfPlane(stable, corridor_dir_.head<2>()))
     stable = corridor_dir_.head<2>().normalized();
-  const Eigen::Vector3d travel(stable.x(), stable.y(), 0.0);
-  Eigen::Vector3d occupancy_turn;
-  double forward_free_length = 0.0;
-  double turn_free_length = 0.0;
-  if (inferOccupancyTurnDirection(travel, occupancy_turn, forward_free_length,
-                                  turn_free_length)) {
-    // 只有“旧前向受阻、新方向自由距离更长且远端重新形成稳定双墙”的地图证据，
-    // 才表示已经进入真实弯道并允许改变主方向。机头yaw和临时斜飞均不参与更新。
-    if (confirmCorridorTurnEvidence(occupancy_turn)) {
-      commitCorridorTurn(occupancy_turn);
-      return occupancy_turn;
-    }
-  }
-  return travel;
+  return Eigen::Vector3d(stable.x(), stable.y(), 0.0);
 }
 
 // 2026-07-28: 与普通候选使用相同角度阈值，避免恢复器和frontier对“后退”的定义不一致。

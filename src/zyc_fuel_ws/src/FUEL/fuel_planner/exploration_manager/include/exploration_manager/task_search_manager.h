@@ -174,6 +174,7 @@ private:
                                    Eigen::Vector3d& turn_direction,
                                    double& forward_free_length,
                                    double& turn_free_length) const;
+  bool entryForwardPhaseActive() const;
   void commitCorridorTurn(const Eigen::Vector3d& turn_direction);
   bool confirmCorridorTurnEvidence(const Eigen::Vector3d& turn_direction);
   void clearPendingTurnEvidence();
