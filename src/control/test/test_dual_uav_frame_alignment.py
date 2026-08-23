@@ -107,7 +107,7 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     assert source.count("++active_relay_index_") == 2
 
 
-def test_diff_relay_goal_keeps_half_meter_clearance_and_backtracks_current_cache():
+def test_diff_relay_goal_uses_configured_clearance_and_backtracks_current_cache():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -117,7 +117,7 @@ def test_diff_relay_goal_keeps_half_meter_clearance_and_backtracks_current_cache
         item.attrib["name"]: item.attrib["value"]
         for item in follower.findall("param")
     }
-    assert params["relay_goal_clearance_radius"] == "0.50"
+    assert params["relay_goal_clearance_radius"] == "0.20"
     assert params["relay_goal_clearance_min_points"] == "1"
     assert params["relay_goal_backtrack_max_distance"] == "1.00"
 

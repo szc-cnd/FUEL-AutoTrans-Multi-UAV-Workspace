@@ -183,8 +183,8 @@
         <param name="relay_point_occupied_min_points" value="2"/>
         <param name="relay_point_check_distance" value="0.45"/>
         <param name="relay_occupied_attachment_radius" value="0.35"/>
-        <!-- 普通接力目标必须离UAV1静态点云至少0.50m；过近时沿前机缓存路线最多后退1m选点。 -->
-        <param name="relay_goal_clearance_radius" value="0.50"/>
+        <!-- 普通接力目标必须离UAV1静态点云至少0.20m；过近时沿前机缓存路线最多后退1m选点。 -->
+        <param name="relay_goal_clearance_radius" value="0.20"/>
         <param name="relay_goal_clearance_z_margin" value="0.30"/>
         <param name="relay_goal_clearance_min_points" value="1"/>
         <param name="relay_goal_backtrack_max_distance" value="1.00"/>

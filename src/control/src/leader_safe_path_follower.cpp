@@ -248,7 +248,7 @@ class LeaderSafePathFollower {
     pnh_.param("relay_point_check_distance", relay_point_check_distance_, 0.45);
     pnh_.param("relay_occupied_attachment_radius", relay_occupied_attachment_radius_, 0.35);
     // Diff目标必须远离静态点云；若原接力点贴障碍，则只沿前机已飞路线向后找安全点。
-    pnh_.param("relay_goal_clearance_radius", relay_goal_clearance_radius_, 0.50);
+    pnh_.param("relay_goal_clearance_radius", relay_goal_clearance_radius_, 0.20);
     pnh_.param("relay_goal_clearance_z_margin", relay_goal_clearance_z_margin_, 0.30);
     pnh_.param("relay_goal_clearance_min_points", relay_goal_clearance_min_points_, 1);
     pnh_.param("relay_goal_backtrack_max_distance",
@@ -2514,7 +2514,7 @@ class LeaderSafePathFollower {
   double relay_endpoint_clearance_radius_{0.38}, relay_endpoint_z_margin_{0.28};
   double relay_point_occupied_radius_{0.12}, relay_point_occupied_z_margin_{0.18};
   double relay_point_check_distance_{0.45}, relay_occupied_attachment_radius_{0.35};
-  double relay_goal_clearance_radius_{0.50}, relay_goal_clearance_z_margin_{0.30};
+  double relay_goal_clearance_radius_{0.20}, relay_goal_clearance_z_margin_{0.30};
   double relay_goal_backtrack_max_distance_{1.00};
   double relay_slowdown_radius_{0.55}, relay_approach_speed_{0.20};
   double relay_arrive_max_horizontal_speed_{0.10}, relay_arrive_max_vertical_speed_{0.08};
