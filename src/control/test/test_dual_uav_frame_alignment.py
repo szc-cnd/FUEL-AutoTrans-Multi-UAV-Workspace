@@ -107,7 +107,7 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     assert source.count("++active_relay_index_") == 2
 
 
-def test_diff_relay_goal_uses_configured_clearance_and_backtracks_current_cache():
+def test_diff_relay_goal_clearance_can_be_disabled_and_backtracks_current_cache():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -117,6 +117,7 @@ def test_diff_relay_goal_uses_configured_clearance_and_backtracks_current_cache(
         item.attrib["name"]: item.attrib["value"]
         for item in follower.findall("param")
     }
+    assert params["enable_relay_goal_clearance"] == "false"
     assert params["relay_goal_clearance_radius"] == "0.20"
     assert params["relay_goal_clearance_min_points"] == "2"
     assert params["relay_goal_backtrack_max_distance"] == "1.00"
@@ -134,7 +135,7 @@ def test_diff_relay_goal_uses_configured_clearance_and_backtracks_current_cache(
         "void timerCallback", 1
     )[0]
     adjustment = execution.split(
-        "if (!terminal_relay && !diff_goal_published_", 1
+        "if (enable_relay_goal_clearance_ && !terminal_relay", 1
     )[1].split("const geometry_msgs::Point desired_local", 1)[0]
     assert "relay_waypoints_[active_relay_index_] = selected_world" in adjustment
     assert "++active_relay_index_" not in adjustment

@@ -247,7 +247,8 @@ class LeaderSafePathFollower {
     pnh_.param("relay_point_occupied_min_points", relay_point_occupied_min_points_, 2);
     pnh_.param("relay_point_check_distance", relay_point_check_distance_, 0.45);
     pnh_.param("relay_occupied_attachment_radius", relay_occupied_attachment_radius_, 0.35);
-    // Diff目标必须远离静态点云；若原接力点贴障碍，则只沿前机已飞路线向后找安全点。
+    // 可选的Diff目标点云净空预检查；关闭时目标直接交由Diff Planner进行轨迹碰撞检查。
+    pnh_.param("enable_relay_goal_clearance", enable_relay_goal_clearance_, false);
     pnh_.param("relay_goal_clearance_radius", relay_goal_clearance_radius_, 0.20);
     pnh_.param("relay_goal_clearance_z_margin", relay_goal_clearance_z_margin_, 0.30);
     pnh_.param("relay_goal_clearance_min_points", relay_goal_clearance_min_points_, 2);
@@ -1875,7 +1876,8 @@ class LeaderSafePathFollower {
     RoutePoint desired_world = relay_waypoints_[active_relay_index_];
     const bool terminal_relay = terminal_mode_active_ &&
                                 active_relay_index_ == terminal_waypoint_index_;
-    if (!terminal_relay && !diff_goal_published_ && !diff_recovery_goal_valid_) {
+    if (enable_relay_goal_clearance_ && !terminal_relay && !diff_goal_published_ &&
+        !diff_recovery_goal_valid_) {
       if (require_fresh_cloud_ &&
           (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
         setDiffWaitPositionHold(true, "relay goal clearance cloud stale");
@@ -2520,6 +2522,7 @@ class LeaderSafePathFollower {
   double relay_arrive_max_horizontal_speed_{0.10}, relay_arrive_max_vertical_speed_{0.08};
   double relay_arrive_dwell_{0.50};
   double follower_horizontal_speed_{0.0}, follower_vertical_speed_{0.0};
+  bool enable_relay_goal_clearance_{false};
   int relay_endpoint_min_points_{2};
   int relay_point_occupied_min_points_{2};
   int relay_goal_clearance_min_points_{2};
