@@ -67,6 +67,8 @@
     <arg name="fading_time" default="-1.0"/>
     <!-- 2026-07-07: 暴露轨迹优化的硬障碍间隙，便于按场景提升贴墙余量。 -->
     <arg name="obstacle_clearance" default="0.2"/>
+    <!-- 单次局部规划的墙钟上限；防止困难障碍场景阻塞单线程ROS回调和心跳。 -->
+    <arg name="planning_timeout" default="0.8"/>
     <arg name="point_num"/>
     <arg name="point0_x"/>
     <arg name="point0_y"/>
@@ -268,6 +270,7 @@
         <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>
         <param name="optimization/acc_tolerance" value="1.0" type="double"/>
         <param name="optimization/max_jer" value="$(arg max_jer)" type="double"/>
+        <param name="optimization/max_planning_wall_time" value="$(arg planning_timeout)" type="double"/>
         <param name="optimization/record_opt" value="true"/>
     </node>
 </launch>

@@ -101,6 +101,13 @@ namespace diff_planner
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_; // safe distance
     double max_vel_, max_acc_, max_jer_, vel_tolerance_, acc_tolerance_; // dynamic limits
 
+    // One difficult local plan must not block the single-threaded ROS callback queue.
+    // Wall time is used so the guard still works when simulated/ROS time pauses.
+    double max_planning_wall_time_;
+    ros::WallTime planning_deadline_;
+    bool planning_deadline_active_{false};
+    bool planning_timeout_reported_{false};
+
     double t_now_;
 
   public:
@@ -123,6 +130,9 @@ namespace diff_planner
     void setIfTouchGoal(const bool touch_goal);
     void setConstraintPoints(ConstraintPoints cps);
     void setUseMultitopologyTrajs(bool use_multitopology_trajs);
+    void beginPlanningCycle();
+    void endPlanningCycle();
+    bool checkPlanningTimeout(const char *stage);
 
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }

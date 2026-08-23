@@ -39,3 +39,35 @@ def test_flight_sample_is_not_a_jump_when_sensor_time_is_used():
 
 def test_launch_requires_three_consecutive_jump_samples():
     assert 'name="follower_odom_jump_confirm_samples" value="3"' in LAUNCH
+
+
+def test_diff_planning_failure_retreats_before_retrying_original_goal():
+    status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
+        "bool getLaggedTarget", maxsplit=1
+    )[0]
+    execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
+        "void timerCallback", maxsplit=1
+    )[0]
+
+    assert 'diff_recovery_retreat_requested_ = status == "PLANNING_FAILED"' in status_callback
+    assert "getDiffFailureRetreatTarget" in execution
+    assert '"failure retreat reached; replan original relay"' in execution
+    assert "diff_failure_retreat_attempts_ >= diff_failure_retreat_max_attempts_" in execution
+
+
+def test_failure_retreat_reaches_full_distance_and_stops_before_replan():
+    assert 'name="diff_failure_retreat_distance" value="0.40"' in LAUNCH
+    assert 'name="diff_failure_retreat_arrive_radius" value="0.10"' in LAUNCH
+    assert 'name="diff_failure_retreat_max_attempts" value="2"' in LAUNCH
+    assert "recovery_error <= diff_failure_retreat_arrive_radius_" in SOURCE
+    assert "follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_" in SOURCE
+    assert "follower_vertical_speed_ <= relay_arrive_max_vertical_speed_" in SOURCE
+
+
+def test_outside_map_uses_forward_recovery_instead_of_retreat():
+    status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
+        "bool getLaggedTarget", maxsplit=1
+    )[0]
+    assert 'diff_recovery_retreat_requested_ = status == "PLANNING_FAILED"' in status_callback
+    assert 'status == "GOAL_REJECTED_OUTSIDE_MAP"' in status_callback
+    assert 'diff_recovery_retreat_requested_ ? "retreat" : "forward"' in status_callback

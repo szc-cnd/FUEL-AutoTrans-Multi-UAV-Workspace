@@ -15,6 +15,11 @@ namespace diff_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       double &final_cost)
   {
+    if (checkPlanningTimeout("optimizer entry"))
+    {
+      return false;
+    }
+
     if (initInnerPts.cols() != (initT.size() - 1))
     {
       ROS_ERROR("initInnerPts.cols() != (initT.size()-1)");
@@ -24,7 +29,8 @@ namespace diff_planner
     // Preparision 1: Some mise params
     ros::Time t0 = ros::Time::now(), t1, t2;
     int restart_nums = 0, rebound_times = 0;
-    bool flag_force_return, flag_still_unsafe, flag_success, flag_swarm_too_close;
+    bool flag_force_return = false, flag_still_unsafe = false;
+    bool flag_success = false, flag_swarm_too_close = false;
     multitopology_data_.initial_obstacles_avoided = false;
     wei_swarm_mod_ = wei_swarm_;
 
@@ -50,6 +56,11 @@ namespace diff_planner
     lbfgs_params.delta = 1.0e-2;
     do
     {
+      if (checkPlanningTimeout("optimizer restart"))
+      {
+        break;
+      }
+
       /* ---------- prepare ---------- */
       iter_num_ = 0;
       flag_force_return = false;
@@ -69,6 +80,11 @@ namespace diff_planner
           PolyTrajOptimizer::earlyExitCallback,
           this,
           &lbfgs_params);
+
+      if (checkPlanningTimeout("LBFGS"))
+      {
+        break;
+      }
 
       t2 = ros::Time::now();
       double time_ms = (t2 - t1).toSec() * 1000;
@@ -141,12 +157,38 @@ namespace diff_planner
     poly_traj::Trajectory traj = pt_data.getTraj();
     Eigen::VectorXd durations = traj.getDurations();
     const double RES = grid_map_->getResolution();
-    double t_step = min(RES / max_vel_, durations.minCoeff() / max(cps_num_prePiece_, 1) / 1.5);
-    double traj_duration = traj.getTotalDuration();
+    const double traj_duration = traj.getTotalDuration();
+    if (durations.size() == 0 || !durations.allFinite() || durations.minCoeff() <= 0.0 ||
+        !std::isfinite(RES) || RES <= 0.0 || !std::isfinite(max_vel_) || max_vel_ <= 0.0 ||
+        !std::isfinite(traj_duration) || traj_duration < 0.0)
+    {
+      ROS_ERROR("Dynamic feasibility check rejected invalid trajectory sampling inputs.");
+      return false;
+    }
+    const double t_step = min(RES / max_vel_,
+                              durations.minCoeff() / max(cps_num_prePiece_, 1) / 1.5);
+    constexpr double MIN_SAMPLE_STEP = 1.0e-4;
+    if (!std::isfinite(t_step) || t_step < MIN_SAMPLE_STEP)
+    {
+      ROS_ERROR("Dynamic feasibility check rejected invalid t_step=%.9g.", t_step);
+      return false;
+    }
+    constexpr size_t MAX_TRAJECTORY_SAMPLES = 1000000U;
+    const double required_samples = std::ceil(traj_duration / t_step) + 1.0;
+    if (!std::isfinite(required_samples) ||
+        required_samples > static_cast<double>(MAX_TRAJECTORY_SAMPLES))
+    {
+      ROS_ERROR("Dynamic feasibility check rejected sample count=%.9g.", required_samples);
+      return false;
+    }
+    const size_t max_samples = static_cast<size_t>(required_samples);
 
     // Iterate through the trajectory duration with the specified time step
-    for (double t = 0.0; t < traj_duration; t += t_step)
+    for (size_t sample = 0; sample < max_samples; ++sample)
     {
+      if (checkPlanningTimeout("dynamic feasibility check")) return false;
+      const double t = static_cast<double>(sample) * t_step;
+      if (t >= traj_duration) break;
       // Check the original Diff three-axis resultant velocity constraint.
       Eigen::Vector3d vel = traj.getVel(t);
       const double vel_limit = max_vel_ + vel_tolerance_;
@@ -198,22 +240,63 @@ namespace diff_planner
       poly_traj::Trajectory &traj,
       int id_cps_end, PtsChk_t &pts_check)
   {
+    if (checkPlanningTimeout("fine collision sampling entry")) return false;
     pts_check.clear();
+    if (id_cps_end <= 0)
+    {
+      ROS_ERROR("Failed to get points list to check: invalid id_cps_end=%d.", id_cps_end);
+      return false;
+    }
     pts_check.resize(id_cps_end);
     const double RES = grid_map_->getResolution(), RES_2 = RES / 2;
     Eigen::VectorXd durations = traj.getDurations();
+    if (durations.size() == 0 || !durations.allFinite() || durations.minCoeff() <= 0.0 ||
+        !std::isfinite(RES) || RES <= 0.0 || !std::isfinite(max_vel_) || max_vel_ <= 0.0 ||
+        cps_num_prePiece_ <= 0)
+    {
+      ROS_ERROR("Fine collision sampling rejected invalid trajectory or planner parameters.");
+      pts_check.clear();
+      return false;
+    }
     Eigen::VectorXd t_seg_start(durations.size() + 1);
     t_seg_start(0) = 0;
     for (int i = 0; i < durations.size(); ++i)
       t_seg_start(i + 1) = t_seg_start(i) + durations(i);
     const double DURATION = durations.sum();
-    double t = 0.0, t_step = min(RES / max_vel_, durations.minCoeff() / max(cps_num_prePiece_, 1) / 1.5);
+    double t = 0.0;
+    const double t_step = min(RES / max_vel_,
+                              durations.minCoeff() / max(cps_num_prePiece_, 1) / 1.5);
+    constexpr double MIN_SAMPLE_STEP = 1.0e-4;
+    if (!std::isfinite(DURATION) || DURATION < 0.0 ||
+        !std::isfinite(t_step) || t_step < MIN_SAMPLE_STEP)
+    {
+      ROS_ERROR("Fine collision sampling rejected duration=%.9g t_step=%.9g.",
+                DURATION, t_step);
+      pts_check.clear();
+      return false;
+    }
+    constexpr size_t MAX_TRAJECTORY_SAMPLES = 1000000U;
+    const double required_samples = std::ceil(DURATION / t_step) + 2.0;
+    if (!std::isfinite(required_samples) ||
+        required_samples > static_cast<double>(MAX_TRAJECTORY_SAMPLES))
+    {
+      ROS_ERROR("Fine collision sampling rejected sample count=%.9g.", required_samples);
+      pts_check.clear();
+      return false;
+    }
+    const size_t max_samples = static_cast<size_t>(required_samples);
     Eigen::Vector3d pt_last = traj.getPos(0.0);
     // pts_check[0].push_back(pt_last);
     int id_cps_curr = 0, id_piece_curr = 0;
 
-    while (true)
+    size_t sample_count = 0U;
+    while (sample_count++ < max_samples)
     {
+      if (checkPlanningTimeout("fine collision sampling"))
+      {
+        pts_check.clear();
+        return false;
+      }
       if (t > DURATION)
       {
         if (touch_goal_ && pts_check.size() > 0)
@@ -264,6 +347,13 @@ namespace diff_planner
       t += t_step;
     }
 
+    if (sample_count >= max_samples && t <= DURATION)
+    {
+      ROS_ERROR("Fine collision sampling exceeded its bounded sample count.");
+      pts_check.clear();
+      return false;
+    }
+
     return true;
   }
 
@@ -273,6 +363,7 @@ namespace diff_planner
       const poly_traj::MinJerkOpt &pt_data,
       const bool flag_first_init /*= true*/)
   {
+    if (checkPlanningTimeout("fine collision check entry")) return CHK_RET::ERR;
 
     Eigen::MatrixXd init_points = pt_data.getInitConstraintPoints(cps_num_prePiece_);
     poly_traj::Trajectory traj = pt_data.getTraj();
@@ -300,6 +391,7 @@ namespace diff_planner
 
     for (int i = 0; i < i_end; ++i)
     {
+      if (checkPlanningTimeout("fine collision occupancy scan")) return CHK_RET::ERR;
       for (size_t j = 0; j < pts_check[i].size(); ++j)
       {
         occ = grid_map_->getInflateOccupancy(pts_check[i][j].second);
@@ -357,6 +449,7 @@ namespace diff_planner
     vector<vector<Eigen::Vector3d>> a_star_pathes;
     for (size_t i = 0; i < segment_ids.size(); ++i)
     {
+      if (checkPlanningTimeout("fine collision A-star")) return CHK_RET::ERR;
       // Search from back to head
       Eigen::Vector3d in(init_points.col(segment_ids[i].second)), out(init_points.col(segment_ids[i].first));
       ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
@@ -454,6 +547,8 @@ namespace diff_planner
     /*** Assign data to each segment ***/
     for (size_t i = 0; i < segment_ids.size(); i++)
     {
+      if (checkPlanningTimeout("fine collision constraint construction"))
+        return CHK_RET::ERR;
       // step 1
       for (int j = adjusted_segment_ids[i].first; j <= adjusted_segment_ids[i].second; ++j)
         cps_.flag_temp[j] = false;
@@ -1247,6 +1342,12 @@ namespace diff_planner
   {
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
 
+    if (opt->checkPlanningTimeout("LBFGS line search"))
+    {
+      opt->force_stop_type_ = STOP_FOR_ERROR;
+      return 1;
+    }
+
     return (opt->force_stop_type_ == STOP_FOR_ERROR || opt->force_stop_type_ == STOP_FOR_REBOUND);
   }
 
@@ -1695,6 +1796,39 @@ namespace diff_planner
     nh.param("optimization/max_acc", max_acc_, -1.0);
     nh.param("optimization/acc_tolerance", acc_tolerance_, -1.0);
     nh.param("optimization/max_jer", max_jer_, -1.0);
+    nh.param("optimization/max_planning_wall_time", max_planning_wall_time_, 0.8);
+  }
+
+  void PolyTrajOptimizer::beginPlanningCycle()
+  {
+    planning_timeout_reported_ = false;
+    planning_deadline_active_ = std::isfinite(max_planning_wall_time_) &&
+                                max_planning_wall_time_ > 0.0;
+    if (planning_deadline_active_)
+    {
+      planning_deadline_ = ros::WallTime::now() + ros::WallDuration(max_planning_wall_time_);
+    }
+  }
+
+  void PolyTrajOptimizer::endPlanningCycle()
+  {
+    planning_deadline_active_ = false;
+  }
+
+  bool PolyTrajOptimizer::checkPlanningTimeout(const char *stage)
+  {
+    if (!planning_deadline_active_ || ros::WallTime::now() < planning_deadline_)
+    {
+      return false;
+    }
+    force_stop_type_ = STOP_FOR_ERROR;
+    if (!planning_timeout_reported_)
+    {
+      ROS_ERROR("Planning wall-time limit %.3fs exceeded during %s; abort this attempt.",
+                max_planning_wall_time_, stage == nullptr ? "unknown stage" : stage);
+      planning_timeout_reported_ = true;
+    }
+    return true;
   }
 
   void PolyTrajOptimizer::setEnvironment(const GridMap::Ptr &map)

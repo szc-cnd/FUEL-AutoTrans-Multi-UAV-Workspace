@@ -46,6 +46,11 @@ namespace diff_planner
   {
     ros::Time t_start = ros::Time::now();
     ros::Duration t_init, t_opt;
+    ploy_traj_opt_->beginPlanningCycle();
+    const auto finish_planning_cycle = [this](const bool result) {
+      ploy_traj_opt_->endPlanningCycle();
+      return result;
+    };
 
     static int count = 0;
     cout << "\033[47;30m\n[" << t_start << "] Drone " << pp_.drone_id << " Replan " << count++ << "\033[0m" << endl;
@@ -72,14 +77,18 @@ namespace diff_planner
     if (!computeInitState(start_pt, start_vel, start_acc, local_target_pt, local_target_vel,
                           flag_polyInit, flag_randomPolyTraj, ts, initMJO))
     {
-      return false;
+      return finish_planning_cycle(false);
+    }
+    if (ploy_traj_opt_->checkPlanningTimeout("trajectory initialization"))
+    {
+      return finish_planning_cycle(false);
     }
 
     Eigen::MatrixXd cstr_pts = initMJO.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
     vector<std::pair<int, int>> segments;
     if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initMJO, true) == PolyTrajOptimizer::CHK_RET::ERR)
     {
-      return false;
+      return finish_planning_cycle(false);
     }
 
     t_init = ros::Time::now() - t_start;
@@ -170,6 +179,12 @@ namespace diff_planner
     cout << "Success=" << (flag_success ? "yes" : "no") << endl;
     if (flag_success)
     {
+      if (!setLocalTrajFromOpt(best_MJO, touch_goal))
+      {
+        ROS_ERROR("Failed to store the optimized local trajectory; report planning failure.");
+        continous_failures_count_++;
+        return finish_planning_cycle(false);
+      }
       static double sum_time = 0;
       static int count_success = 0;
       sum_time += (t_init + t_opt).toSec();
@@ -181,7 +196,6 @@ namespace diff_planner
       //      << ",optimize:" << t_opt.toSec()
       //      << ",avg_time=" << sum_time / count_success << endl;
 
-      setLocalTrajFromOpt(best_MJO, touch_goal);
       cstr_pts = best_MJO.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
       visualization_->displayOptimalList(cstr_pts, 0);
 
@@ -195,7 +209,7 @@ namespace diff_planner
       continous_failures_count_++;
     }
 
-    return flag_success;
+    return finish_planning_cycle(flag_success);
   }
 
   bool DiffPlannerManager::computeInitState(

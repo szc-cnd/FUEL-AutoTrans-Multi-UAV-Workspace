@@ -10,6 +10,9 @@ FSM_HEADER = PACKAGE / "include" / "plan_manage" / "diff_replan_fsm.h"
 FSM_SOURCE = PACKAGE / "src" / "diff_replan_fsm.cpp"
 PLAN_CONTAINER = DIFF_ROOT / "traj_utils" / "include" / "traj_utils" / "plan_container.hpp"
 ADVANCED_LAUNCH = PACKAGE / "launch" / "include" / "advanced_param_exp.xml"
+MANAGER_SOURCE = PACKAGE / "src" / "planner_manager.cpp"
+OPTIMIZER_HEADER = DIFF_ROOT / "traj_opt" / "include" / "optimizer" / "poly_traj_optimizer.h"
+OPTIMIZER_SOURCE = DIFF_ROOT / "traj_opt" / "src" / "poly_traj_optimizer.cpp"
 
 
 def test_local_trajectory_id_does_not_reset_on_global_waypoint_change():
@@ -57,3 +60,23 @@ def test_controller_restart_keeps_target_and_replans_from_odometry():
     assert "start_pt_ = odom_pos_;" in global_replan
     assert "start_vel_ = odom_vel_;" in global_replan
     assert "start_acc_.setZero();" in global_replan
+
+
+def test_planning_wall_timeout_covers_initial_check_and_lbfgs():
+    manager = MANAGER_SOURCE.read_text(encoding="utf-8")
+    header = OPTIMIZER_HEADER.read_text(encoding="utf-8")
+    optimizer = OPTIMIZER_SOURCE.read_text(encoding="utf-8")
+    launch = ADVANCED_LAUNCH.read_text(encoding="utf-8")
+
+    assert "ros::WallTime planning_deadline_" in header
+    assert "beginPlanningCycle()" in manager
+    assert 'checkPlanningTimeout("trajectory initialization")' in manager
+    assert 'checkPlanningTimeout("LBFGS line search")' in optimizer
+    assert 'name="planning_timeout" default="0.8"' in launch
+
+
+def test_trajectory_sampling_rejects_non_progressing_loops():
+    optimizer = OPTIMIZER_SOURCE.read_text(encoding="utf-8")
+    assert "MIN_SAMPLE_STEP = 1.0e-4" in optimizer
+    assert "MAX_TRAJECTORY_SAMPLES = 1000000U" in optimizer
+    assert "while (sample_count++ < max_samples)" in optimizer

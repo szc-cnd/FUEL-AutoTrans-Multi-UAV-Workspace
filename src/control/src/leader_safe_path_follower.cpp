@@ -93,6 +93,20 @@ class LeaderSafePathFollower {
     pnh_.param<std::string>("diff_status_topic", diff_status_topic_,
                             "/drone_1_planning/status");
     pnh_.param("diff_recovery_arrive_radius", diff_recovery_arrive_radius_, 0.18);
+    // A failed long plan is retried only after UAV1 backs away on UAV0's verified route.
+    pnh_.param("diff_failure_retreat_distance", diff_failure_retreat_distance_, 0.40);
+    pnh_.param("diff_failure_retreat_arrive_radius",
+               diff_failure_retreat_arrive_radius_, 0.10);
+    pnh_.param("diff_failure_retreat_max_attempts",
+               diff_failure_retreat_max_attempts_, 2);
+    if (!std::isfinite(diff_failure_retreat_distance_) ||
+        !std::isfinite(diff_failure_retreat_arrive_radius_) ||
+        diff_failure_retreat_distance_ <= diff_failure_retreat_arrive_radius_ ||
+        diff_failure_retreat_arrive_radius_ <= 0.0 ||
+        diff_failure_retreat_max_attempts_ < 1) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: invalid Diff failure-retreat parameters");
+    }
     pnh_.param<std::string>("leader_landing_target_topic", leader_landing_target_topic_,
                             "/UAV0/mission/landing_target");
     pnh_.param<std::string>("leader_landing_request_topic", leader_landing_request_topic_,
@@ -1126,22 +1140,34 @@ class LeaderSafePathFollower {
   }
 
   void diffStatusCallback(const std_msgs::String::ConstPtr& msg) {
-    // 2026-07-28: 任何状态都表示Diff已响应当前目标，不再按1Hz盲目覆盖飞行中的轨迹。
-    diff_plan_response_received_ = true;
     std::istringstream stream(msg->data);
     std::string status;
     stream >> status;
-    // 2026-07-28: 连续规划失败或目标越界时请求短子目标；成功记住Diff修正后的落点。
+    // Ignore a latched/delayed failure when there is no active goal to recover.
+    if ((status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") &&
+        (!diff_goal_published_ || diff_goal_index_ != active_relay_index_)) {
+      ROS_WARN("[safe_follower] ignore stale UAV1 Diff status=%s without an active relay goal.",
+               status.c_str());
+      return;
+    }
+    // A non-stale status is the planner's response to the current goal.
+    diff_plan_response_received_ = true;
+    // A true planning failure backs away first. An outside-map goal still uses the
+    // existing short forward point because retreating cannot bring that goal into the map.
     if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
       // 2026-07-28: 原轨迹规划失败后立刻丢弃残余速度并锁点，恢复子目标被接受前不允许漂移。
       setDiffWaitPositionHold(true, status);
       ++diff_planning_failure_events_;
       diff_recovery_requested_ = true;
+      diff_recovery_retreat_requested_ = status == "PLANNING_FAILED";
+      diff_recovery_goal_valid_ = false;
+      diff_recovery_goal_is_retreat_ = false;
       diff_goal_published_ = false;
       diff_accepted_goal_valid_ = false;
-      ROS_ERROR_THROTTLE(0.5,
-                         "[safe_follower] UAV1 Diff status=%s; request verified-route subgoal.",
-                         status.c_str());
+      ROS_ERROR_THROTTLE(
+          0.5,
+          "[safe_follower] UAV1 Diff status=%s; request verified-route %s subgoal.",
+          status.c_str(), diff_recovery_retreat_requested_ ? "retreat" : "forward");
     } else if (status == "TRAJECTORY_PUBLISHED") {
       // 2026-07-28: 只有Diff确认新轨迹已发布才解除等待锁点，避免“先解锁、后规划”空窗。
       setDiffWaitPositionHold(false, "new Diff trajectory published");
@@ -1260,6 +1286,80 @@ class LeaderSafePathFollower {
     // 防止找门阶段的旧轨迹与通道空间接近时跳回旧分支。
     follower_route_index_ = std::max(follower_route_index_, route_start_index);
     return getRouteTrackingTarget(follower_world, relay_target, route_end_index, target);
+  }
+
+  bool getDiffFailureRetreatTarget(const geometry_msgs::Point& follower_world,
+                                   const RoutePoint& relay_target,
+                                   RoutePoint* target) {
+    if (route_.size() < 2 || diff_failure_retreat_distance_ <= 0.0) return false;
+
+    // Restrict nearest-point matching to the active relay neighbourhood. This avoids
+    // jumping to a spatially close but topologically different branch in a U-shaped aisle.
+    const double previous_progress =
+        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].progress
+                                : route_.front().progress;
+    const double search_min_progress = std::max(
+        route_.front().progress,
+        previous_progress - diff_failure_retreat_distance_ - path_sample_spacing_);
+    const geometry_msgs::Point previous_position =
+        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].position
+                                : route_.front().position;
+    const double distance_from_previous =
+        std::hypot(follower_world.x - previous_position.x,
+                   follower_world.y - previous_position.y);
+    // Do not let a nearby future leg of a U-shaped route masquerade as current progress.
+    const double plausible_progress_upper =
+        previous_progress + distance_from_previous + 2.0 * path_sample_spacing_;
+    const double search_max_progress = std::min(
+        relay_target.progress + path_sample_spacing_, plausible_progress_upper);
+
+    std::size_t nearest_index = 0;
+    double nearest_distance = std::numeric_limits<double>::infinity();
+    bool found_nearest = false;
+    for (std::size_t i = 0; i < route_.size(); ++i) {
+      if (route_[i].progress < search_min_progress ||
+          route_[i].progress > search_max_progress)
+        continue;
+      const double distance = std::hypot(route_[i].position.x - follower_world.x,
+                                         route_[i].position.y - follower_world.y);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        nearest_index = i;
+        found_nearest = true;
+      }
+    }
+    if (!found_nearest || nearest_distance > relay_occupied_attachment_radius_) return false;
+
+    const double retreat_progress = std::max(
+        route_.front().progress,
+        route_[nearest_index].progress - diff_failure_retreat_distance_);
+    const double minimum_retreat =
+        std::max(0.15, diff_failure_retreat_arrive_radius_ + 0.05);
+    if (route_[nearest_index].progress - retreat_progress < minimum_retreat) return false;
+
+    std::size_t retreat_index = 0;
+    for (std::size_t i = 1; i < route_.size(); ++i) {
+      if (route_[i].progress + 1.0e-6 < retreat_progress) continue;
+      const double progress_span = route_[i].progress - route_[i - 1].progress;
+      const double ratio = progress_span > 1.0e-6
+                               ? std::max(0.0, std::min(1.0,
+                                     (retreat_progress - route_[i - 1].progress) /
+                                         progress_span))
+                               : 0.0;
+      RoutePoint candidate;
+      candidate.position = interpolate(route_[i - 1].position, route_[i].position, ratio);
+      candidate.yaw = route_[i].yaw;
+      candidate.progress = retreat_progress;
+      const double retreat_distance =
+          std::hypot(candidate.position.x - follower_world.x,
+                     candidate.position.y - follower_world.y);
+      if (retreat_distance < minimum_retreat) return false;
+      *target = candidate;
+      retreat_index = i - 1;
+      follower_route_index_ = retreat_index;
+      return true;
+    }
+    return false;
   }
 
   geometry_msgs::Point limitTargetStep(const geometry_msgs::Point& current,
@@ -1914,35 +2014,92 @@ class LeaderSafePathFollower {
                        : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
-    // 2026-07-28: 原接力点连续失败后，从前机已经实飞的稠密路线取短前视点；
-    // 到达一个短点后再向前取下一个，最终仍以原接力点作为完成判据。
-    // 2026-07-28: Diff可能把占据的子目标投影到附近安全点，恢复链以实际落点为到达判据。
+    // 原接力点规划失败后先沿前机已验证的稠密路线后退，再从开阔位置重发原目标。
+    // Diff可能把占据的退让目标投影到附近安全点，因此以实际接受点作为到达判据。
     const geometry_msgs::Point recovery_arrival_goal =
         diff_accepted_goal_valid_ ? diff_accepted_goal_local_ : diff_recovery_goal_local_;
+    const double recovery_error = distance3d(current_local, recovery_arrival_goal);
+    const bool retreat_reached = diff_recovery_goal_is_retreat_ &&
+        recovery_error <= diff_failure_retreat_arrive_radius_ &&
+        follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
+        follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
+    const bool forward_recovery_reached = !diff_recovery_goal_is_retreat_ &&
+        recovery_error <= diff_recovery_arrive_radius_;
     if (diff_recovery_goal_valid_ &&
-        distance3d(current_local, recovery_arrival_goal) <= diff_recovery_arrive_radius_) {
+        (retreat_reached || forward_recovery_reached)) {
+      const bool completed_retreat = diff_recovery_goal_is_retreat_;
       ROS_WARN("[safe_follower] UAV1 Diff reached recovery subgoal (%.2f,%.2f,%.2f).",
                diff_recovery_goal_local_.x, diff_recovery_goal_local_.y,
                diff_recovery_goal_local_.z);
       diff_recovery_goal_valid_ = false;
-      diff_recovery_requested_ = true;
+      diff_recovery_requested_ = !completed_retreat;
+      diff_recovery_retreat_requested_ = false;
+      diff_recovery_goal_is_retreat_ = false;
       diff_goal_published_ = false;
       diff_accepted_goal_valid_ = false;
+      setDiffWaitPositionHold(
+          true, completed_retreat ? "failure retreat reached; replan original relay"
+                                  : "outside-map forward subgoal reached");
     }
     if (diff_recovery_requested_ && !terminal_relay) {
       RoutePoint recovery_world;
-      if (getRelayRouteTarget(followerToWorld(current_local), desired_world, &recovery_world)) {
+      if (diff_recovery_retreat_requested_ &&
+          diff_failure_retreat_attempts_ >= diff_failure_retreat_max_attempts_) {
+        setDiffWaitPositionHold(true, "planning-failure retreat attempts exhausted");
+        publishState("DIFF_FAILURE_RETREAT_EXHAUSTED", 1.0, 0.0, 0.0);
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "[safe_follower] relay %zu retreat attempts exhausted (%d); keep HOLD for operator recovery.",
+            active_relay_index_ + 1, diff_failure_retreat_max_attempts_);
+        return true;
+      }
+      const bool recovery_target_found =
+          diff_recovery_retreat_requested_
+              ? getDiffFailureRetreatTarget(followerToWorld(current_local), desired_world,
+                                            &recovery_world)
+              : getRelayRouteTarget(followerToWorld(current_local), desired_world,
+                                    &recovery_world);
+      if (recovery_target_found) {
         const geometry_msgs::Point candidate =
             useFollowerCruiseHeight(worldToFollower(recovery_world.position));
-        if (distance3d(current_local, candidate) > diff_recovery_arrive_radius_) {
+        const double required_distance = diff_recovery_retreat_requested_
+                                             ? diff_failure_retreat_arrive_radius_
+                                             : diff_recovery_arrive_radius_;
+        if (distance3d(current_local, candidate) > required_distance) {
           diff_recovery_goal_local_ = candidate;
           diff_recovery_goal_valid_ = true;
-          ROS_ERROR("[safe_follower] UAV1 Diff recovery subgoal local=(%.2f,%.2f,%.2f) "
-                    "toward relay %zu/%zu.", candidate.x, candidate.y, candidate.z,
-                    active_relay_index_ + 1, relay_waypoints_.size());
+          diff_recovery_goal_is_retreat_ = diff_recovery_retreat_requested_;
+          if (diff_recovery_goal_is_retreat_) ++diff_failure_retreat_attempts_;
+          diff_recovery_requested_ = false;
+          diff_recovery_retreat_requested_ = false;
+          if (diff_recovery_goal_is_retreat_) {
+            ROS_ERROR("[safe_follower] UAV1 Diff failure retreat %d/%d local=(%.2f,%.2f,%.2f), "
+                      "back %.2fm before retrying relay %zu/%zu.",
+                      diff_failure_retreat_attempts_, diff_failure_retreat_max_attempts_,
+                      candidate.x, candidate.y, candidate.z,
+                      diff_failure_retreat_distance_,
+                      active_relay_index_ + 1, relay_waypoints_.size());
+          } else {
+            ROS_ERROR("[safe_follower] UAV1 Diff outside-map forward subgoal local=(%.2f,%.2f,%.2f) "
+                      "toward relay %zu/%zu.", candidate.x, candidate.y, candidate.z,
+                      active_relay_index_ + 1, relay_waypoints_.size());
+          }
         }
       }
-      diff_recovery_requested_ = false;
+      if (!diff_recovery_goal_valid_) {
+        const bool retreat_unavailable = diff_recovery_retreat_requested_;
+        setDiffWaitPositionHold(
+            true, retreat_unavailable ? "no verified retreat point after planning failure"
+                                      : "no verified forward point for outside-map goal");
+        publishState(retreat_unavailable ? "DIFF_WAIT_FAILURE_RETREAT"
+                                         : "DIFF_WAIT_OUTSIDE_MAP_RECOVERY",
+                     1.0, 0.2, 0.0);
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "[safe_follower] cannot find a verified-route %s subgoal; keep HOLD.",
+            retreat_unavailable ? "retreat" : "forward");
+        return true;
+      }
     }
     const geometry_msgs::Point command_local =
         diff_recovery_goal_valid_ ? diff_recovery_goal_local_ : desired_local;
@@ -2041,8 +2198,11 @@ class LeaderSafePathFollower {
       diff_goal_published_ = false;
       // 2026-07-28: 原接力点完成后清除上一段Diff短子目标恢复状态。
       diff_recovery_requested_ = false;
+      diff_recovery_retreat_requested_ = false;
       diff_recovery_goal_valid_ = false;
+      diff_recovery_goal_is_retreat_ = false;
       diff_accepted_goal_valid_ = false;
+      diff_failure_retreat_attempts_ = 0;
       return true;
     }
     relay_arrival_stamp_ = ros::Time(0);
@@ -2078,7 +2238,7 @@ class LeaderSafePathFollower {
       goal.header.stamp = now;
       goal.header.frame_id = follower_odom_.header.frame_id.empty()
                                  ? world_frame_ : follower_odom_.header.frame_id;
-      // 2026-07-28: 恢复期间只给Diff一个位于前机已验证折线上的短目标，避免原远点反复碰撞。
+      // 恢复期间只给Diff一个位于前机已验证折线后的退让目标，避免在障碍边原地重算。
       goal.pose.position = command_local;
       const double local_yaw = worldYawToFollower(desired_world.yaw);
       goal.pose.orientation.w = std::cos(local_yaw * 0.5);
@@ -2442,7 +2602,8 @@ class LeaderSafePathFollower {
   bool enable_dynamic_obstacle_detection_{false};
   bool diff_wait_hold_active_{false};  // 2026-07-28: 接力点之间使用MAVROS位置闭环锁点，区别于动态临时HOLD。
   bool diff_plan_response_received_{false}, diff_accepted_goal_valid_{false}; // 2026-07-28: Diff应答与实际落点。
-  bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 2026-07-28: 已验证路线短子目标恢复。
+  bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 已验证路线短子目标恢复。
+  bool diff_recovery_retreat_requested_{false}, diff_recovery_goal_is_retreat_{false};
   bool diff_command_seen_for_goal_{false};  // 2026-07-28: 当前Diff目标是否真正产生过PositionCommand。
   bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
   bool have_confirmed_door_{false}, door_waypoint_released_{false};
@@ -2498,6 +2659,8 @@ class LeaderSafePathFollower {
   double dynamic_retention_route_half_width_{0.70};  // 2026-07-28: 动态保留只覆盖通道中心带，墙边框立即淘汰。
   double diff_goal_retry_period_{1.0};  // 2026-07-28: 仅Diff无任何状态应答时使用的超时重试周期。
   double diff_recovery_arrive_radius_{0.18};  // 2026-07-28: 短子目标切换半径。
+  double diff_failure_retreat_distance_{0.40};  // 规划失败后沿已验证路线后退的距离。
+  double diff_failure_retreat_arrive_radius_{0.10};
   double diff_endpoint_capture_radius_{0.15}, diff_endpoint_capture_dwell_{0.45};
   double diff_command_stale_timeout_{0.80};  // 2026-07-28: 与控制器0.60s轨迹超时错开0.20s。
   double follower_odom_jump_speed_{2.0}, follower_odom_jump_vertical_speed_{1.2};
@@ -2526,6 +2689,7 @@ class LeaderSafePathFollower {
   int relay_endpoint_min_points_{2};
   int relay_point_occupied_min_points_{2};
   int relay_goal_clearance_min_points_{2};
+  int diff_failure_retreat_max_attempts_{2};
   double leader_route_progress_{0.0}, last_relay_selection_progress_{0.0};
   int max_internal_relay_points_{0}, internal_relay_count_{0};
   std::size_t active_relay_index_{0}, terminal_waypoint_index_{std::numeric_limits<std::size_t>::max()};
@@ -2545,6 +2709,7 @@ class LeaderSafePathFollower {
   geometry_msgs::Point diff_accepted_goal_local_;  // 2026-07-28: Diff对占据原目标修正后的真正落点。
   int recovery_attempt_count_{0};
   int diff_planning_failure_events_{0};  // 2026-07-28: Diff连续失败诊断计数。
+  int diff_failure_retreat_attempts_{0};
   uint32_t trajectory_id_{0};
 };
 
