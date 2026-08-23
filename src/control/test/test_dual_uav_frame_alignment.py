@@ -83,6 +83,47 @@ def test_relay_waypoints_release_after_seven_tenths_meter_clearance():
     assert 'relayWaypointSeparationReady("EXIT")' in source
 
 
+def test_diff_execution_continuously_holds_and_retreats_for_uav_spacing():
+    root = ET.parse(LAUNCH).getroot()
+    follower = next(
+        node for node in root.findall("node")
+        if node.attrib.get("type") == "leader_safe_path_follower"
+    )
+    params = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in follower.findall("param")
+    }
+    assert params["enable_diff_separation_safety"] == "true"
+    assert params["min_separation"] == "0.70"
+    assert params["separation_recovery_distance"] == "0.50"
+    assert params["separation_release_distance"] == "0.70"
+
+    source = FOLLOWER.read_text(encoding="utf-8")
+    safety = source.split("bool handleDiffSeparationSafety", 1)[1].split(
+        "bool handleDiffPlannerExecution", 1
+    )[0]
+    assert "std::hypot(leader_world.x - follower_world.x" in safety
+    assert "separation >= min_separation_" in safety
+    assert "separation <= separation_recovery_distance_" in safety
+    assert "separation >= separation_release_distance_" in safety
+    assert "setDiffWaitPositionHold(true" in safety
+    assert "getSeparationRecoveryTarget" in safety
+    assert "diff_goal_pub_.publish(goal)" in safety
+
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    assert execution.index("handleDiffSeparationSafety(now)") < execution.index(
+        "active_relay_index_ >= relay_waypoints_.size()"
+    )
+    status = source.split("void diffStatusCallback", 1)[1].split(
+        "bool getLaggedTarget", 1
+    )[0]
+    assert "ignore stale trajectory during separation hold" in status
+    assert "separation retreat trajectory published" in status
+    assert "accepted_improves_separation" in status
+
+
 def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     source = FOLLOWER.read_text(encoding="utf-8")
     append = source.split("void appendRelayWaypoint", 1)[1].split(
