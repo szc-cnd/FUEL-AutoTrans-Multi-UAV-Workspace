@@ -250,7 +250,7 @@ class LeaderSafePathFollower {
     // Diff目标必须远离静态点云；若原接力点贴障碍，则只沿前机已飞路线向后找安全点。
     pnh_.param("relay_goal_clearance_radius", relay_goal_clearance_radius_, 0.20);
     pnh_.param("relay_goal_clearance_z_margin", relay_goal_clearance_z_margin_, 0.30);
-    pnh_.param("relay_goal_clearance_min_points", relay_goal_clearance_min_points_, 1);
+    pnh_.param("relay_goal_clearance_min_points", relay_goal_clearance_min_points_, 2);
     pnh_.param("relay_goal_backtrack_max_distance",
                 relay_goal_backtrack_max_distance_, 1.00);
     pnh_.param("relay_slowdown_radius", relay_slowdown_radius_, 0.55);
@@ -2522,7 +2522,7 @@ class LeaderSafePathFollower {
   double follower_horizontal_speed_{0.0}, follower_vertical_speed_{0.0};
   int relay_endpoint_min_points_{2};
   int relay_point_occupied_min_points_{2};
-  int relay_goal_clearance_min_points_{1};
+  int relay_goal_clearance_min_points_{2};
   double leader_route_progress_{0.0}, last_relay_selection_progress_{0.0};
   int max_internal_relay_points_{0}, internal_relay_count_{0};
   std::size_t active_relay_index_{0}, terminal_waypoint_index_{std::numeric_limits<std::size_t>::max()};

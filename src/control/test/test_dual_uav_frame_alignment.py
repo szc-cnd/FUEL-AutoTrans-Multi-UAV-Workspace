@@ -118,7 +118,7 @@ def test_diff_relay_goal_uses_configured_clearance_and_backtracks_current_cache(
         for item in follower.findall("param")
     }
     assert params["relay_goal_clearance_radius"] == "0.20"
-    assert params["relay_goal_clearance_min_points"] == "1"
+    assert params["relay_goal_clearance_min_points"] == "2"
     assert params["relay_goal_backtrack_max_distance"] == "1.00"
 
     source = FOLLOWER.read_text(encoding="utf-8")
