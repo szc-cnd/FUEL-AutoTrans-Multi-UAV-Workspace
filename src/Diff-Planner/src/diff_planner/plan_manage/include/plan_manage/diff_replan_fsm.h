@@ -125,8 +125,10 @@ namespace diff_planner
     bool swing_wait_active_;
     double swing_clear_since_;
     uint32_t swing_wait_obstacle_id_;
-    // 当前外部目标序号随每条规划状态回传，供接力管理器过滤锁存/延迟回执。
-    uint32_t active_external_goal_seq_{0U};
+    // 当前外部目标时间戳随每条规划状态回传，供接力管理器过滤锁存/延迟回执。
+    uint64_t active_external_goal_stamp_ns_{0ULL};
+    // 地图更新使目标落入障碍后，成功重规划时需把替换后的自由目标回传上层。
+    bool external_goal_modified_{false};
     FSM_EXEC_STATE exec_state_;
     int continously_called_times_{0};
 

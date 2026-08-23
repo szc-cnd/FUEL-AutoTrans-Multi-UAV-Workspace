@@ -59,6 +59,11 @@
         <arg name="require_pre_agent_trajectory" value="false"/>
         <!-- 2026-07-28: 后机规划失败由safe_follower改发已验证短子目标，禁用会阻塞FSM并导致Lost heartbeat的随机初始化。 -->
         <arg name="enable_random_global_init" value="false"/>
+        <!-- 目标被地图判为占据时沿原全局轨迹换到后方自由点；自身进入膨胀占据区时低速退回近期自由位置。 -->
+        <arg name="enable_occupied_recovery" value="true"/>
+        <arg name="escape_max_distance" value="0.40"/>
+        <arg name="escape_history_time" value="1.50"/>
+        <arg name="escape_speed" value="0.10"/>
         <arg name="point_num" value="1"/>
         <arg name="point0_x" value="0.0"/><arg name="point0_y" value="0.0"/><arg name="point0_z" value="0.60"/>
         <arg name="point1_x" value="0.0"/><arg name="point1_y" value="0.0"/><arg name="point1_z" value="0.60"/>

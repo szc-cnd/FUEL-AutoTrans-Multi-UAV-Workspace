@@ -346,6 +346,8 @@ namespace diff_planner
       if (planFromLocalTraj(1))
       {
         replan_fail_count_ = 0;
+        if (external_goal_modified_)
+          publishPlanningStatus("TRAJECTORY_PUBLISHED");
         changeFSMExecState(EXEC_TRAJ, "FSM");
       }
       else
@@ -1483,23 +1485,14 @@ namespace diff_planner
       have_target_ = true;
       have_new_target_ = true;
       /*** FSM ***/
-      if (exec_state_ != WAIT_TARGET && flag_2replan && exec_state_ != EMERGENCY_STOP)
+      if (exec_state_ != WAIT_TARGET && flag_2replan &&
+          exec_state_ != EMERGENCY_STOP && exec_state_ != OCCUPIED_RECOVERY)
       {
-        ros::Time start_time = ros::Time::now();
-        ros::Duration timeout(0.5); 
-        while (exec_state_ != EXEC_TRAJ)
-        {
-          ros::spinOnce();
-          ros::Duration(0.001).sleep();
-          if (ros::Time::now() - start_time > timeout)
-          {
-            ROS_WARN("Timeout waiting for state to change to EXEC_TRAJ.");
-            return false; 
-          }
-        }
-        changeFSMExecState(REPLAN_TRAJ, "TRIG");
+        // 新目标回调只切状态，不在回调内部嵌套 spin 等待状态机。否则碰撞重规划
+        // 期间会阻塞订阅队列，表现为规划器存活却再也收不到后续替换目标。
+        changeFSMExecState(GEN_NEW_TRAJ, "NEW_EXTERNAL_GOAL");
       }
-      else if(exec_state_ == EMERGENCY_STOP)
+      else if(exec_state_ == EMERGENCY_STOP || exec_state_ == OCCUPIED_RECOVERY)
       {
         return true;
       }
@@ -1538,6 +1531,7 @@ namespace diff_planner
           }
           if (planNextWaypoint(pt, false)) // final_goal_=pt inside if success
           {
+            external_goal_modified_ = true;
             ROS_INFO("Current in-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
                      orig_goal(0), orig_goal(1), orig_goal(2), final_goal_(0), final_goal_(1), final_goal_(2));
             return true;
@@ -1556,7 +1550,8 @@ namespace diff_planner
 
   void DiffReplanFSM::waypointCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
-    active_external_goal_seq_ = msg->header.seq;
+    active_external_goal_stamp_ns_ = msg->header.stamp.toNSec();
+    external_goal_modified_ = false;
     Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
     if (planner_manager_->grid_map_->getInflateOccupancy(end_wp) == -1)
     {
@@ -1574,15 +1569,16 @@ namespace diff_planner
 
   void DiffReplanFSM::publishPlanningStatus(const std::string &status)
   {
-    // 使用String保持现有消息依赖不变。所有状态回传当前外部目标序号，成功时再
+    // 使用String保持现有消息依赖不变。所有状态回传当前外部目标时间戳，成功时再
     // 附带Diff实际接受的final_goal，避免延迟/锁存回执污染刚重发的新目标。
     std_msgs::String msg;
     std::ostringstream stream;
-    stream << status << " goal_seq=" << active_external_goal_seq_;
+    stream << status << " goal_stamp_ns=" << active_external_goal_stamp_ns_;
     if (status == "TRAJECTORY_PUBLISHED")
     {
       stream << " " << final_goal_.x() << " " << final_goal_.y() << " "
              << final_goal_.z();
+      external_goal_modified_ = false;
     }
     msg.data = stream.str();
     planning_status_pub_.publish(msg);
