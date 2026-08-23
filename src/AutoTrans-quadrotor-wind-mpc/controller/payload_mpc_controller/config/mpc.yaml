@@ -5,7 +5,7 @@ use_fix_yaw: false   # using fix yaw.
 
 # Cost on states
 # 当前先保留源码权重；首次室内悬停若响应过激，后续优先降低 Q_pos/Q_attitude 或增大 R。
-Q_pos_xy:   200.0    # Cost for horizontal positon error //default: 200     0.5
+Q_pos_xy:   220.0    # Cost for horizontal positon error //default: 200     0.5
 Q_pos_z:  200.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
