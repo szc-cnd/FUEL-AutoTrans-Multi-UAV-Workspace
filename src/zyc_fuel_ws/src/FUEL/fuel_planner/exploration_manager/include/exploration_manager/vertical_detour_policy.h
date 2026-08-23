@@ -33,6 +33,15 @@ inline bool inflationEscapeAllowed(LowProbePhase phase) {
   return phase == LowProbePhase::IDLE;
 }
 
+inline bool groundAscentRecoveryNeeded(
+    double current_height, double cruise_height, double height_tolerance,
+    int lower_obstacle_count, int minimum_obstacle_count,
+    bool vertical_path_safe) {
+  return current_height < cruise_height - std::max(0.0, height_tolerance) &&
+         lower_obstacle_count >= std::max(1, minimum_obstacle_count) &&
+         vertical_path_safe;
+}
+
 inline bool ascentShouldAbort(double xy_error, double xy_tolerance,
                               double elapsed, double timeout) {
   return xy_error > std::max(0.0, xy_tolerance) ||

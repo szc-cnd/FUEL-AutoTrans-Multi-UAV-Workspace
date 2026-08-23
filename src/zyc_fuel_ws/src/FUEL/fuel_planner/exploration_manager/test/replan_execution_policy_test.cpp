@@ -13,6 +13,7 @@ int main() {
   using fast_planner::exploration_policy::shouldReplanForCoveredFrontier;
   using fast_planner::exploration_policy::shouldActivateExternalExploration;
   using fast_planner::exploration_policy::isTrajectoryReleaseStateContinuous;
+  using fast_planner::exploration_policy::isTurnTrajectoryReleaseStateContinuous;
 
   // 新规划失败时，仍然安全的当前轨迹不能被提前截断。
   assert(!shouldInterruptCurrentTrajectory(false));
@@ -61,5 +62,12 @@ int main() {
   assert(!isTrajectoryReleaseStateContinuous(0.08, 0.15, 0.501, 0.08, 0.15, 0.50));
   assert(!isTrajectoryReleaseStateContinuous(
       std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0, 0.08, 0.15, 0.50));
+
+  // 原地转向已经先完成连续静止确认，发布时不再被普通平移轨迹的速度差二次拒绝；
+  // 位置和加速度连续性仍然是硬门槛。
+  assert(isTurnTrajectoryReleaseStateContinuous(0.08, 0.50, 0.08, 0.50));
+  assert(isTurnTrajectoryReleaseStateContinuous(0.08, 100.0, 0.08, 100.0));
+  assert(!isTurnTrajectoryReleaseStateContinuous(0.081, 0.0, 0.08, 0.50));
+  assert(!isTurnTrajectoryReleaseStateContinuous(0.0, 0.501, 0.08, 0.50));
   return 0;
 }

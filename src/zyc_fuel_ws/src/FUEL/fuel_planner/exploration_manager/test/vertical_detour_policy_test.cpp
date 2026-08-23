@@ -8,6 +8,7 @@ int main() {
   using fast_planner::vertical_detour::advanceLowProbe;
   using fast_planner::vertical_detour::ascentShouldAbort;
   using fast_planner::vertical_detour::inflationEscapeAllowed;
+  using fast_planner::vertical_detour::groundAscentRecoveryNeeded;
   using fast_planner::vertical_detour::preferPathByMinimumClearance;
   using fast_planner::vertical_detour::preferDescending;
 
@@ -20,6 +21,12 @@ int main() {
   assert(!ascentShouldAbort(0.08, 0.08, 3.9, 4.0));
   assert(ascentShouldAbort(0.081, 0.08, 3.9, 4.0));
   assert(ascentShouldAbort(0.0, 0.08, 4.0, 4.0));
+
+  // 只有低于巡航层、下方存在足够占据支撑且整根上升柱安全时才抢占水平逃逸。
+  assert(groundAscentRecoveryNeeded(0.22, 0.60, 0.06, 3, 2, true));
+  assert(!groundAscentRecoveryNeeded(0.55, 0.60, 0.06, 3, 2, true));
+  assert(!groundAscentRecoveryNeeded(0.22, 0.60, 0.06, 1, 2, true));
+  assert(!groundAscentRecoveryNeeded(0.22, 0.60, 0.06, 3, 2, false));
 
   int confirmations = 0;
   int release_confirmations = 0;

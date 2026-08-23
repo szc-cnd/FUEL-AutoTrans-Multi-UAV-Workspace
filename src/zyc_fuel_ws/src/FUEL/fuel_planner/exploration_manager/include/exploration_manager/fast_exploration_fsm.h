@@ -97,7 +97,10 @@ private:
   bool active_traj_braked_{false};
   bool pending_turn_in_place_{false};
   bool active_turn_in_place_{false};
+  bool pending_ground_ascent_{false};
+  bool active_ground_ascent_{false};
   ros::Time turn_alignment_since_;
+  ros::Time turn_tracking_grace_since_;
   // 首条通道内轨迹发布后记录动态检测阶段；LDOP当前持续运行，该状态供监控保留。
   bool first_corridor_traj_published_{false};
   bool mission_allows_dynamic_detection_{false};

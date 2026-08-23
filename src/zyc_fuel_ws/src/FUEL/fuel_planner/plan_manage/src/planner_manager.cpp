@@ -246,6 +246,32 @@ int FastPlannerManager::rawFootprintCollisionCount(
   return occupied_samples;
 }
 
+int FastPlannerManager::lowerFootprintObstacleCount(
+    const Eigen::Vector3d& position, double probe_depth) const {
+  if (!sdf_map_ || !sdf_map_->isInMap(position))
+    return -1;
+  probe_depth = std::max(0.08, probe_depth);
+  const double z_offsets[] = {-probe_depth, -0.5 * probe_depth, -0.06};
+  int occupied_samples = 0;
+  for (double z_offset : z_offsets) {
+    for (int ring = 0; ring <= 2; ++ring) {
+      const double radius = 0.5 * static_cast<double>(ring) * footprint_check_radius_;
+      const int samples = ring == 0 ? 1 : footprint_check_samples_;
+      for (int sample = 0; sample < samples; ++sample) {
+        const double angle = 2.0 * M_PI * static_cast<double>(sample) /
+                             static_cast<double>(samples);
+        Eigen::Vector3d probe = position;
+        probe.x() += radius * std::cos(angle);
+        probe.y() += radius * std::sin(angle);
+        probe.z() += z_offset;
+        if (!sdf_map_->isInMap(probe)) return -1;
+        if (isSupportedOccupied(probe)) ++occupied_samples;
+      }
+    }
+  }
+  return occupied_samples;
+}
+
 bool FastPlannerManager::isPositionSafe(const Eigen::Vector3d& position) const {
   if (!isRawFootprintSafe(position)) return false;
 
@@ -743,6 +769,48 @@ bool FastPlannerManager::planStationaryTraj(
   ROS_ERROR("[turn_in_place] stationary position trajectory %.2fs at "
             "(%.2f %.2f %.2f).",
             local_data_.duration_, position.x(), position.y(), position.z());
+  return true;
+}
+
+bool FastPlannerManager::planVerticalTraj(
+    const Eigen::Vector3d& start, const Eigen::Vector3d& target) {
+  if (!start.allFinite() || !target.allFinite() ||
+      (target - start).norm() < 0.02 ||
+      (target - start).head<2>().norm() > 1e-6)
+    return false;
+  const double distance = std::fabs(target.z() - start.z());
+  if (!(pp_.max_vel_ > 0.0) || !(pp_.max_acc_ > 0.0)) return false;
+
+  // 五次 smoothstep 的峰值速度和峰值加速度分别约为 1.875*d/T、
+  // 5.774*d/T^2；据此直接给出满足动力学上限的时长。
+  const double velocity_duration = 1.875 * distance / pp_.max_vel_;
+  const double acceleration_duration =
+      std::sqrt(5.774 * distance / pp_.max_acc_);
+  const double duration =
+      std::max(1.0, std::max(velocity_duration, acceleration_duration));
+  constexpr int kSegments = 24;
+  const double dt = duration / static_cast<double>(kSegments);
+  vector<Eigen::Vector3d> samples;
+  samples.reserve(kSegments + 1);
+  for (int i = 0; i <= kSegments; ++i) {
+    const double u = static_cast<double>(i) / static_cast<double>(kSegments);
+    const double smooth = u * u * u * (10.0 + u * (-15.0 + 6.0 * u));
+    samples.push_back(start + smooth * (target - start));
+  }
+  const vector<Eigen::Vector3d> boundary_derivatives(4, Eigen::Vector3d::Zero());
+  Eigen::MatrixXd control_points;
+  NonUniformBspline::parameterizeToBspline(
+      dt, samples, boundary_derivatives, 3, control_points);
+  if (control_points.rows() < 4 || !control_points.allFinite()) return false;
+  local_data_.position_traj_.setUniformBspline(control_points, 3, dt);
+  local_data_.position_traj_.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_);
+  if (!local_data_.position_traj_.checkFeasibility(false)) return false;
+  updateTrajInfo();
+  const Eigen::Vector3d actual_end =
+      local_data_.position_traj_.evaluateDeBoorT(local_data_.duration_);
+  if ((actual_end - target).norm() > 1e-6) return false;
+  ROS_ERROR("[ground_ascent] fixed-xy vertical spline z=%.2f -> %.2f over %.2fs.",
+            start.z(), target.z(), local_data_.duration_);
   return true;
 }
 
@@ -1321,6 +1389,77 @@ void FastPlannerManager::planYawExplore(const Eigen::Vector3d& start_yaw, const 
 
   // plan_data_.path_yaw_ = path;
   // plan_data_.dt_yaw_path_ = dt_yaw * subsp;
+}
+
+bool FastPlannerManager::planYawTurnInPlace(
+    const Eigen::Vector3d& start_yaw, double end_yaw) {
+  if (!start_yaw.allFinite() || !std::isfinite(end_yaw) ||
+      local_data_.duration_ <= 0.0)
+    return false;
+
+  double start = start_yaw[0];
+  while (start < -M_PI) start += 2.0 * M_PI;
+  while (start > M_PI) start -= 2.0 * M_PI;
+  calcNextYaw(start, end_yaw);
+
+  // 两端各用15%时长平滑加减速，中间保持匀速。相比整段五次 smoothstep，
+  // 峰值/平均角速度比从1.875降到1/(1-0.15)=1.176，既保证零端点导数，
+  // 又避免为了完整到达目标而把转弯拖得过久。
+  constexpr int kSegments = 24;
+  const double dt = local_data_.duration_ / static_cast<double>(kSegments);
+  const double delta = end_yaw - start;
+  vector<Eigen::Vector3d> samples;
+  samples.reserve(kSegments + 1);
+  for (int i = 0; i <= kSegments; ++i) {
+    const double u = static_cast<double>(i) / static_cast<double>(kSegments);
+    constexpr double kRampFraction = 0.15;
+    constexpr double kArea = 1.0 - kRampFraction;
+    double progress = 0.0;
+    if (u < kRampFraction) {
+      const double x = u / kRampFraction;
+      const double ramp_integral =
+          2.5 * std::pow(x, 4) - 3.0 * std::pow(x, 5) + std::pow(x, 6);
+      progress = kRampFraction * ramp_integral / kArea;
+    } else if (u <= 1.0 - kRampFraction) {
+      progress = (0.5 * kRampFraction + u - kRampFraction) / kArea;
+    } else {
+      const double remaining = 1.0 - u;
+      const double x = remaining / kRampFraction;
+      const double ramp_integral =
+          2.5 * std::pow(x, 4) - 3.0 * std::pow(x, 5) + std::pow(x, 6);
+      progress = 1.0 - kRampFraction * ramp_integral / kArea;
+    }
+    samples.emplace_back(start + delta * progress, 0.0, 0.0);
+  }
+  const vector<Eigen::Vector3d> boundary_derivatives(4, Eigen::Vector3d::Zero());
+  Eigen::MatrixXd interpolated_control_points;
+  NonUniformBspline::parameterizeToBspline(
+      dt, samples, boundary_derivatives, 3, interpolated_control_points);
+  if (interpolated_control_points.rows() < 4 ||
+      !interpolated_control_points.allFinite())
+    return false;
+
+  Eigen::MatrixXd yaw_control_points(interpolated_control_points.rows(), 1);
+  yaw_control_points.col(0) = interpolated_control_points.col(0);
+  local_data_.yaw_traj_.setUniformBspline(yaw_control_points, 3, dt);
+  local_data_.yawdot_traj_ = local_data_.yaw_traj_.getDerivative();
+  local_data_.yawdotdot_traj_ = local_data_.yawdot_traj_.getDerivative();
+  plan_data_.dt_yaw_ = dt;
+
+  const double duration = local_data_.yaw_traj_.getTimeSum();
+  const double actual_end = local_data_.yaw_traj_.evaluateDeBoorT(duration)[0];
+  const double endpoint_error = std::fabs(actual_end - end_yaw);
+  if (!std::isfinite(actual_end) || endpoint_error > 1e-6) {
+    ROS_ERROR("[turn_in_place] hard yaw endpoint verification failed: "
+              "target=%.6f actual=%.6f error=%.6f.",
+              end_yaw, actual_end, endpoint_error);
+    return false;
+  }
+  ROS_ERROR("[turn_in_place] hard yaw spline %.1fdeg -> %.1fdeg over %.2fs "
+            "(endpoint error %.6fdeg).",
+            start * 180.0 / M_PI, end_yaw * 180.0 / M_PI, duration,
+            endpoint_error * 180.0 / M_PI);
+  return true;
 }
 
 void FastPlannerManager::calcNextYaw(const double& last_yaw, double& yaw) {

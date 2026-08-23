@@ -68,5 +68,14 @@ inline bool isTrajectoryReleaseStateContinuous(
          acceleration_error <= max_acceleration_error;
 }
 
+inline bool isTurnTrajectoryReleaseStateContinuous(
+    double position_error, double acceleration_error,
+    double max_position_error, double max_acceleration_error) {
+  return std::isfinite(position_error) && std::isfinite(acceleration_error) &&
+         max_position_error >= 0.0 && max_acceleration_error >= 0.0 &&
+         position_error <= max_position_error &&
+         acceleration_error <= max_acceleration_error;
+}
+
 }  // namespace exploration_policy
 }  // namespace fast_planner

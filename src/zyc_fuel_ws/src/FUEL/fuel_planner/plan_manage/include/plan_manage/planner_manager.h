@@ -36,6 +36,9 @@ public:
                        const Eigen::Vector3d& cur_acc, const double& time_lb = -1);
   // 地图确认真实转弯后，位置保持不动，只执行yaw对准。
   bool planStationaryTraj(const Eigen::Vector3d& position, double duration);
+  // 地面/下方障碍恢复专用：保持 XY 不变，以零端点速度直升。
+  bool planVerticalTraj(const Eigen::Vector3d& start,
+                        const Eigen::Vector3d& target);
   bool planGlobalTraj(const Eigen::Vector3d& start_pos);
   bool topoReplan(bool collide);
 
@@ -44,6 +47,9 @@ public:
   void planYawExplore(const Eigen::Vector3d& start_yaw, const double& end_yaw, bool lookfwd,
                       const double& relax_time, bool continuous_scan = false,
                       double scan_yaw_rate = 0.0);
+  // 原地转向使用插值样条而非软终点优化，严格到达目标 yaw 且两端角速度/角加速度为零。
+  bool planYawTurnInPlace(const Eigen::Vector3d& start_yaw,
+                          double end_yaw);
 
   void initPlanModules(ros::NodeHandle& nh);
   void setGlobalWaypoints(vector<Eigen::Vector3d>& waypoints);
@@ -59,6 +65,9 @@ public:
   bool isRawPositionSafe(const Eigen::Vector3d& position) const;
   // 局部脱困专用：允许少量受支撑占据采样，但只能沿采样数和ESDF净空持续改善的方向退出。
   int rawFootprintCollisionCount(const Eigen::Vector3d& position) const;
+  // 统计机体下方圆盘内的受支撑占据，用于区分贴地障碍与侧墙接触。
+  int lowerFootprintObstacleCount(const Eigen::Vector3d& position,
+                                  double probe_depth) const;
   bool isControlledEscapePosition(const Eigen::Vector3d& position) const;
   bool isPositionInflated(const Eigen::Vector3d& position) const;
   bool isPathSafe(const vector<Eigen::Vector3d>& path,

@@ -480,12 +480,18 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
             (trajectory_start_velocity - fd_->odom_vel_).norm();
         const double acceleration_error =
             (trajectory_start_acceleration - release_reference_acceleration).norm();
-        const bool release_state_continuous =
-            exploration_policy::isTrajectoryReleaseStateContinuous(
-                start_error, velocity_error, acceleration_error,
-                fp_->trajectory_release_max_start_error_,
-                fp_->trajectory_release_max_velocity_error_,
-                fp_->trajectory_release_max_acceleration_error_);
+        // 原地转向在规划器内已经完成一次连续静止确认。这里保留位置、加速度、
+        // 地图和整条轨迹安全检查，但不再用普通平移轨迹的速度差重复拒绝。
+        const bool release_state_continuous = pending_turn_in_place_
+            ? exploration_policy::isTurnTrajectoryReleaseStateContinuous(
+                  start_error, acceleration_error,
+                  fp_->trajectory_release_max_start_error_,
+                  fp_->trajectory_release_max_acceleration_error_)
+            : exploration_policy::isTrajectoryReleaseStateContinuous(
+                  start_error, velocity_error, acceleration_error,
+                  fp_->trajectory_release_max_start_error_,
+                  fp_->trajectory_release_max_velocity_error_,
+                  fp_->trajectory_release_max_acceleration_error_);
         const bool controlled_escape_start =
             planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
         const bool starts_in_inflation = planner_manager_->isPositionInflated(fd_->odom_pos_);
@@ -502,9 +508,10 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         if (!release_safe) {
           ROS_ERROR("[trajectory_release] reject before publish: position_error=%.3fm "
                     "velocity_error=%.3fm/s acceleration_error=%.3fm/s^2 continuous=%d "
-                    "raw_safe=%d inflated=%d clears=%d.",
+                    "turn_policy=%d raw_safe=%d inflated=%d clears=%d.",
                     start_error, velocity_error, acceleration_error,
                     static_cast<int>(release_state_continuous),
+                    static_cast<int>(pending_turn_in_place_),
                     static_cast<int>(raw_start_safe),
                     static_cast<int>(starts_in_inflation), static_cast<int>(clears_inflation));
           if (!release_state_continuous) {
@@ -536,10 +543,15 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         active_traj_valid_ = true;
         active_traj_braked_ = false;
         active_turn_in_place_ = pending_turn_in_place_;
+        active_ground_ascent_ = pending_ground_ascent_;
         if (active_turn_in_place_) {
           turn_alignment_since_ = ros::Time(0);
+          turn_tracking_grace_since_ = ros::Time(0);
           ROS_ERROR("[turn_in_place] published direct turn-to-final trajectory.");
         }
+        if (active_ground_ascent_)
+          ROS_ERROR("[ground_ascent] published vertical recovery; suppress normal "
+                    "near-end replanning until its hard endpoint.");
         // 2026-07-27: 发布顺序固定为“轨迹先、检测使能后”，满足入口目标下发后才开始识别。
         if (!first_corridor_traj_published_) {
           first_corridor_traj_published_ = true;
@@ -570,6 +582,18 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
 
       // Replan if traj is almost fully executed
       double time_to_end = info->duration_ - t_cur;
+      if (active_ground_ascent_) {
+        // 垂直恢复是一条完整的固定XY轨迹；普通“剩余1秒”重规划会在上升途中
+        // 把它截断并重新触发水平逃逸，因此只在硬终点后回到规划状态确认高度。
+        if (time_to_end <= 0.05) {
+          active_ground_ascent_ = false;
+          fd_->static_state_ = true;
+          transitState(PLAN_TRAJ, "ground-ascent-endpoint");
+          ROS_ERROR("[ground_ascent] vertical reference reached endpoint; "
+                    "confirm live height before horizontal planning.");
+        }
+        return;
+      }
       if (active_turn_in_place_) {
         // 原地转向要执行到yaw终点，不能按普通平移轨迹在“剩余1秒”时提前打断。
         if (time_to_end <= 0.05) {
@@ -579,7 +603,19 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
               expl_manager_->turnInPlaceCompletionTolerance();
           if (std::fabs(final_yaw_error) > tolerance) {
             turn_alignment_since_ = ros::Time(0);
+            const ros::Time now = ros::Time::now();
+            if (turn_tracking_grace_since_.isZero()) {
+              turn_tracking_grace_since_ = now;
+              ROS_WARN("[turn_in_place] yaw reference reached final endpoint; allow "
+                       "%.2fs for real yaw tracking before retry (error %.1fdeg).",
+                       expl_manager_->turnInPlaceTrackingGraceTime(),
+                       final_yaw_error * 180.0 / M_PI);
+            }
+            if ((now - turn_tracking_grace_since_).toSec() <
+                expl_manager_->turnInPlaceTrackingGraceTime())
+              return;
             active_turn_in_place_ = false;
+            turn_tracking_grace_since_ = ros::Time(0);
             fd_->static_state_ = true;
             transitState(PLAN_TRAJ, "turn-in-place-retry");
             ROS_WARN("[turn_in_place] direct turn ended with final-yaw error "
@@ -587,6 +623,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
                      final_yaw_error * 180.0 / M_PI);
             return;
           }
+          turn_tracking_grace_since_ = ros::Time(0);
           const ros::Time now = ros::Time::now();
           if (turn_alignment_since_.isZero()) turn_alignment_since_ = now;
           if ((now - turn_alignment_since_).toSec() <
@@ -595,6 +632,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
           expl_manager_->completeTurnInPlace();
           active_turn_in_place_ = false;
           turn_alignment_since_ = ros::Time(0);
+          turn_tracking_grace_since_ = ros::Time(0);
           fd_->static_state_ = true;
           transitState(PLAN_TRAJ, "turn-in-place-complete");
           ROS_ERROR("[turn_in_place] actual yaw stayed within %.1fdeg; "
@@ -635,6 +673,8 @@ int FastExplorationFSM::callExplorationPlanner() {
                                              fd_->start_yaw_);
   pending_turn_in_place_ =
       res == SUCCEED && expl_manager_->currentPlanIsTurnInPlace();
+  pending_ground_ascent_ =
+      res == SUCCEED && expl_manager_->currentPlanIsGroundAscent();
   classic_ = false;
 
   // int res = expl_manager_->classicFrontier(fd_->start_pt_, fd_->start_yaw_[0]);

@@ -349,6 +349,148 @@ bool FastExplorationManager::isKnownSafeVerticalPath(const Vector3d& start,
   return planner_manager_->isPathSafe(path);
 }
 
+bool FastExplorationManager::isKnownSafeGroundAscentPath(
+    const Vector3d& start, const Vector3d& target) const {
+  if (!sdf_map_ || !planner_manager_ || target.z() <= start.z() + 0.02 ||
+      (target - start).head<2>().norm() > 1e-6)
+    return false;
+  vector<Vector3d> path{start};
+  const int samples = std::max(
+      2, static_cast<int>(std::ceil((target.z() - start.z()) / 0.05)));
+  for (int sample = 1; sample <= samples; ++sample) {
+    Vector3d point = start;
+    point.z() = start.z() + (target.z() - start.z()) *
+                                static_cast<double>(sample) /
+                                static_cast<double>(samples);
+    if (!sdf_map_->isInMap(point) ||
+        sdf_map_->getOccupancy(point) != SDFMap::FREE)
+      return false;
+    path.push_back(point);
+  }
+  const bool allow_contact_escape =
+      planner_manager_->isControlledEscapePosition(start);
+  return planner_manager_->isPathSafe(path, allow_contact_escape);
+}
+
+bool FastExplorationManager::shouldStartGroundAscent(
+    const Vector3d& pos) const {
+  if (!ground_ascent_enabled_ || !mission_entered_search_region_ ||
+      low_probe_phase_ != vertical_detour::LowProbePhase::IDLE)
+    return false;
+  const double cruise_height = task_search_manager_
+                                   ? std::max(ground_ascent_cruise_height_,
+                                              task_search_manager_->preferredSearchHeight())
+                                   : ground_ascent_cruise_height_;
+  Vector3d target = pos;
+  target.z() = cruise_height;
+  const int lower_obstacles = planner_manager_->lowerFootprintObstacleCount(
+      pos, ground_ascent_lower_probe_depth_);
+  const bool path_safe = pointInsideWorkspaceLock(target) &&
+                         isKnownSafeGroundAscentPath(pos, target);
+  const bool needed = vertical_detour::groundAscentRecoveryNeeded(
+      pos.z(), cruise_height, ground_ascent_height_tolerance_,
+      lower_obstacles, ground_ascent_min_lower_obstacles_, path_safe);
+  if (!needed && lower_obstacles >= ground_ascent_min_lower_obstacles_ &&
+      pos.z() < cruise_height - ground_ascent_height_tolerance_) {
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[ground_ascent] lower obstacle detected (%d samples), but known-safe "
+        "vertical column to %.2fm is unavailable; vertical recovery is not selected.",
+        lower_obstacles, cruise_height);
+  }
+  return needed;
+}
+
+bool FastExplorationManager::buildGroundAscentPlan(
+    const Vector3d& pos, const Vector3d& vel, const Vector3d& yaw) {
+  const ros::Time now = ros::Time::now();
+  if (!ground_ascent_active_) {
+    if (!shouldStartGroundAscent(pos)) return false;
+    ground_ascent_active_ = true;
+    ground_ascent_yaw_ = yaw[0];
+    ground_ascent_target_ = pos;
+    ground_ascent_target_.z() = task_search_manager_
+                                    ? std::max(ground_ascent_cruise_height_,
+                                               task_search_manager_->preferredSearchHeight())
+                                    : ground_ascent_cruise_height_;
+    ground_ascent_anchor_valid_ = false;
+    ground_ascent_still_since_ = ros::Time(0);
+    cancelActiveLowProbe("ground ascent recovery owns xy/yaw");
+    ROS_ERROR("[ground_ascent] activate before horizontal escape: z=%.2f -> %.2f, "
+              "hold xy/yaw after one stationary confirmation.",
+              pos.z(), ground_ascent_target_.z());
+  }
+
+  const double height_error = ground_ascent_target_.z() - pos.z();
+  const double xy_error = (pos - ground_ascent_target_).head<2>().norm();
+  const double speed = vel.norm();
+  if (height_error <= ground_ascent_height_tolerance_ &&
+      xy_error <= vertical_detour_xy_tolerance_) {
+    if (!std::isfinite(speed) || speed > ground_ascent_max_stationary_speed_) {
+      ground_ascent_still_since_ = ros::Time(0);
+      return false;
+    }
+    if (ground_ascent_still_since_.isZero()) ground_ascent_still_since_ = now;
+    if ((now - ground_ascent_still_since_).toSec() <
+        ground_ascent_still_confirm_time_)
+      return false;
+    ground_ascent_active_ = false;
+    ground_ascent_anchor_valid_ = false;
+    ground_ascent_still_since_ = ros::Time(0);
+    ROS_ERROR("[ground_ascent] cruise height %.2fm confirmed; resume horizontal planning.",
+              pos.z());
+    return false;
+  }
+
+  if (!std::isfinite(speed) || speed > ground_ascent_max_stationary_speed_) {
+    ground_ascent_still_since_ = ros::Time(0);
+    ROS_WARN_THROTTLE(0.5,
+                      "[ground_ascent] wait for brake: speed=%.3fm/s limit=%.3fm/s.",
+                      speed, ground_ascent_max_stationary_speed_);
+    return false;
+  }
+
+  // 首条垂直轨迹从最新静止里程计重新锁定 XY，避免把检测瞬间的旧锚点
+  // 带入发布门控。安全重规划同样从当时的静止点重新锁定，绝不生成斜升段。
+  if (!ground_ascent_anchor_valid_) {
+    if (ground_ascent_still_since_.isZero()) ground_ascent_still_since_ = now;
+    if ((now - ground_ascent_still_since_).toSec() <
+        ground_ascent_still_confirm_time_)
+      return false;
+    ground_ascent_anchor_ = pos;
+    ground_ascent_anchor_valid_ = true;
+    ground_ascent_target_.x() = pos.x();
+    ground_ascent_target_.y() = pos.y();
+  }
+
+  Vector3d start = pos;
+  ground_ascent_anchor_ = pos;
+  ground_ascent_target_.x() = pos.x();
+  ground_ascent_target_.y() = pos.y();
+  if (!isKnownSafeGroundAscentPath(start, ground_ascent_target_)) return false;
+  const bool controlled_escape =
+      planner_manager_->isControlledEscapePosition(start);
+  if (!planner_manager_->planVerticalTraj(start, ground_ascent_target_) ||
+      !planner_manager_->isTrajectorySafe(0.03, controlled_escape) ||
+      (controlled_escape && !planner_manager_->trajectoryClearsInflation(
+                                std::fabs(ground_ascent_target_.z() - start.z()) + 0.15,
+                                0.02, true)))
+    return false;
+  if (!planner_manager_->planYawTurnInPlace(yaw, ground_ascent_yaw_)) return false;
+
+  ed_->path_next_goal_ = {start, 0.5 * (start + ground_ascent_target_),
+                          ground_ascent_target_};
+  ed_->next_goal_ = ground_ascent_target_;
+  last_requested_goal_ = ground_ascent_target_;
+  has_last_requested_goal_ = true;
+  ground_ascent_plan_ = true;
+  ground_ascent_still_since_ = ros::Time(0);
+  ROS_ERROR("[ground_ascent] publish fixed-xy/yaw recovery at (%.2f,%.2f), "
+            "z %.2f -> %.2f.",
+            start.x(), start.y(), start.z(), ground_ascent_target_.z());
+  return true;
+}
+
 bool FastExplorationManager::isLowProbeCorridorSafe(
     const Vector3d& start, const Vector3d& direction, double distance) const {
   if (!sdf_map_ || !planner_manager_ || direction.head<2>().norm() < 1e-3)
@@ -1445,6 +1587,7 @@ bool FastExplorationManager::buildTurnInPlacePlan(
     turn_in_place_session_active_ = true;
     turn_in_place_final_yaw_ = detected_target_yaw;
     turn_in_place_still_since_ = ros::Time(0);
+    skip_straight_extension_after_turn_ = true;
   }
   const ros::Time now = ros::Time::now();
   const double speed = vel.norm();
@@ -1476,15 +1619,18 @@ bool FastExplorationManager::buildTurnInPlacePlan(
       std::cos(turn_in_place_final_yaw_ - yaw[0]));
   const double yaw_rate =
       std::max(5.0, turn_in_place_yaw_rate_deg_) * M_PI / 180.0;
+  constexpr double kTurnRampFraction = 0.15;
   const double duration = std::max(
       turn_in_place_min_duration_,
-      std::min(turn_in_place_max_duration_, std::fabs(turn_delta) / yaw_rate));
+      std::min(turn_in_place_max_duration_,
+               std::fabs(turn_delta) /
+                   (yaw_rate * (1.0 - kTurnRampFraction))));
   if (!planner_manager_->planStationaryTraj(turn_in_place_anchor_, duration)) return false;
 
   ed_->path_next_goal_ = {turn_in_place_anchor_};
   ed_->next_goal_ = turn_in_place_anchor_;
-  planner_manager_->planYawExplore(
-      yaw, turn_in_place_final_yaw_, false, ep_->relax_time_);
+  if (!planner_manager_->planYawTurnInPlace(yaw, turn_in_place_final_yaw_))
+    return false;
   turn_in_place_plan_ = true;
   turn_in_place_still_since_ = ros::Time(0);
   ROS_ERROR("[turn_in_place] direct candidate uses live anchor "
@@ -1556,6 +1702,8 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
            turn_in_place_completion_tolerance_deg_, 8.0);
   nh.param("mission/task_search/recovery/turn_in_place_completion_confirm_time",
            turn_in_place_completion_confirm_time_, 0.15);
+  nh.param("mission/task_search/recovery/turn_in_place_tracking_grace_time",
+           turn_in_place_tracking_grace_time_, 1.0);
   nh.param("mission/task_search/recovery/turn_in_place_max_stationary_speed",
            turn_in_place_max_stationary_speed_, 0.12);
   nh.param("mission/task_search/recovery/turn_in_place_still_confirm_time",
@@ -1564,6 +1712,19 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
            turn_in_place_min_duration_, 1.0);
   nh.param("mission/task_search/recovery/turn_in_place_max_duration",
            turn_in_place_max_duration_, 4.0);
+  nh.param("mission/ground_ascent/enabled", ground_ascent_enabled_, true);
+  nh.param("mission/ground_ascent/cruise_height",
+           ground_ascent_cruise_height_, 0.60);
+  nh.param("mission/ground_ascent/lower_probe_depth",
+           ground_ascent_lower_probe_depth_, 0.20);
+  nh.param("mission/ground_ascent/min_lower_obstacles",
+           ground_ascent_min_lower_obstacles_, 2);
+  nh.param("mission/ground_ascent/max_stationary_speed",
+           ground_ascent_max_stationary_speed_, 0.12);
+  nh.param("mission/ground_ascent/still_confirm_time",
+           ground_ascent_still_confirm_time_, 0.15);
+  nh.param("mission/ground_ascent/height_tolerance",
+           ground_ascent_height_tolerance_, 0.06);
   nh.param("mission/wide_side_bypass/enabled", wide_side_bypass_enabled_, true);
   nh.param("mission/wide_side_bypass/min_lookahead",
            wide_side_bypass_min_lookahead_, 0.20);
@@ -1597,6 +1758,8 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
       std::max(1.0, std::min(15.0, turn_in_place_completion_tolerance_deg_));
   turn_in_place_completion_confirm_time_ =
       std::max(0.0, turn_in_place_completion_confirm_time_);
+  turn_in_place_tracking_grace_time_ =
+      std::max(0.0, turn_in_place_tracking_grace_time_);
   turn_in_place_max_stationary_speed_ =
       std::max(0.01, turn_in_place_max_stationary_speed_);
   turn_in_place_still_confirm_time_ =
@@ -1605,6 +1768,17 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
       std::max(0.30, turn_in_place_min_duration_);
   turn_in_place_max_duration_ =
       std::max(turn_in_place_min_duration_, turn_in_place_max_duration_);
+  ground_ascent_cruise_height_ = std::max(0.10, ground_ascent_cruise_height_);
+  ground_ascent_lower_probe_depth_ =
+      std::max(0.08, ground_ascent_lower_probe_depth_);
+  ground_ascent_min_lower_obstacles_ =
+      std::max(1, ground_ascent_min_lower_obstacles_);
+  ground_ascent_max_stationary_speed_ =
+      std::max(0.01, ground_ascent_max_stationary_speed_);
+  ground_ascent_still_confirm_time_ =
+      std::max(0.0, ground_ascent_still_confirm_time_);
+  ground_ascent_height_tolerance_ =
+      std::max(0.01, ground_ascent_height_tolerance_);
   wide_side_bypass_min_lookahead_ =
       std::max(0.10, wide_side_bypass_min_lookahead_);
   wide_side_bypass_max_lookahead_ =
@@ -1842,6 +2016,7 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
 int FastExplorationManager::planExploreMotion(
     const Vector3d& pos, const Vector3d& vel, const Vector3d& acc, const Vector3d& yaw) {
   turn_in_place_plan_ = false;
+  ground_ascent_plan_ = false;
   pending_short_backtrack_ = false;
   ros::Time t1 = ros::Time::now();
   auto t2 = t1;
@@ -1886,6 +2061,13 @@ int FastExplorationManager::planExploreMotion(
   use_vertical_detour_target = handleActiveLowProbe(
       pos, next_pos, next_yaw, wait_for_low_confirmation);
   if (wait_for_low_confirmation) return FAIL;
+  // 低位下方足迹已有受支撑障碍时，先完成固定 XY/yaw 的巡航高度恢复。
+  // 该会话拥有位置目标，优先级高于任何历史切线/水平膨胀层逃逸。
+  if (!use_vertical_detour_target && !low_probe_was_active &&
+      (ground_ascent_active_ || shouldStartGroundAscent(pos))) {
+    if (buildGroundAscentPlan(pos, vel, yaw)) return SUCCEED;
+    if (ground_ascent_active_) return FAIL;
+  }
   if (!external_selection_only_ && !use_vertical_detour_target && !low_probe_was_active &&
       vertical_detour::inflationEscapeAllowed(low_probe_phase_) &&
       planInflationHistoryEscape(pos, vel, acc, yaw))
@@ -2799,6 +2981,19 @@ void FastExplorationManager::extendSafeStraightRuns(vector<Vector3d>& path) {
   if (!straight_run_extension_enabled_ ||
       straight_run_extension_distance_ < 0.05 || path.size() < 3)
     return;
+  // 地图已经确认真实通道转弯后，流程必须是“刹停→原地对准→再前进”；
+  // 禁止再插入旧方向0.20m直行点拖延转向。
+  if (task_search_manager_ && task_search_manager_->turnYawAlignmentPending()) {
+    ROS_WARN_THROTTLE(0.5,
+                      "[straight_run_extension] skipped: mapped turn alignment owns motion.");
+    return;
+  }
+  if (skip_straight_extension_after_turn_) {
+    skip_straight_extension_after_turn_ = false;
+    ROS_WARN("[straight_run_extension] skip the first translation after a confirmed "
+             "in-place turn; move directly along the new corridor.");
+    return;
+  }
 
   const double minimum_turn =
       straight_run_extension_min_turn_deg_ * M_PI / 180.0;

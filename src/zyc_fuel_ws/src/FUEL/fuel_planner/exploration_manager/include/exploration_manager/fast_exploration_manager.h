@@ -51,6 +51,7 @@ public:
   bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
   bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }
+  bool currentPlanIsGroundAscent() const { return ground_ascent_plan_; }
   bool turnInPlaceAlignmentPending() const {
     return turn_in_place_session_active_;
   }
@@ -58,6 +59,9 @@ public:
   double turnInPlaceCompletionTolerance() const;
   double turnInPlaceCompletionConfirmTime() const {
     return turn_in_place_completion_confirm_time_;
+  }
+  double turnInPlaceTrackingGraceTime() const {
+    return turn_in_place_tracking_grace_time_;
   }
   void completeTurnInPlace();
 
@@ -176,11 +180,28 @@ private:
   double turn_in_place_yaw_rate_deg_{30.0};
   double turn_in_place_completion_tolerance_deg_{8.0};
   double turn_in_place_completion_confirm_time_{0.15};
+  double turn_in_place_tracking_grace_time_{1.0};
   double turn_in_place_max_stationary_speed_{0.12};
   double turn_in_place_still_confirm_time_{0.15};
   ros::Time turn_in_place_still_since_;
   double turn_in_place_min_duration_{1.0};
   double turn_in_place_max_duration_{4.0};
+  bool skip_straight_extension_after_turn_{false};
+  // 当前位置下方出现受支撑障碍时，先固定 XY/yaw 回到巡航高度，再恢复水平搜索。
+  bool ground_ascent_enabled_{true};
+  bool ground_ascent_active_{false};
+  bool ground_ascent_plan_{false};
+  double ground_ascent_cruise_height_{0.60};
+  double ground_ascent_lower_probe_depth_{0.20};
+  int ground_ascent_min_lower_obstacles_{2};
+  double ground_ascent_max_stationary_speed_{0.12};
+  double ground_ascent_still_confirm_time_{0.15};
+  double ground_ascent_height_tolerance_{0.06};
+  Vector3d ground_ascent_anchor_{0.0, 0.0, 0.0};
+  bool ground_ascent_anchor_valid_{false};
+  Vector3d ground_ascent_target_{0.0, 0.0, 0.0};
+  double ground_ascent_yaw_{0.0};
+  ros::Time ground_ascent_still_since_;
   // 水平绕障全部失败后的三维恢复。下绕必须先原地下降并连续确认，不能生成斜向俯冲轨迹。
   bool vertical_detour_enabled_{true};
   double vertical_detour_low_height_{0.10};
@@ -244,6 +265,11 @@ private:
                              double current_height) const;
   bool planInflationHistoryEscape(const Vector3d& pos, const Vector3d& vel,
                                   const Vector3d& acc, const Vector3d& yaw);
+  bool shouldStartGroundAscent(const Vector3d& pos) const;
+  bool buildGroundAscentPlan(const Vector3d& pos, const Vector3d& vel,
+                             const Vector3d& yaw);
+  bool isKnownSafeGroundAscentPath(const Vector3d& start,
+                                   const Vector3d& target) const;
   bool buildTurnInPlacePlan(const Vector3d& pos, const Vector3d& vel,
                             const Vector3d& yaw,
                             const Vector3d& turn_direction);
