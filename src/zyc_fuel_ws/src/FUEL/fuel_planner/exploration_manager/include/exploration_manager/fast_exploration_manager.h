@@ -52,6 +52,10 @@ public:
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
   bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }
   bool currentPlanIsGroundAscent() const { return ground_ascent_plan_; }
+  bool currentPlanIsVerticalDetour() const { return vertical_detour_plan_; }
+  // 发布门控可能等待多帧地图更新；竖直段在真正发布前必须重新锁定实时里程计 XY。
+  bool reanchorVerticalDetourForRelease(const Vector3d& pos,
+                                        const Vector3d& yaw);
   bool turnInPlaceAlignmentPending() const {
     return turn_in_place_session_active_;
   }
@@ -181,7 +185,7 @@ private:
   double turn_in_place_completion_tolerance_deg_{8.0};
   double turn_in_place_completion_confirm_time_{0.15};
   double turn_in_place_tracking_grace_time_{1.0};
-  double turn_in_place_max_stationary_speed_{0.12};
+  double turn_in_place_max_stationary_speed_{0.20};
   double turn_in_place_still_confirm_time_{0.15};
   ros::Time turn_in_place_still_since_;
   double turn_in_place_min_duration_{1.0};
@@ -191,6 +195,7 @@ private:
   bool ground_ascent_enabled_{true};
   bool ground_ascent_active_{false};
   bool ground_ascent_plan_{false};
+  bool vertical_detour_plan_{false};
   double ground_ascent_cruise_height_{0.60};
   double ground_ascent_lower_probe_depth_{0.20};
   int ground_ascent_min_lower_obstacles_{2};
@@ -277,6 +282,8 @@ private:
                                    const Vector3d& forward, Vector3d& next_pos,
                                    double& next_yaw,
                                    bool require_map_confirmed_underpass = false);
+  bool buildStationaryVerticalDetourPlan(const Vector3d& pos,
+                                         const Vector3d& yaw);
   bool handleActiveLowProbe(const Vector3d& pos, Vector3d& next_pos, double& next_yaw,
                             bool& wait_for_confirmation);
   void cancelActiveLowProbe(const char* reason);

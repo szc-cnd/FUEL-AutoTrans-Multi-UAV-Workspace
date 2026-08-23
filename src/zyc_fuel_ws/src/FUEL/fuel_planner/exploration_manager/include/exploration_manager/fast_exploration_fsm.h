@@ -99,6 +99,9 @@ private:
   bool active_turn_in_place_{false};
   bool pending_ground_ascent_{false};
   bool active_ground_ascent_{false};
+  bool pending_vertical_detour_{false};
+  bool pending_vertical_detour_reanchored_{false};
+  bool active_vertical_detour_{false};
   ros::Time turn_alignment_since_;
   ros::Time turn_tracking_grace_since_;
   // 首条通道内轨迹发布后记录动态检测阶段；LDOP当前持续运行，该状态供监控保留。
@@ -109,6 +112,7 @@ private:
 
   /* helper functions */
   int callExplorationPlanner();
+  void updatePendingTrajectoryMessage(const ros::Time& start_time);
   void transitState(EXPL_STATE new_state, string pos_call);
   // 2026-07-13: 规划碰撞或失败时显式通知控制器刹停，禁止继续消费上一条轨迹。
   void setSafetyHold(bool active, const string& reason);

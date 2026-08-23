@@ -48,7 +48,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   nh.param("fsm/trajectory_release_confirm_time", fp_->trajectory_release_confirm_time_, 0.12);
   nh.param("fsm/trajectory_release_check_interval", fp_->trajectory_release_check_interval_, 0.04);
   nh.param("fsm/trajectory_release_max_start_error",
-           fp_->trajectory_release_max_start_error_, 0.08);
+           fp_->trajectory_release_max_start_error_, 0.20);
   nh.param("fsm/trajectory_release_max_velocity_error",
            fp_->trajectory_release_max_velocity_error_, 0.15);
   nh.param("fsm/trajectory_release_max_acceleration_error",
@@ -456,6 +456,26 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
 
     case PUB_TRAJ: {
       const ros::Time now = ros::Time::now();
+      if (pending_vertical_detour_ && !pending_vertical_detour_reanchored_) {
+        Eigen::Vector3d live_yaw(fd_->odom_yaw_, 0.0, 0.0);
+        if (!expl_manager_->reanchorVerticalDetourForRelease(fd_->odom_pos_,
+                                                              live_yaw)) {
+          ROS_ERROR("[vertical_detour] live-odom re-anchor failed before publish; retry plan.");
+          pending_traj_safe_since_ = ros::Time(0);
+          fd_->static_state_ = true;
+          next_plan_retry_time_ =
+              now + ros::Duration(std::max(0.05, fp_->plan_failure_retry_interval_));
+          transitState(PLAN_TRAJ, "vertical-detour-release-reanchor");
+          break;
+        }
+        updatePendingTrajectoryMessage(now);
+        pending_vertical_detour_reanchored_ = true;
+        pending_traj_safe_since_ = ros::Time(0);
+        next_pending_traj_check_ = ros::Time(0);
+        ROS_ERROR("[vertical_detour] release candidate re-anchored to live odom "
+                  "(%.2f,%.2f,%.2f).",
+                  fd_->odom_pos_.x(), fd_->odom_pos_.y(), fd_->odom_pos_.z());
+      }
       // 2026-07-28: 即便规划阶段复核过，发布前仍等待刷新地图上的连续安全证据；
       // 轨迹起点若已与真实机体分离，禁止把远参考点直接交给控制器。
       if (next_pending_traj_check_.isZero() || now >= next_pending_traj_check_) {
@@ -544,6 +564,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         active_traj_braked_ = false;
         active_turn_in_place_ = pending_turn_in_place_;
         active_ground_ascent_ = pending_ground_ascent_;
+        active_vertical_detour_ = pending_vertical_detour_;
         if (active_turn_in_place_) {
           turn_alignment_since_ = ros::Time(0);
           turn_tracking_grace_since_ = ros::Time(0);
@@ -591,6 +612,18 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
           transitState(PLAN_TRAJ, "ground-ascent-endpoint");
           ROS_ERROR("[ground_ascent] vertical reference reached endpoint; "
                     "confirm live height before horizontal planning.");
+        }
+        return;
+      }
+      if (active_vertical_detour_) {
+        // 原地下降/上升属于低空探测状态机的原子步骤；必须执行到硬终点，不能被
+        // 普通 frontier 的临近终点或周期重规划截断。
+        if (time_to_end <= 0.05) {
+          active_vertical_detour_ = false;
+          fd_->static_state_ = true;
+          transitState(PLAN_TRAJ, "vertical-detour-endpoint");
+          ROS_ERROR("[vertical_detour] fixed-xy vertical reference reached endpoint; "
+                    "advance low-probe state from live odometry.");
         }
         return;
       }
@@ -675,6 +708,9 @@ int FastExplorationFSM::callExplorationPlanner() {
       res == SUCCEED && expl_manager_->currentPlanIsTurnInPlace();
   pending_ground_ascent_ =
       res == SUCCEED && expl_manager_->currentPlanIsGroundAscent();
+  pending_vertical_detour_ =
+      res == SUCCEED && expl_manager_->currentPlanIsVerticalDetour();
+  pending_vertical_detour_reanchored_ = false;
   classic_ = false;
 
   // int res = expl_manager_->classicFrontier(fd_->start_pt_, fd_->start_yaw_[0]);
@@ -686,32 +722,34 @@ int FastExplorationFSM::callExplorationPlanner() {
   if (res == SUCCEED) {
     auto info = &planner_manager_->local_data_;
     info->start_time_ = (ros::Time::now() - time_r).toSec() > 0 ? ros::Time::now() : time_r;
-
-    bspline::Bspline bspline;
-    bspline.order = planner_manager_->pp_.bspline_degree_;
-    bspline.start_time = info->start_time_;
-    bspline.traj_id = info->traj_id_;
-    Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
-    for (int i = 0; i < pos_pts.rows(); ++i) {
-      geometry_msgs::Point pt;
-      pt.x = pos_pts(i, 0);
-      pt.y = pos_pts(i, 1);
-      pt.z = pos_pts(i, 2);
-      bspline.pos_pts.push_back(pt);
-    }
-    Eigen::VectorXd knots = info->position_traj_.getKnot();
-    for (int i = 0; i < knots.rows(); ++i) {
-      bspline.knots.push_back(knots(i));
-    }
-    Eigen::MatrixXd yaw_pts = info->yaw_traj_.getControlPoint();
-    for (int i = 0; i < yaw_pts.rows(); ++i) {
-      double yaw = yaw_pts(i, 0);
-      bspline.yaw_pts.push_back(yaw);
-    }
-    bspline.yaw_dt = info->yaw_traj_.getKnotSpan();
-    fd_->newest_traj_ = bspline;
+    updatePendingTrajectoryMessage(info->start_time_);
   }
   return res;
+}
+
+void FastExplorationFSM::updatePendingTrajectoryMessage(
+    const ros::Time& start_time) {
+  auto info = &planner_manager_->local_data_;
+  info->start_time_ = start_time;
+  bspline::Bspline bspline;
+  bspline.order = planner_manager_->pp_.bspline_degree_;
+  bspline.start_time = start_time;
+  bspline.traj_id = info->traj_id_;
+  const Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
+  for (int i = 0; i < pos_pts.rows(); ++i) {
+    geometry_msgs::Point pt;
+    pt.x = pos_pts(i, 0);
+    pt.y = pos_pts(i, 1);
+    pt.z = pos_pts(i, 2);
+    bspline.pos_pts.push_back(pt);
+  }
+  const Eigen::VectorXd knots = info->position_traj_.getKnot();
+  for (int i = 0; i < knots.rows(); ++i) bspline.knots.push_back(knots(i));
+  const Eigen::MatrixXd yaw_pts = info->yaw_traj_.getControlPoint();
+  for (int i = 0; i < yaw_pts.rows(); ++i)
+    bspline.yaw_pts.push_back(yaw_pts(i, 0));
+  bspline.yaw_dt = info->yaw_traj_.getKnotSpan();
+  fd_->newest_traj_ = bspline;
 }
 
 void FastExplorationFSM::visualize() {

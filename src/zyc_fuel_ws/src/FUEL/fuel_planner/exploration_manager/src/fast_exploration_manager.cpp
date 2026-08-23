@@ -823,6 +823,52 @@ bool FastExplorationManager::handleActiveLowProbe(
   return true;
 }
 
+bool FastExplorationManager::buildStationaryVerticalDetourPlan(
+    const Vector3d& pos, const Vector3d& yaw) {
+  const bool descending =
+      low_probe_phase_ == vertical_detour::LowProbePhase::DESCENDING;
+  const bool ascending =
+      low_probe_phase_ == vertical_detour::LowProbePhase::ASCENDING;
+  if (!descending && !ascending) return false;
+
+  // 目标高度属于低空探测会话，但 XY 始终以本次调用的实时位置为准，杜绝斜向
+  // 下降/上升。下降允许沿 UNKNOWN 补图，上升仍要求整根柱已知自由。
+  Vector3d target = low_probe_target_;
+  target.x() = pos.x();
+  target.y() = pos.y();
+  if (!isKnownSafeVerticalPath(pos, target.z(), descending)) return false;
+  if (!planner_manager_->planVerticalTraj(pos, target)) return false;
+  const bool controlled_escape =
+      planner_manager_->isControlledEscapePosition(pos);
+  if (!planner_manager_->isTrajectorySafe(0.03, controlled_escape)) return false;
+  if (!planner_manager_->planYawTurnInPlace(yaw, low_probe_yaw_)) return false;
+
+  low_probe_target_ = target;
+  if (descending) {
+    low_probe_origin_.x() = pos.x();
+    low_probe_origin_.y() = pos.y();
+  } else {
+    low_probe_ascent_origin_.x() = pos.x();
+    low_probe_ascent_origin_.y() = pos.y();
+  }
+  ed_->path_next_goal_ = {pos, 0.5 * (pos + target), target};
+  ed_->next_goal_ = target;
+  last_requested_goal_ = target;
+  has_last_requested_goal_ = true;
+  vertical_detour_plan_ = true;
+  ROS_ERROR("[vertical_detour] build live fixed-xy %s at (%.2f,%.2f), "
+            "z %.2f -> %.2f.",
+            descending ? "descent" : "ascent", pos.x(), pos.y(), pos.z(),
+            target.z());
+  return true;
+}
+
+bool FastExplorationManager::reanchorVerticalDetourForRelease(
+    const Vector3d& pos, const Vector3d& yaw) {
+  if (!vertical_detour_plan_) return false;
+  return buildStationaryVerticalDetourPlan(pos, yaw);
+}
+
 void FastExplorationManager::cancelActiveLowProbe(const char* reason) {
   if (low_probe_phase_ == vertical_detour::LowProbePhase::IDLE) return;
   low_probe_phase_ = vertical_detour::LowProbePhase::IDLE;
@@ -1707,7 +1753,7 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/recovery/turn_in_place_tracking_grace_time",
            turn_in_place_tracking_grace_time_, 1.0);
   nh.param("mission/task_search/recovery/turn_in_place_max_stationary_speed",
-           turn_in_place_max_stationary_speed_, 0.12);
+           turn_in_place_max_stationary_speed_, 0.20);
   nh.param("mission/task_search/recovery/turn_in_place_still_confirm_time",
            turn_in_place_still_confirm_time_, 0.15);
   nh.param("mission/task_search/recovery/turn_in_place_min_duration",
@@ -2019,6 +2065,7 @@ int FastExplorationManager::planExploreMotion(
     const Vector3d& pos, const Vector3d& vel, const Vector3d& acc, const Vector3d& yaw) {
   turn_in_place_plan_ = false;
   ground_ascent_plan_ = false;
+  vertical_detour_plan_ = false;
   pending_short_backtrack_ = false;
   ros::Time t1 = ros::Time::now();
   auto t2 = t1;
@@ -2042,6 +2089,14 @@ int FastExplorationManager::planExploreMotion(
     return NO_FRONTIER;
   }
   planner_manager_->path_finder_->clearProgressConstraint();
+  // 一旦确认转弯，锁存的最终 yaw 对整个会话拥有独占权。后续即使地图瞬时不再
+  // 返回拐角方向，也只能等待刹停或重试原地转向，不能落回普通 frontier。
+  if (turn_in_place_session_active_) {
+    cancelActiveLowProbe("turn-in-place retry owns planning");
+    const Vector3d locked_direction(std::cos(turn_in_place_final_yaw_),
+                                    std::sin(turn_in_place_final_yaw_), 0.0);
+    return buildTurnInPlacePlan(pos, vel, yaw, locked_direction) ? SUCCEED : FAIL;
+  }
   // 先处理地图确认转弯。真实转弯一旦成立，转弯前锁存的低空目标立即失效，
   // 不能继续把无人机拉回旧通道。
   Vector3d early_turn_direction;
@@ -2077,7 +2132,7 @@ int FastExplorationManager::planExploreMotion(
   // 除专用膨胀层逃逸外，普通搜索把禁回头直接放进A*展开。这样A*会寻找横移/斜前
   // 绕障路线，不会先返回一条略向后的宽路、再被任务层整条丢弃。
   Eigen::Vector3d astar_progress_direction;
-  if (task_search_manager_ &&
+  if (!use_vertical_detour_target && task_search_manager_ &&
       task_search_manager_->astarNoReturnDirection(astar_progress_direction)) {
     planner_manager_->path_finder_->setProgressConstraint(astar_progress_direction, 0.0);
   }
@@ -2529,6 +2584,12 @@ int FastExplorationManager::planExploreMotion(
       task_search::isStationaryVerticalMotion(
           pos, next_pos, vertical_detour_xy_tolerance_) &&
       task_search_manager_->isMissionBoundaryMotionAllowed(next_pos);
+  if (stationary_vertical_detour) {
+    if (buildStationaryVerticalDetourPlan(pos, yaw)) return SUCCEED;
+    ROS_ERROR_THROTTLE(1.0,
+                       "[vertical_detour] failed to build fixed-xy vertical trajectory.");
+    return FAIL;
+  }
   if (task_search_manager_ && !exit_transit_active &&
       !stationary_vertical_detour &&
       !task_search_manager_->isTaskMotionAllowed(next_pos)) {
