@@ -89,6 +89,23 @@ int main() {
                                      turn_direction));
   assert(!turn_latch.arm(Eigen::Vector2d::Zero()));
 
+  // 分段转向查询不会自行消费锁存方向，只能在实际yaw稳定达标后显式释放。
+  assert(turn_latch.arm(Eigen::Vector2d(0.0, 1.0)));
+  assert(turn_latch.lockedDirection(turn_direction));
+  assert(turn_latch.active());
+  turn_latch.clear();
+  assert(!turn_latch.lockedDirection(turn_direction));
+
+  // 90度转向拆成不超过30度的连续小段，并正确处理跨越+/-PI的最短转向。
+  const double max_yaw_step = 30.0 * M_PI / 180.0;
+  assert(std::fabs(fast_planner::task_search::boundedYawStep(
+                       0.0, M_PI_2, max_yaw_step) - max_yaw_step) < 1e-9);
+  assert(std::fabs(fast_planner::task_search::boundedYawStep(
+                       60.0 * M_PI / 180.0, M_PI_2, max_yaw_step) - M_PI_2) < 1e-9);
+  assert(std::fabs(fast_planner::task_search::boundedYawStep(
+                       170.0 * M_PI / 180.0, -170.0 * M_PI / 180.0,
+                       max_yaw_step) - 190.0 * M_PI / 180.0) < 1e-9);
+
   // 分段建立后，只有机头明显偏离实际通道轴线才校正；该判断不创建新分段。
   assert(fast_planner::task_search::corridorYawCorrectionNeeded(
       Eigen::Vector2d(0.0, 1.0), 60.0 * M_PI / 180.0,

@@ -790,9 +790,23 @@ namespace PayloadMPC
 				{
 					// tracking the end point of the trajectory
 					//  the hover pose is the end point of the trajectory
-					auto &traj_info = trajectory_data.traj_queue.front().traj;
+					auto &traj_entry = trajectory_data.traj_queue.front();
+					auto &traj_info = traj_entry.traj;
 					hover_pose_ = traj_info.getJuncPos(traj_info.getPieceNum());
-					hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
+					// 正常执行结束后保持规划yaw终点，避免分段转向在POLY_TRAJ切换
+					// HOVER时把尚未跟上的实际yaw误当成新目标。异常/中止仍走下方实际姿态保持。
+					if (traj_entry.has_yaw && traj_entry.yaw_traj.getPieceNum() > 0)
+					{
+						const Eigen::VectorXd final_yaw = traj_entry.yaw_traj.getPos(
+							traj_entry.yaw_traj.getTotalDuration());
+						hover_yaw_ = final_yaw.size() > 0
+							? wrapYaw(final_yaw(0))
+							: get_yaw_from_quaternion(force_attitude_odom_data.q);
+					}
+					else
+					{
+						hover_yaw_ = get_yaw_from_quaternion(force_attitude_odom_data.q);
+					}
 				}
 				else
 				{

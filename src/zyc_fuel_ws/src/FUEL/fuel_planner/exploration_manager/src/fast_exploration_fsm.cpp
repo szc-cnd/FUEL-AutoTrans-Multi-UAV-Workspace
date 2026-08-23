@@ -497,6 +497,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         active_traj_valid_ = true;
         active_traj_braked_ = false;
         active_turn_in_place_ = pending_turn_in_place_;
+        if (active_turn_in_place_) turn_alignment_since_ = ros::Time(0);
         // 2026-07-27: 发布顺序固定为“轨迹先、检测使能后”，满足入口目标下发后才开始识别。
         if (!first_corridor_traj_published_) {
           first_corridor_traj_published_ = true;
@@ -530,10 +531,33 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       if (active_turn_in_place_) {
         // 原地转向要执行到yaw终点，不能按普通平移轨迹在“剩余1秒”时提前打断。
         if (time_to_end <= 0.05) {
+          const double yaw_error =
+              expl_manager_->turnInPlaceFinalYawError(fd_->odom_yaw_);
+          const double tolerance =
+              expl_manager_->turnInPlaceCompletionTolerance();
+          if (std::fabs(yaw_error) > tolerance) {
+            turn_alignment_since_ = ros::Time(0);
+            active_turn_in_place_ = false;
+            fd_->static_state_ = true;
+            transitState(PLAN_TRAJ, "turn-in-place-next-segment");
+            ROS_WARN("[turn_in_place] segment ended with actual final-yaw error "
+                     "%.1fdeg; continue next segment.",
+                     yaw_error * 180.0 / M_PI);
+            return;
+          }
+          const ros::Time now = ros::Time::now();
+          if (turn_alignment_since_.isZero()) turn_alignment_since_ = now;
+          if ((now - turn_alignment_since_).toSec() <
+              expl_manager_->turnInPlaceCompletionConfirmTime())
+            return;
+          expl_manager_->completeTurnInPlace();
           active_turn_in_place_ = false;
+          turn_alignment_since_ = ros::Time(0);
           fd_->static_state_ = true;
           transitState(PLAN_TRAJ, "turn-in-place-complete");
-          ROS_ERROR("[turn_in_place] yaw completed; replan translation from live odometry.");
+          ROS_ERROR("[turn_in_place] actual yaw stayed within %.1fdeg; "
+                    "replan translation from live odometry.",
+                    tolerance * 180.0 / M_PI);
         }
         return;
       }
@@ -766,7 +790,7 @@ void FastExplorationFSM::safetyCallback(const ros::TimerEvent& e) {
                               active_traj_braked_))
     return;
 
-  // 正常平移执行期间同步累计地图转弯证据。第二次命中后立刻短制动并切换到
+  // 正常平移执行期间同步累计地图转弯证据。配置的确认次数满足后立刻短制动并切换到
   // 原地yaw轨迹，不再等当前平移轨迹接近终点才发现拐角。
   if (state_ == EXPL_STATE::EXEC_TRAJ && !active_turn_in_place_ &&
       !inflation_escape_active_) {

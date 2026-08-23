@@ -1581,10 +1581,7 @@ void TaskSearchManager::commitCorridorTurn(
 bool TaskSearchManager::mappedCorridorDirection(
     double cur_yaw, Eigen::Vector3d& direction) {
   Eigen::Vector2d latched_direction;
-  const double release_angle =
-      std::max(0.0, recovery_turn_yaw_release_angle_deg_) * M_PI / 180.0;
-  if (turn_yaw_follow_latch_.directionForYaw(
-          cur_yaw, release_angle, latched_direction)) {
+  if (turn_yaw_follow_latch_.lockedDirection(latched_direction)) {
     direction = Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
     return true;
   }
@@ -1600,9 +1597,9 @@ bool TaskSearchManager::mappedCorridorDirection(
     return false;
   if (!confirmCorridorTurnEvidence(direction)) return false;
   commitCorridorTurn(direction);
-  // 新确认的这一周期立即生效；即使已接近目标yaw，也要完整生成一次墙平行偏航。
-  if (!turn_yaw_follow_latch_.directionForYaw(
-          cur_yaw, release_angle, latched_direction))
+  // 新确认的这一周期立即生效。锁存方向只能由实际yaw连续达标后的FSM显式释放，
+  // 这样30度分段之间不会重新做地图转弯检测。
+  if (!turn_yaw_follow_latch_.lockedDirection(latched_direction))
     return false;
   direction = Eigen::Vector3d(latched_direction.x(), latched_direction.y(), 0.0);
   return true;

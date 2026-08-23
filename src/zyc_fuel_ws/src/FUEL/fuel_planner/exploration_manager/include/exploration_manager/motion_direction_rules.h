@@ -27,12 +27,30 @@ public:
     return true;
   }
 
+  // 分段原地转向期间由FSM依据真实里程计yaw显式结束会话，不能让一次规划查询
+  // 因为“接近目标”提前消费锁存方向。
+  bool lockedDirection(Eigen::Vector2d& direction) const {
+    if (!active_) return false;
+    direction = direction_;
+    return true;
+  }
+
+  void clear() { active_ = false; }
+
   bool active() const { return active_; }
 
 private:
   Eigen::Vector2d direction_{1.0, 0.0};
   bool active_{false};
 };
+
+inline double boundedYawStep(double current_yaw, double final_yaw,
+                             double max_step) {
+  const double error = std::atan2(std::sin(final_yaw - current_yaw),
+                                  std::cos(final_yaw - current_yaw));
+  const double limit = std::max(0.0, max_step);
+  return current_yaw + std::max(-limit, std::min(limit, error));
+}
 
 inline bool corridorYawCorrectionNeeded(const Eigen::Vector2d& corridor_direction,
                                         double current_yaw,

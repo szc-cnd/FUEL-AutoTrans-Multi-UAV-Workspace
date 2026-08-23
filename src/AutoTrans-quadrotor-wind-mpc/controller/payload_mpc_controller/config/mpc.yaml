@@ -5,7 +5,7 @@ use_fix_yaw: false   # using fix yaw.
 
 # Cost on states
 # 当前先保留源码权重；首次室内悬停若响应过激，后续优先降低 Q_pos/Q_attitude 或增大 R。
-Q_pos_xy:   220.0    # Cost for horizontal positon error //default: 200     0.5
+Q_pos_xy:   200.0    # Cost for horizontal positon error //default: 200     0.5
 Q_pos_z:  200.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
@@ -32,7 +32,7 @@ input_cost_exponential: 0.5     # scaling for input costs
 # body_rate.x/y 是发给 MAVROS/PX4 的机体系角速度命令，单位 rad/s；源码值先保留，首飞前建议按内环能力复查。
 max_bodyrate_xy:    1.5       # ~ pi [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
-max_bodyrate_z:     0.5         # ~ pi*2/3 [rad/s]
+max_bodyrate_z:    1.0     # planned yaw rate 30 deg/s, with control margin [rad/s]
 # NMPC 世界系速度硬约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
 # 该约束直接进入 ACADO 优化器，超过上限的预测速度不会被求解器接受。
 max_velocity_xy:    1.5

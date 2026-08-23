@@ -51,6 +51,12 @@ public:
   bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
   bool currentPlanIsTurnInPlace() const { return turn_in_place_plan_; }
+  double turnInPlaceFinalYawError(double current_yaw) const;
+  double turnInPlaceCompletionTolerance() const;
+  double turnInPlaceCompletionConfirmTime() const {
+    return turn_in_place_completion_confirm_time_;
+  }
+  void completeTurnInPlace();
 
   // Benchmark method, classic frontier and rapid frontier
   int classicFrontier(const Vector3d& pos, const double& yaw);
@@ -161,7 +167,14 @@ private:
   std::deque<Vector3d> recovery_odom_history_;
   bool turn_in_place_enabled_{true};
   bool turn_in_place_plan_{false};
-  double turn_in_place_yaw_rate_deg_{40.0};
+  bool turn_in_place_session_active_{false};
+  Vector3d turn_in_place_anchor_{0.0, 0.0, 0.0};
+  double turn_in_place_final_yaw_{0.0};
+  int turn_in_place_segment_index_{0};
+  double turn_in_place_yaw_rate_deg_{30.0};
+  double turn_in_place_max_segment_angle_deg_{30.0};
+  double turn_in_place_completion_tolerance_deg_{6.0};
+  double turn_in_place_completion_confirm_time_{0.25};
   double turn_in_place_min_duration_{1.0};
   double turn_in_place_max_duration_{4.0};
   // 水平绕障全部失败后的三维恢复。下绕必须先原地下降并连续确认，不能生成斜向俯冲轨迹。
