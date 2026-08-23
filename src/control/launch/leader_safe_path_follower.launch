@@ -10,10 +10,44 @@
     <arg name="enable_diff_rviz" default="true"/>
     <!-- 2026-07-28: 终端6同时启动UAV1独立Diff；接力管理器只发目标，traj_server唯一输出后机PositionCommand。 -->
     <include file="$(find diff_planner)/launch/exp/run_uav1_relay_diff.launch">
-        <!-- 坐标对齐只由本入口发布；UAV1 RViz 使用独立节点名，可与 UAV0 并存。 -->
+        <!-- 坐标对齐和后机本地可视化都由本入口各启动一份。 -->
         <arg name="publish_world_to_follower_tf" value="false"/>
-        <arg name="enable_rviz" value="$(arg enable_diff_rviz)"/>
+        <arg name="enable_rviz" value="false"/>
     </include>
+    <!-- 使用唯一节点名，避免共享 Master 下与前机公共 RViz 的模型节点互相顶掉。
+         输出话题保持 exp.rviz 现有配置不变。 -->
+    <node if="$(arg enable_diff_rviz)" pkg="odom_visualization"
+          name="uav1_local_odom_visualization" type="odom_visualization"
+          output="screen">
+        <remap from="~odom" to="/UAV1/fast_lio/Odom_high_freq"/>
+        <remap from="~cmd" to="/UAV1/planning/pos_cmd"/>
+        <remap from="~path" to="/drone_1_odom_visualization/path"/>
+        <remap from="~robot" to="/drone_1_odom_visualization/robot"/>
+        <remap from="~robot_array" to="/drone_1_odom_visualization/robot_array"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.35"/>
+        <param name="color/b" value="1.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="frame_id" value="UAV1/camera_init"/>
+        <param name="use_cmd_yaw_for_mesh" value="true"/>
+        <param name="cmd_yaw_timeout" value="0.8"/>
+        <param name="rotate_yaw_deg" value="90.0"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="1"/>
+    </node>
+    <node if="$(arg enable_diff_rviz)" name="UAV1_diff_rviz"
+          pkg="rviz" type="rviz"
+          args="-d $(find diff_planner)/launch/include/exp.rviz" output="screen">
+        <remap from="/move_base_simple/goal" to="/UAV1/planning/goal"/>
+        <remap from="/drone__diff_planner_node/goal_point"
+               to="/drone_1_diff_planner_node/goal_point"/>
+        <remap from="/diff_planner_node/global_list"
+               to="/drone_1_diff_planner_node/global_list"/>
+        <remap from="/diff_planner_node/a_star_list"
+               to="/drone_1_diff_planner_node/a_star_list"/>
+    </node>
     <!-- UAV1 复用同一套搜索/精降节点；相机驱动和 UAV1/down_camera 话题由机载入口提供。 -->
     <include if="$(arg enable_search_landing)"
              file="$(find precision_landing)/launch/precision_landing.launch">
