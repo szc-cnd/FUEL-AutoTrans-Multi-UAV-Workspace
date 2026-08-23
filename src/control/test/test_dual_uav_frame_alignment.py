@@ -15,6 +15,12 @@ RELAY_LAUNCH = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_uav1_relay_diff.launch"
 )
 FAST_LIO_LAUNCH = ROOT.parent / "FAST_LIO/launch/mapping_mid360.launch"
+FRONT_EXPLORATION_LAUNCHES = (
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_swarm_indoor1_fuel_exploration.launch",
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/exp/run_swarm_indoor1_fuel_diff_exploration.launch",
+)
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -172,6 +178,29 @@ def test_collaboration_launch_has_one_alignment_tf_and_no_second_rviz():
     }
     assert "publish_world_to_follower_tf" in relay_args
     assert "enable_rviz" in relay_args
+
+
+def test_front_rviz_follower_model_uses_live_odom_and_unique_node_name():
+    for launch_path in FRONT_EXPLORATION_LAUNCHES:
+        root = ET.parse(launch_path).getroot()
+        args = {
+            item.attrib["name"]: item.attrib["default"]
+            for item in root.findall("arg")
+        }
+        assert args["follower_odom_topic"] == "/UAV1/fast_lio/Odom_high_freq"
+
+        follower_visualizer = next(
+            node
+            for node in root.findall("node")
+            if any(
+                remap.attrib.get("to") == "/UAV1/odom_visualization/robot"
+                for remap in node.findall("remap")
+            )
+        )
+        assert follower_visualizer.attrib["name"] == (
+            "uav1_shared_odom_visualization"
+        )
+        assert follower_visualizer.attrib["name"] != "drone_1_odom_visualization"
 
 
 def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
