@@ -1444,8 +1444,6 @@ bool FastExplorationManager::buildTurnInPlacePlan(
   if (!turn_in_place_session_active_) {
     turn_in_place_session_active_ = true;
     turn_in_place_final_yaw_ = detected_target_yaw;
-    turn_in_place_segment_target_yaw_ = yaw[0];
-    turn_in_place_segment_index_ = 0;
     turn_in_place_still_since_ = ros::Time(0);
   }
   const ros::Time now = ros::Time::now();
@@ -1470,44 +1468,33 @@ bool FastExplorationManager::buildTurnInPlacePlan(
     return false;
   }
 
-  // 最终yaw在整个转弯会话中保持锁存，但每个真正准备发布的分段都从最新静止
-  // 里程计重新取位置锚点，避免首次检测位置与严格轨迹交接门槛永久冲突。
+  // 最终yaw在整个转弯会话中保持锁存；真正准备发布时从最新静止里程计
+  // 重新取位置锚点，避免首次检测位置与严格轨迹交接门槛永久冲突。
   turn_in_place_anchor_ = pos;
-  const double max_segment_angle =
-      turn_in_place_max_segment_angle_deg_ * M_PI / 180.0;
-  const double segment_target_yaw = task_search::boundedYawStep(
-      yaw[0], turn_in_place_final_yaw_, max_segment_angle);
-  turn_in_place_segment_target_yaw_ = segment_target_yaw;
-  const double segment_delta = segment_target_yaw - yaw[0];
+  const double turn_delta = std::atan2(
+      std::sin(turn_in_place_final_yaw_ - yaw[0]),
+      std::cos(turn_in_place_final_yaw_ - yaw[0]));
   const double yaw_rate =
       std::max(5.0, turn_in_place_yaw_rate_deg_) * M_PI / 180.0;
   const double duration = std::max(
       turn_in_place_min_duration_,
-      std::min(turn_in_place_max_duration_, std::fabs(segment_delta) / yaw_rate));
+      std::min(turn_in_place_max_duration_, std::fabs(turn_delta) / yaw_rate));
   if (!planner_manager_->planStationaryTraj(turn_in_place_anchor_, duration)) return false;
 
   ed_->path_next_goal_ = {turn_in_place_anchor_};
   ed_->next_goal_ = turn_in_place_anchor_;
   planner_manager_->planYawExplore(
-      yaw, segment_target_yaw, false, ep_->relax_time_);
+      yaw, turn_in_place_final_yaw_, false, ep_->relax_time_);
   turn_in_place_plan_ = true;
   turn_in_place_still_since_ = ros::Time(0);
-  ROS_ERROR("[turn_in_place] candidate for segment %d uses live anchor "
-            "(%.2f,%.2f,%.2f), "
-            "yaw %.1fdeg -> %.1fdeg (final %.1fdeg) over %.2fs.",
-            turn_in_place_segment_index_ + 1, turn_in_place_anchor_.x(),
+  ROS_ERROR("[turn_in_place] direct candidate uses live anchor "
+            "(%.2f,%.2f,%.2f), yaw %.1fdeg -> final %.1fdeg over %.2fs.",
+            turn_in_place_anchor_.x(),
             turn_in_place_anchor_.y(), turn_in_place_anchor_.z(),
-            yaw[0] * 180.0 / M_PI, segment_target_yaw * 180.0 / M_PI,
+            yaw[0] * 180.0 / M_PI,
             turn_in_place_final_yaw_ * 180.0 / M_PI,
             planner_manager_->local_data_.duration_);
   return true;
-}
-
-double FastExplorationManager::turnInPlaceSegmentYawError(
-    double current_yaw) const {
-  if (!turn_in_place_session_active_) return 0.0;
-  return std::atan2(std::sin(turn_in_place_segment_target_yaw_ - current_yaw),
-                    std::cos(turn_in_place_segment_target_yaw_ - current_yaw));
 }
 
 double FastExplorationManager::turnInPlaceFinalYawError(
@@ -1521,19 +1508,9 @@ double FastExplorationManager::turnInPlaceCompletionTolerance() const {
   return turn_in_place_completion_tolerance_deg_ * M_PI / 180.0;
 }
 
-void FastExplorationManager::markTurnInPlaceSegmentPublished() {
-  if (!turn_in_place_session_active_ || !turn_in_place_plan_) return;
-  ++turn_in_place_segment_index_;
-  ROS_ERROR("[turn_in_place] published segment %d target=%.1fdeg final=%.1fdeg.",
-            turn_in_place_segment_index_,
-            turn_in_place_segment_target_yaw_ * 180.0 / M_PI,
-            turn_in_place_final_yaw_ * 180.0 / M_PI);
-}
-
 void FastExplorationManager::completeTurnInPlace() {
   if (task_search_manager_) task_search_manager_->completeTurnYawAlignment();
   turn_in_place_session_active_ = false;
-  turn_in_place_segment_index_ = 0;
   turn_in_place_still_since_ = ros::Time(0);
 }
 
@@ -1575,8 +1552,6 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
            turn_in_place_enabled_, true);
   nh.param("mission/task_search/recovery/turn_in_place_yaw_rate_deg",
            turn_in_place_yaw_rate_deg_, 30.0);
-  nh.param("mission/task_search/recovery/turn_in_place_max_segment_angle_deg",
-           turn_in_place_max_segment_angle_deg_, 45.0);
   nh.param("mission/task_search/recovery/turn_in_place_completion_tolerance_deg",
            turn_in_place_completion_tolerance_deg_, 8.0);
   nh.param("mission/task_search/recovery/turn_in_place_completion_confirm_time",
@@ -1618,8 +1593,6 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   recovery_history_max_size_ = std::max(20, recovery_history_max_size_);
   turn_in_place_yaw_rate_deg_ =
       std::max(5.0, std::min(90.0, turn_in_place_yaw_rate_deg_));
-  turn_in_place_max_segment_angle_deg_ =
-      std::max(5.0, std::min(45.0, turn_in_place_max_segment_angle_deg_));
   turn_in_place_completion_tolerance_deg_ =
       std::max(1.0, std::min(15.0, turn_in_place_completion_tolerance_deg_));
   turn_in_place_completion_confirm_time_ =

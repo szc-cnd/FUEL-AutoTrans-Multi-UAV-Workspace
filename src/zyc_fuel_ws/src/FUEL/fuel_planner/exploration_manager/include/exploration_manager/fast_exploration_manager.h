@@ -54,13 +54,11 @@ public:
   bool turnInPlaceAlignmentPending() const {
     return turn_in_place_session_active_;
   }
-  double turnInPlaceSegmentYawError(double current_yaw) const;
   double turnInPlaceFinalYawError(double current_yaw) const;
   double turnInPlaceCompletionTolerance() const;
   double turnInPlaceCompletionConfirmTime() const {
     return turn_in_place_completion_confirm_time_;
   }
-  void markTurnInPlaceSegmentPublished();
   void completeTurnInPlace();
 
   // Benchmark method, classic frontier and rapid frontier
@@ -175,10 +173,7 @@ private:
   bool turn_in_place_session_active_{false};
   Vector3d turn_in_place_anchor_{0.0, 0.0, 0.0};
   double turn_in_place_final_yaw_{0.0};
-  double turn_in_place_segment_target_yaw_{0.0};
-  int turn_in_place_segment_index_{0};
   double turn_in_place_yaw_rate_deg_{30.0};
-  double turn_in_place_max_segment_angle_deg_{45.0};
   double turn_in_place_completion_tolerance_deg_{8.0};
   double turn_in_place_completion_confirm_time_{0.15};
   double turn_in_place_max_stationary_speed_{0.12};

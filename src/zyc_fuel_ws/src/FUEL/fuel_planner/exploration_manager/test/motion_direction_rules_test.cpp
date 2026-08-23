@@ -90,24 +90,14 @@ int main() {
                                      turn_direction));
   assert(!turn_latch.arm(Eigen::Vector2d::Zero()));
 
-  // 分段转向查询不会自行消费锁存方向，只能在实际yaw稳定达标后显式释放。
+  // 转向查询不会自行消费锁存方向，只能在实际yaw稳定达标后显式释放。
   assert(turn_latch.arm(Eigen::Vector2d(0.0, 1.0)));
   assert(turn_latch.lockedDirection(turn_direction));
   assert(turn_latch.active());
   turn_latch.clear();
   assert(!turn_latch.lockedDirection(turn_direction));
 
-  // 90度转向拆成不超过30度的连续小段，并正确处理跨越+/-PI的最短转向。
-  const double max_yaw_step = 30.0 * M_PI / 180.0;
-  assert(std::fabs(fast_planner::task_search::boundedYawStep(
-                       0.0, M_PI_2, max_yaw_step) - max_yaw_step) < 1e-9);
-  assert(std::fabs(fast_planner::task_search::boundedYawStep(
-                       60.0 * M_PI / 180.0, M_PI_2, max_yaw_step) - M_PI_2) < 1e-9);
-  assert(std::fabs(fast_planner::task_search::boundedYawStep(
-                       170.0 * M_PI / 180.0, -170.0 * M_PI / 180.0,
-                       max_yaw_step) - 190.0 * M_PI / 180.0) < 1e-9);
-
-  // 原地转向必须先连续静止；速度和稳定时间任一不满足都不能建立转向段。
+  // 原地转向必须先连续静止；速度和稳定时间任一不满足都不能建立转向轨迹。
   assert(!fast_planner::task_search::stationaryTurnReady(0.13, 0.12, 0.20, 0.15));
   assert(!fast_planner::task_search::stationaryTurnReady(0.10, 0.12, 0.14, 0.15));
   assert(fast_planner::task_search::stationaryTurnReady(0.12, 0.12, 0.15, 0.15));

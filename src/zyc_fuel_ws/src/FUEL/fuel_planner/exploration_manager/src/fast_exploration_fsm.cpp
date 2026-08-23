@@ -538,7 +538,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         active_turn_in_place_ = pending_turn_in_place_;
         if (active_turn_in_place_) {
           turn_alignment_since_ = ros::Time(0);
-          expl_manager_->markTurnInPlaceSegmentPublished();
+          ROS_ERROR("[turn_in_place] published direct turn-to-final trajectory.");
         }
         // 2026-07-27: 发布顺序固定为“轨迹先、检测使能后”，满足入口目标下发后才开始识别。
         if (!first_corridor_traj_published_) {
@@ -573,29 +573,17 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       if (active_turn_in_place_) {
         // 原地转向要执行到yaw终点，不能按普通平移轨迹在“剩余1秒”时提前打断。
         if (time_to_end <= 0.05) {
-          const double segment_yaw_error =
-              expl_manager_->turnInPlaceSegmentYawError(fd_->odom_yaw_);
           const double final_yaw_error =
               expl_manager_->turnInPlaceFinalYawError(fd_->odom_yaw_);
           const double tolerance =
               expl_manager_->turnInPlaceCompletionTolerance();
-          if (std::fabs(segment_yaw_error) > tolerance) {
-            turn_alignment_since_ = ros::Time(0);
-            active_turn_in_place_ = false;
-            fd_->static_state_ = true;
-            transitState(PLAN_TRAJ, "turn-in-place-segment-retry");
-            ROS_WARN("[turn_in_place] published segment missed its target by "
-                     "%.1fdeg; re-anchor and retry from live yaw.",
-                     segment_yaw_error * 180.0 / M_PI);
-            return;
-          }
           if (std::fabs(final_yaw_error) > tolerance) {
             turn_alignment_since_ = ros::Time(0);
             active_turn_in_place_ = false;
             fd_->static_state_ = true;
-            transitState(PLAN_TRAJ, "turn-in-place-next-segment");
-            ROS_WARN("[turn_in_place] segment target reached; final-yaw error "
-                     "%.1fdeg, plan next segment from live odometry.",
+            transitState(PLAN_TRAJ, "turn-in-place-retry");
+            ROS_WARN("[turn_in_place] direct turn ended with final-yaw error "
+                     "%.1fdeg; re-anchor and retry from live yaw.",
                      final_yaw_error * 180.0 / M_PI);
             return;
           }
