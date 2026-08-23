@@ -15,7 +15,7 @@
         <arg name="enable_rviz" value="false"/>
     </include>
     <!-- 使用唯一节点名，避免共享 Master 下与前机公共 RViz 的模型节点互相顶掉。
-         输出话题保持 exp.rviz 现有配置不变。 -->
+         使用 UAV1 双机精简配置，避免加载 exp.rviz 中 drone0～drone41 的全部显示项。 -->
     <node if="$(arg enable_diff_rviz)" pkg="odom_visualization"
           name="uav1_local_odom_visualization" type="odom_visualization"
           output="screen">
@@ -39,7 +39,7 @@
     </node>
     <node if="$(arg enable_diff_rviz)" name="UAV1_diff_rviz"
           pkg="rviz" type="rviz"
-          args="-d $(find diff_planner)/launch/include/exp.rviz" output="screen">
+          args="-d $(find diff_planner)/launch/include/uav1_lite.rviz" output="screen">
         <remap from="/move_base_simple/goal" to="/UAV1/planning/goal"/>
         <remap from="/drone__diff_planner_node/goal_point"
                to="/drone_1_diff_planner_node/goal_point"/>
