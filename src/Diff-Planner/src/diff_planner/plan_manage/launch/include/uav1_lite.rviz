@@ -330,6 +330,114 @@ Visualization Manager:
           Name: Mapping
         - Class: rviz/Group
           Displays:
+            - Class: rviz/MarkerArray
+              Enabled: true
+              Marker Topic: /UAV1/target_reporting/markers
+              Name: detection_targets
+              Namespaces: {}
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/color_tag_detector/debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: color_detection_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/vision/qr_debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: qr_detection_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/thermal/debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: thermal_detection_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/landing/front/debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: landing_front_aruco_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/landing/combined_debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: landing_down_combined_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Alpha: 0.25
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 255; 140; 0
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Max Intensity: 4096
+              Min Color: 0; 0; 0
+              Min Intensity: 0
+              Name: detected_object_cloud
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 2
+              Size (m): 0.006
+              Style: Flat Squares
+              Topic: /UAV1/target_reporting/detected_object_cloud
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: true
+            - Class: rviz/MarkerArray
+              Enabled: true
+              Marker Topic: /UAV1/target_reporting/detected_object_boxes
+              Name: detected_object_boxes
+              Namespaces: {}
+              Queue Size: 20
+              Value: true
+          Enabled: true
+          Name: Detection Results
+        - Class: rviz/Group
+          Displays:
             - Angle Tolerance: 0.009999999776482582
               Class: rviz/Odometry
               Covariance:
@@ -372,18 +480,6 @@ Visualization Manager:
               Namespaces:
                 drone: true
               Queue Size: 100
-              Value: true
-            - Class: rviz/Image
-              Enabled: true
-              Image Topic: /UAV1/landing/combined_debug_image
-              Max Value: 1
-              Median window: 5
-              Min Value: 0
-              Name: UAV1 landing down camera
-              Normalize Range: true
-              Queue Size: 2
-              Transport Hint: raw
-              Unreliable: false
               Value: true
           Enabled: true
           Name: Simulation
@@ -438,3 +534,13 @@ Window Geometry:
   Width: 1440
   X: 40
   Y: 40
+  color_detection_image:
+    collapsed: false
+  landing_down_combined_image:
+    collapsed: false
+  landing_front_aruco_image:
+    collapsed: false
+  qr_detection_image:
+    collapsed: false
+  thermal_detection_image:
+    collapsed: false
