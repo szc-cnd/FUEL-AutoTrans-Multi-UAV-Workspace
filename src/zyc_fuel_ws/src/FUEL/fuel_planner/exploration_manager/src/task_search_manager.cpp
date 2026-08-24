@@ -1318,20 +1318,27 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
-  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。累计地图若在
-  // 障碍后方仍有已知FREE，保持原通道方向并交给A*绕障，不能把走过的旧路当成新弯道。
+  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。必须查累计
+  // 地图中的整个旧通道横截面：历史上只要任一侧在障碍后仍被扫成FREE，就保持旧
+  // 通道方向并交给A*绕障。只有横截面各侧都没有前向延续，才把它解释成真实拐弯。
+  const Eigen::Vector2d lateral(-travel.y(), travel.x());
+  constexpr double kForwardCorridorHalfWidth = 0.60;
   for (double distance = forward_free_length + 2.0 * probe_step;
        distance <= recovery_turn_probe_length_ + 1e-6; distance += probe_step) {
-    Eigen::Vector3d probe = origin;
-    probe.head<2>() += distance * travel;
-    if (sdf_map_->isInMap(probe) &&
-        sdf_map_->getOccupancy(probe) == SDFMap::FREE) {
-      ROS_WARN_THROTTLE(
-          0.5,
-          "[task_search] keep corridor yaw: occupied center is a local obstacle; "
-          "accumulated map remains FREE %.2fm ahead.",
-          distance);
-      return false;
+    for (double lateral_offset = -kForwardCorridorHalfWidth;
+         lateral_offset <= kForwardCorridorHalfWidth + 1e-6;
+         lateral_offset += probe_step) {
+      Eigen::Vector3d probe = origin;
+      probe.head<2>() += distance * travel + lateral_offset * lateral;
+      if (sdf_map_->isInMap(probe) &&
+          sdf_map_->getOccupancy(probe) == SDFMap::FREE) {
+        ROS_WARN_THROTTLE(
+            0.5,
+            "[task_search] keep corridor yaw: accumulated map has historical "
+            "forward continuation %.2fm ahead at lateral %.2fm; use A* local avoidance.",
+            distance, lateral_offset);
+        return false;
+      }
     }
   }
 
