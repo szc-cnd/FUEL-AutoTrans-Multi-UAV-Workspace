@@ -126,6 +126,37 @@ def test_nonterminal_diff_goal_cannot_fall_back_to_distant_relay():
     assert "diff_allow_route_backtrack_attachment_" in selector
 
 
+def test_diff_prefers_confirmed_leader_segment_endpoints_within_150m():
+    selector = SOURCE.split("bool selectForwardRouteCandidate", maxsplit=1)[1].split(
+        "bool getFollowerHistoryRetreatTarget", maxsplit=1
+    )[0]
+    trajectory_callback = SOURCE.split(
+        "void leaderTrajectoryCallback", maxsplit=1
+    )[1].split("void confirmPendingLeaderSegmentEndpoint", maxsplit=1)[0]
+    endpoint_confirmation = SOURCE.split(
+        "void confirmPendingLeaderSegmentEndpoint", maxsplit=1
+    )[1].split("void leaderOdomCallback", maxsplit=1)[0]
+
+    assert 'name="leader_trajectory_topic" value="$(arg leader_trajectory_topic)"' in LAUNCH
+    assert 'name="diff_history_target_max_distance" value="1.50"' in LAUNCH
+    assert "evaluateDeBoor(trajectory_end)" in trajectory_callback
+    assert "leader_segment_endpoint_max_speed_" in endpoint_confirmation
+    assert "leader_segment_endpoint_dwell_" in endpoint_confirmation
+    assert "leader_segment_endpoints_.rbegin()" in selector
+    assert 'accept_candidate(candidate, "stopped-segment-endpoint")' in selector
+    assert "current_progress + diff_history_target_max_distance_" in selector
+    assert "route_.back().progress" in selector
+    assert "segment_end_progress" not in selector
+    assert "step_ratios" in selector
+    assert "step = std::min(step, max_target_step_)" not in selector
+
+    execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
+        "void timerCallback", maxsplit=1
+    )[0]
+    assert "remaining_relay_progress" in execution
+    assert "remaining_relay_progress <= path_sample_spacing_" in execution
+
+
 def test_candidate_blacklist_and_clipped_retry_are_bounded():
     assert 'name="diff_candidate_blacklist_duration" value="4.0"' in LAUNCH
     assert 'name="diff_forward_failures_before_retreat" value="3"' in LAUNCH

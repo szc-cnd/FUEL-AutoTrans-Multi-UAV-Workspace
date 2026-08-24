@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   sensor_msgs
   visualization_msgs
+  bspline
   quadrotor_msgs
   tf
   tf2
@@ -30,7 +31,7 @@ find_package(ldop REQUIRED)
 ###################################
 catkin_package(
   # 2026-07-14: 导出后机跟随器新增的里程计、点云和可视化依赖。
-  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs quadrotor_msgs tf tf2 tf2_ros mavros_msgs ldop
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs bspline quadrotor_msgs tf tf2 tf2_ros mavros_msgs ldop
 )
 
 ###########

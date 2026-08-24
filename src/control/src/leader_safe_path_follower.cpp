@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bspline/Bspline.h>
+#include <bspline/non_uniform_bspline.h>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -82,6 +84,8 @@ class LeaderSafePathFollower {
                             "/UAV1/fast_lio/Odometry");
     pnh_.param<std::string>("follower_cloud_topic", follower_cloud_topic_,
                             "/UAV1/fast_lio/cloud_registered");
+    pnh_.param<std::string>("leader_trajectory_topic", leader_trajectory_topic_,
+                            "/UAV0/planning/bspline");
     pnh_.param("enable_search_landing", enable_search_landing_, false);
     // 2026-07-29: 起飞就绪由各自 FAST-LIO 高度锁存，不再依赖 start_after_hover Bool。
     pnh_.param("leader_start_height", leader_start_height_, 0.3);
@@ -118,6 +122,16 @@ class LeaderSafePathFollower {
     pnh_.param("follower_history_sample_spacing",
                follower_history_sample_spacing_, 0.08);
     pnh_.param("follower_history_max_length", follower_history_max_length_, 30.0);
+    // 狭窄弯道需要让Diff看到障碍另一侧；优先选择前机真实停稳的轨迹终点，
+    // 但任一单次规划目标沿前机历史路线不得超过1.5m。
+    pnh_.param("diff_history_target_max_distance",
+               diff_history_target_max_distance_, 1.50);
+    pnh_.param("leader_segment_endpoint_radius",
+               leader_segment_endpoint_radius_, 0.20);
+    pnh_.param("leader_segment_endpoint_max_speed",
+               leader_segment_endpoint_max_speed_, 0.12);
+    pnh_.param("leader_segment_endpoint_dwell",
+               leader_segment_endpoint_dwell_, 0.25);
     if (!std::isfinite(diff_failure_retreat_distance_) ||
         !std::isfinite(diff_failure_retreat_arrive_radius_) ||
         diff_failure_retreat_distance_ <= diff_failure_retreat_arrive_radius_ ||
@@ -132,7 +146,15 @@ class LeaderSafePathFollower {
         !std::isfinite(follower_history_sample_spacing_) ||
         follower_history_sample_spacing_ <= 0.0 ||
         !std::isfinite(follower_history_max_length_) ||
-        follower_history_max_length_ <= diff_failure_retreat_distance_) {
+        follower_history_max_length_ <= diff_failure_retreat_distance_ ||
+        !std::isfinite(diff_history_target_max_distance_) ||
+        diff_history_target_max_distance_ <= 0.0 ||
+        !std::isfinite(leader_segment_endpoint_radius_) ||
+        leader_segment_endpoint_radius_ <= 0.0 ||
+        !std::isfinite(leader_segment_endpoint_max_speed_) ||
+        leader_segment_endpoint_max_speed_ <= 0.0 ||
+        !std::isfinite(leader_segment_endpoint_dwell_) ||
+        leader_segment_endpoint_dwell_ < 0.0) {
       throw std::runtime_error(
           "leader_safe_path_follower: invalid flexible Diff recovery parameters");
     }
@@ -240,6 +262,11 @@ class LeaderSafePathFollower {
     pnh_.param("max_target_step", max_target_step_, 0.55);
     // 2026-07-15: 后机按前机历史折线逐段前视，不能从当前位置直连远端滞后点切过弯道墙体。
     pnh_.param("route_tracking_lookahead", route_tracking_lookahead_, 0.30);
+    if (diff_history_target_max_distance_ <=
+        std::max(0.18, route_tracking_lookahead_)) {
+      throw std::runtime_error(
+          "leader_safe_path_follower: diff history target maximum must exceed lookahead");
+    }
     pnh_.param("cruise_speed", cruise_speed_, 0.35);
     pnh_.param("max_vertical_speed", max_vertical_speed_, 0.20);
     pnh_.param("odom_timeout", odom_timeout_, 0.50);
@@ -330,6 +357,10 @@ class LeaderSafePathFollower {
     // 安全门槛只需要最新位置。队列保留一帧并关闭 Nagle，避免网络恢复后依次回放旧坐标。
     leader_odom_sub_ = nh_.subscribe(
         leader_odom_topic_, 1, &LeaderSafePathFollower::leaderOdomCallback, this,
+        ros::TransportHints().tcpNoDelay());
+    leader_trajectory_sub_ = nh_.subscribe(
+        leader_trajectory_topic_, 2,
+        &LeaderSafePathFollower::leaderTrajectoryCallback, this,
         ros::TransportHints().tcpNoDelay());
     follower_odom_sub_ = nh_.subscribe(follower_odom_topic_, 20,
                                        &LeaderSafePathFollower::followerOdomCallback, this);
@@ -801,7 +832,164 @@ class LeaderSafePathFollower {
       route_.pop_front();
       if (follower_route_index_ > 0) --follower_route_index_;
     }
+    while (!leader_segment_endpoints_.empty() &&
+           leader_segment_endpoints_.front().progress + path_sample_spacing_ <
+               route_.front().progress) {
+      leader_segment_endpoints_.pop_front();
+    }
     return true;
+  }
+
+  void leaderTrajectoryCallback(const bspline::Bspline::ConstPtr& msg) {
+    if (msg->traj_id == last_leader_trajectory_id_ &&
+        msg->start_time == last_leader_trajectory_start_time_) {
+      return;
+    }
+    last_leader_trajectory_id_ = msg->traj_id;
+    last_leader_trajectory_start_time_ = msg->start_time;
+
+    const std::size_t control_point_count = msg->pos_pts.size();
+    if (msg->order < 1) {
+      ROS_WARN("[safe_follower] ignore invalid UAV0 B-spline id=%ld order=%d.",
+               static_cast<long>(msg->traj_id), msg->order);
+      pending_leader_segment_endpoint_valid_ = false;
+      leader_segment_endpoint_dwell_start_ = ros::Time(0);
+      return;
+    }
+    const std::size_t expected_knot_count =
+        control_point_count + static_cast<std::size_t>(msg->order) + 1U;
+    if (control_point_count <= static_cast<std::size_t>(msg->order) ||
+        msg->knots.size() != expected_knot_count) {
+      ROS_WARN("[safe_follower] ignore invalid UAV0 B-spline id=%ld order=%d "
+               "control_points=%zu knots=%zu expected_knots=%zu.",
+               static_cast<long>(msg->traj_id), msg->order, control_point_count,
+               msg->knots.size(), expected_knot_count);
+      pending_leader_segment_endpoint_valid_ = false;
+      leader_segment_endpoint_dwell_start_ = ros::Time(0);
+      return;
+    }
+
+    Eigen::MatrixXd control_points(control_point_count, 3);
+    for (std::size_t i = 0; i < control_point_count; ++i) {
+      if (!std::isfinite(msg->pos_pts[i].x) ||
+          !std::isfinite(msg->pos_pts[i].y) ||
+          !std::isfinite(msg->pos_pts[i].z)) {
+        ROS_WARN("[safe_follower] ignore UAV0 B-spline id=%ld with non-finite control point.",
+                 static_cast<long>(msg->traj_id));
+        pending_leader_segment_endpoint_valid_ = false;
+        leader_segment_endpoint_dwell_start_ = ros::Time(0);
+        return;
+      }
+      control_points(static_cast<Eigen::Index>(i), 0) = msg->pos_pts[i].x;
+      control_points(static_cast<Eigen::Index>(i), 1) = msg->pos_pts[i].y;
+      control_points(static_cast<Eigen::Index>(i), 2) = msg->pos_pts[i].z;
+    }
+    Eigen::VectorXd knots(msg->knots.size());
+    for (std::size_t i = 0; i < msg->knots.size(); ++i) {
+      if (!std::isfinite(msg->knots[i]) ||
+          (i > 0U && msg->knots[i] + 1.0e-9 < msg->knots[i - 1U])) {
+        ROS_WARN("[safe_follower] ignore UAV0 B-spline id=%ld with invalid knots.",
+                 static_cast<long>(msg->traj_id));
+        pending_leader_segment_endpoint_valid_ = false;
+        leader_segment_endpoint_dwell_start_ = ros::Time(0);
+        return;
+      }
+      knots(static_cast<Eigen::Index>(i)) = msg->knots[i];
+    }
+
+    fast_planner::NonUniformBspline trajectory(control_points, msg->order, 1.0);
+    trajectory.setKnot(knots);
+    double trajectory_start = 0.0;
+    double trajectory_end = 0.0;
+    trajectory.getTimeSpan(trajectory_start, trajectory_end);
+    if (!std::isfinite(trajectory_start) || !std::isfinite(trajectory_end) ||
+        trajectory_end <= trajectory_start) {
+      ROS_WARN("[safe_follower] ignore UAV0 B-spline id=%ld with invalid time span.",
+               static_cast<long>(msg->traj_id));
+      pending_leader_segment_endpoint_valid_ = false;
+      leader_segment_endpoint_dwell_start_ = ros::Time(0);
+      return;
+    }
+    const Eigen::VectorXd endpoint = trajectory.evaluateDeBoor(trajectory_end);
+    if (endpoint.size() < 3 || !endpoint.head(3).allFinite()) {
+      ROS_WARN("[safe_follower] ignore UAV0 B-spline id=%ld with invalid endpoint.",
+               static_cast<long>(msg->traj_id));
+      pending_leader_segment_endpoint_valid_ = false;
+      leader_segment_endpoint_dwell_start_ = ros::Time(0);
+      return;
+    }
+
+    geometry_msgs::Point endpoint_local;
+    endpoint_local.x = endpoint(0);
+    endpoint_local.y = endpoint(1);
+    endpoint_local.z = endpoint(2);
+    pending_leader_segment_endpoint_.position =
+        followerCruisePointToWorld(leaderToWorld(endpoint_local));
+    pending_leader_segment_endpoint_.yaw = 0.0;
+    pending_leader_segment_endpoint_.progress = leader_route_progress_;
+    pending_leader_segment_endpoint_valid_ = true;
+    pending_leader_segment_trajectory_id_ = msg->traj_id;
+    leader_segment_endpoint_dwell_start_ = ros::Time(0);
+    ROS_INFO("[safe_follower] track UAV0 B-spline endpoint id=%ld world=(%.2f,%.2f,%.2f); "
+             "cache only after actual stop.",
+             static_cast<long>(msg->traj_id),
+             pending_leader_segment_endpoint_.position.x,
+             pending_leader_segment_endpoint_.position.y,
+             pending_leader_segment_endpoint_.position.z);
+  }
+
+  void confirmPendingLeaderSegmentEndpoint(const RoutePoint& actual_point,
+                                           const geometry_msgs::Twist& actual_twist,
+                                           const ros::Time& now) {
+    if (!pending_leader_segment_endpoint_valid_) return;
+    const double endpoint_error = std::hypot(
+        actual_point.position.x - pending_leader_segment_endpoint_.position.x,
+        actual_point.position.y - pending_leader_segment_endpoint_.position.y);
+    const double speed = std::sqrt(
+        actual_twist.linear.x * actual_twist.linear.x +
+        actual_twist.linear.y * actual_twist.linear.y +
+        actual_twist.linear.z * actual_twist.linear.z);
+    if (endpoint_error > leader_segment_endpoint_radius_ ||
+        speed > leader_segment_endpoint_max_speed_) {
+      leader_segment_endpoint_dwell_start_ = ros::Time(0);
+      return;
+    }
+    if (leader_segment_endpoint_dwell_start_.isZero()) {
+      leader_segment_endpoint_dwell_start_ = now;
+      return;
+    }
+    if ((now - leader_segment_endpoint_dwell_start_).toSec() + 1.0e-6 <
+        leader_segment_endpoint_dwell_) {
+      return;
+    }
+
+    RoutePoint confirmed = actual_point;
+    // 正常段末端与route_末点最多相差一个采样间距；转弯缓存尚未正式接入时，
+    // 先用其累计长度作进度提示，选用前还会再次核对实飞折线位置。
+    confirmed.progress = leader_route_progress_ + turn_candidate_length_;
+    bool duplicate = false;
+    for (const RoutePoint& endpoint : leader_segment_endpoints_) {
+      if (std::fabs(endpoint.progress - confirmed.progress) <= path_sample_spacing_ &&
+          std::hypot(endpoint.position.x - confirmed.position.x,
+                     endpoint.position.y - confirmed.position.y) <=
+              leader_segment_endpoint_radius_) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) {
+      leader_segment_endpoints_.push_back(confirmed);
+      while (leader_segment_endpoints_.size() > 200U) {
+        leader_segment_endpoints_.pop_front();
+      }
+      ROS_WARN("[safe_follower] CONFIRM UAV0 segment endpoint id=%ld progress=%.2f "
+               "world=(%.2f,%.2f,%.2f), actual stop %.2fs.",
+               static_cast<long>(pending_leader_segment_trajectory_id_),
+               confirmed.progress, confirmed.position.x, confirmed.position.y,
+               confirmed.position.z, leader_segment_endpoint_dwell_);
+    }
+    pending_leader_segment_endpoint_valid_ = false;
+    leader_segment_endpoint_dwell_start_ = ros::Time(0);
   }
 
   void leaderOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
@@ -832,6 +1020,7 @@ class LeaderSafePathFollower {
     // 2026-07-24: 安全路线的几何进度只取前机XY，z统一为后机自己的巡航高度。
     point.position = followerCruisePointToWorld(point.position);
     point.yaw = yawFromQuaternion(msg->pose.pose.orientation);
+    confirmPendingLeaderSegmentEndpoint(point, msg->twist.twist, now);
     bool current_point_already_appended = false;
     // 2026-07-20: 独立保存最近一次判向采样点，不能拿route_.back()判向；route_.back()在回头期间
     // 会故意保持不动，否则回到旧路后的一大段位移仍会被错误追加为新安全路线。
@@ -1645,8 +1834,8 @@ class LeaderSafePathFollower {
     const double segment_start_progress = active_relay_index_ > 0
         ? relay_waypoints_[active_relay_index_ - 1].progress
         : route_.front().progress;
-    const double segment_end_progress = std::min(relay_target.progress,
-                                                  route_.back().progress);
+    const double relay_progress = std::min(relay_target.progress,
+                                            route_.back().progress);
     std::size_t route_start_index = 0;
     while (route_start_index + 1 < route_.size() &&
            route_[route_start_index].progress + path_sample_spacing_ <
@@ -1660,10 +1849,12 @@ class LeaderSafePathFollower {
     const double attachment_distance = std::hypot(
         route_[search_start_index].position.x - follower_world.x,
         route_[search_start_index].position.y - follower_world.y);
+    // 接力点只表示已经完成到哪一段，不能把候选窗口截死在接力坐标上。
+    // 当前接力点被占据时，允许在同一个1.5m窗口内选它后方的安全历史点。
     const double plausible_progress_upper = std::min(
-        segment_end_progress + path_sample_spacing_,
+        route_.back().progress + path_sample_spacing_,
         route_[search_start_index].progress + attachment_distance +
-            max_target_step_ + 2.0 * path_sample_spacing_);
+            diff_history_target_max_distance_ + 2.0 * path_sample_spacing_);
     std::size_t nearest_index = search_start_index;
     double nearest_distance = std::numeric_limits<double>::infinity();
     for (std::size_t i = search_start_index; i < route_.size(); ++i) {
@@ -1680,14 +1871,65 @@ class LeaderSafePathFollower {
     diff_allow_route_backtrack_attachment_ = false;
     const double current_progress = std::max(segment_start_progress,
                                              route_[nearest_index].progress);
-    const double lookahead = std::max(0.18, route_tracking_lookahead_);
-    const std::array<double, 6> steps = {{lookahead, 0.80 * lookahead,
-                                         0.60 * lookahead, 1.20 * lookahead,
-                                         1.50 * lookahead, 0.18}};
+    const double maximum_candidate_progress = std::min(
+        route_.back().progress,
+        current_progress + diff_history_target_max_distance_);
+
+    auto accept_candidate = [&](const RoutePoint& candidate,
+                                const char* source) -> bool {
+      const geometry_msgs::Point candidate_local =
+          useFollowerCruiseHeight(worldToFollower(candidate.position));
+      if (routeCandidateBlocked(candidate_local, candidate.progress, now)) return false;
+      if (distance3d(candidate_local, follower_odom_.pose.pose.position) <=
+          diff_endpoint_capture_radius_) {
+        return false;
+      }
+      int occupied_hits = 0;
+      if (relayPointOccupied(candidate_local, &occupied_hits)) {
+        blacklistRouteCandidate(candidate_local, candidate.progress, now,
+                                "point occupied in follower cloud");
+        return false;
+      }
+      *target = candidate;
+      ROS_WARN("[safe_follower] select %s UAV0-history target progress %.2f->%.2f "
+               "route_distance=%.2fm milestone=%.2f world=(%.2f,%.2f,%.2f).",
+               source, current_progress, candidate.progress,
+               candidate.progress - current_progress, relay_progress,
+               candidate.position.x, candidate.position.y, candidate.position.z);
+      return true;
+    };
+
+    // UAV0确实到达并停稳的B-spline段终点优先。倒序搜索可在1.5m窗口内
+    // 尽量跨过弯角；同时用对应progress处的实飞折线复核，防止误用未执行规划点。
+    for (auto endpoint = leader_segment_endpoints_.rbegin();
+         endpoint != leader_segment_endpoints_.rend(); ++endpoint) {
+      if (endpoint->progress <= current_progress + 0.05 ||
+          endpoint->progress > maximum_candidate_progress + 1.0e-6) {
+        continue;
+      }
+      RoutePoint route_match;
+      if (!routePointAtProgress(endpoint->progress, &route_match)) continue;
+      const double route_match_error = std::hypot(
+          route_match.position.x - endpoint->position.x,
+          route_match.position.y - endpoint->position.y);
+      if (route_match_error >
+          leader_segment_endpoint_radius_ + 2.0 * path_sample_spacing_) {
+        continue;
+      }
+      RoutePoint candidate = *endpoint;
+      candidate.position = followerCruisePointToWorld(candidate.position);
+      if (accept_candidate(candidate, "stopped-segment-endpoint")) return true;
+    }
+
+    // 没有可用段终点时，仍只沿UAV0实飞折线取点；由远到近逐级尝试，
+    // 让Diff有足够路径长度完成弯道A*，同时保证单次目标不超过1.5m。
+    const std::array<double, 7> step_ratios =
+        {{1.00, 0.83, 0.67, 0.50, 0.33, 0.20, 0.12}};
     std::vector<double> tried_progress;
-    for (double step : steps) {
-      step = std::min(step, max_target_step_);
-      const double candidate_progress = std::min(segment_end_progress,
+    for (double ratio : step_ratios) {
+      const double step = std::max(0.18,
+          diff_history_target_max_distance_ * ratio);
+      const double candidate_progress = std::min(maximum_candidate_progress,
                                                   current_progress + step);
       bool duplicate = false;
       for (double tried : tried_progress) {
@@ -1697,19 +1939,7 @@ class LeaderSafePathFollower {
       tried_progress.push_back(candidate_progress);
       RoutePoint candidate;
       if (!routePointAtProgress(candidate_progress, &candidate)) continue;
-      const geometry_msgs::Point candidate_local =
-          useFollowerCruiseHeight(worldToFollower(candidate.position));
-      if (routeCandidateBlocked(candidate_local, candidate_progress, now)) continue;
-      if (distance3d(candidate_local, follower_odom_.pose.pose.position) <=
-          diff_endpoint_capture_radius_) continue;
-      int occupied_hits = 0;
-      if (relayPointOccupied(candidate_local, &occupied_hits)) {
-        blacklistRouteCandidate(candidate_local, candidate_progress, now,
-                                "point occupied in follower cloud");
-        continue;
-      }
-      *target = candidate;
-      return true;
+      if (accept_candidate(candidate, "fallback")) return true;
     }
     return false;
   }
@@ -2604,11 +2834,14 @@ class LeaderSafePathFollower {
                                       now, &route_step_world)) {
         const geometry_msgs::Point candidate =
             useFollowerCruiseHeight(worldToFollower(route_step_world.position));
-        const double candidate_to_relay = distance3d(candidate, desired_local);
+        const double remaining_relay_progress = std::max(
+            0.0, desired_world.progress - route_step_world.progress);
         diff_route_subgoal_local_ = candidate;
         diff_route_subgoal_progress_ = route_step_world.progress;
+        // 接力点是进度里程碑，不是必须命中的坐标。候选沿UAV0实飞折线到达
+        // 或越过该progress即可消费里程碑，从而能用接力点后方的安全停靠点替代占据点。
         diff_route_subgoal_completes_relay_ =
-            candidate_to_relay <= relay_arrive_radius_;
+            remaining_relay_progress <= path_sample_spacing_;
         diff_route_subgoal_valid_ = true;
         diff_clipped_retry_count_ = 0;
         diff_command_stale_retry_count_ = 0;
@@ -2616,7 +2849,7 @@ class LeaderSafePathFollower {
                  "progress=%.2f local=(%.2f,%.2f,%.2f), remaining=%.2fm%s.",
                  active_relay_index_ + 1, relay_waypoints_.size(),
                  route_step_world.progress, candidate.x, candidate.y, candidate.z,
-                 candidate_to_relay,
+                 remaining_relay_progress,
                  diff_route_subgoal_completes_relay_ ? " (milestone capture)" : "");
       } else {
         setDiffWaitPositionHold(true, "search alternate UAV0-history candidate");
@@ -3314,7 +3547,8 @@ class LeaderSafePathFollower {
 
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
-  ros::Subscriber leader_odom_sub_, follower_odom_sub_, follower_cloud_sub_;
+  ros::Subscriber leader_odom_sub_, leader_trajectory_sub_, follower_odom_sub_,
+      follower_cloud_sub_;
   ros::Subscriber diff_command_sub_;  // 2026-07-28: UAV1实际轨迹输出存活监测，不参与发布。
   ros::Subscriber dynamic_obstacle_sub_;  // UAV1 LDOP结构化目标状态。
   ros::Subscriber leader_landing_target_sub_, leader_landing_request_sub_, door_pose_sub_;
@@ -3338,6 +3572,8 @@ class LeaderSafePathFollower {
   sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
   std::vector<DynamicObstacleSample> retained_dynamic_obstacles_;
   std::deque<RoutePoint> route_;
+  // UAV0每段B-spline只有在真实到达且停稳后才进入该表；progress用于确认它属于实飞折线。
+  std::deque<RoutePoint> leader_segment_endpoints_;
   // UAV1实际执行轨迹作为可逆安全栈：正常前进时追加，退让时沿栈向后取点并在到达后截断。
   std::deque<RoutePoint> follower_executed_route_;
   std::deque<BlockedRouteCandidate> blocked_route_candidates_;
@@ -3347,7 +3583,8 @@ class LeaderSafePathFollower {
   std::vector<RoutePoint> relay_waypoints_;
   ros::Time leader_odom_stamp_, follower_odom_stamp_, follower_odom_sample_stamp_, cloud_stamp_;
   ros::Time dynamic_obstacle_receive_stamp_, retained_dynamic_obstacle_stamp_;
-  std::string leader_odom_topic_, follower_odom_topic_, follower_cloud_topic_;
+  std::string leader_odom_topic_, leader_trajectory_topic_, follower_odom_topic_,
+      follower_cloud_topic_;
   std::string command_topic_, diff_goal_topic_;
   std::string diff_status_topic_;  // 2026-07-28: 默认/drone_1_planning/status。
   std::string traj_started_topic_, world_frame_;
@@ -3390,6 +3627,7 @@ class LeaderSafePathFollower {
   bool enable_search_landing_{false};
   // 2026-07-20: 接力路线判向、回头暂停和恢复状态独立于前机原始Odometry保存。
   bool have_last_leader_sample_{false}, relay_route_paused_{false};
+  bool pending_leader_segment_endpoint_valid_{false};
   bool obstacle_check_enabled_{true}, require_fresh_cloud_{true};
   bool diff_separation_hold_active_{false}, separation_recovery_active_{false};
   bool separation_recovery_goal_valid_{false};
@@ -3439,6 +3677,10 @@ class LeaderSafePathFollower {
   double diff_failure_retreat_arrive_radius_{0.10};
   double diff_candidate_blacklist_duration_{4.0};
   double diff_candidate_blacklist_radius_{0.08};
+  double diff_history_target_max_distance_{1.50};
+  double leader_segment_endpoint_radius_{0.20};
+  double leader_segment_endpoint_max_speed_{0.12};
+  double leader_segment_endpoint_dwell_{0.25};
   double follower_history_sample_spacing_{0.08};
   double follower_history_max_length_{30.0};
   double follower_history_length_{0.0};
@@ -3481,6 +3723,11 @@ class LeaderSafePathFollower {
   std::size_t diff_goal_index_{std::numeric_limits<std::size_t>::max()}; // 2026-07-28: 每个离散点仅触发一次规划。
   std::size_t follower_route_index_{0};
   RoutePoint last_leader_sample_;  // 2026-07-20: 最近一次达到采样间距的前机点，仅用于运动方向判断。
+  RoutePoint pending_leader_segment_endpoint_;
+  int64_t last_leader_trajectory_id_{std::numeric_limits<int64_t>::min()};
+  int64_t pending_leader_segment_trajectory_id_{0};
+  ros::Time last_leader_trajectory_start_time_;
+  ros::Time leader_segment_endpoint_dwell_start_;
   ros::Time terminal_arrival_stamp_, relay_arrival_stamp_;
   ros::Time diff_goal_publish_stamp_;  // 2026-07-28: 防止瞬时假占据导致一次性目标永久失效。
   ros::Time diff_goal_first_publish_stamp_;  // 不被同一点周期重发刷新的总应答计时。

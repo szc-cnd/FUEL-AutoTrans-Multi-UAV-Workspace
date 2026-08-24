@@ -74,6 +74,7 @@
     <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
     <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
+    <arg name="leader_trajectory_topic" default="/UAV0/planning/bspline"/>
     <arg name="frame_alignment_config"
          default="$(find exploration_control)/config/dual_uav_frame_alignment.yaml"/>
 
@@ -88,6 +89,7 @@
         <param name="leader_odom_topic" value="$(arg leader_odom_topic)"/>
         <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
         <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
+        <param name="leader_trajectory_topic" value="$(arg leader_trajectory_topic)"/>
         <param name="enable_search_landing" value="$(arg enable_search_landing)"/>
         <param name="enable_dynamic_obstacle_detection"
                value="$(arg enable_dynamic_obstacle_detection)"/>
@@ -115,6 +117,11 @@
         <param name="diff_clipped_retry_limit" value="2"/>
         <param name="follower_history_sample_spacing" value="0.08"/>
         <param name="follower_history_max_length" value="30.0"/>
+        <!-- 优先使用UAV0每段B-spline实际停稳终点；弯道前视最长1.5m，让Diff有空间完成A*绕障。 -->
+        <param name="diff_history_target_max_distance" value="1.50"/>
+        <param name="leader_segment_endpoint_radius" value="0.20"/>
+        <param name="leader_segment_endpoint_max_speed" value="0.12"/>
+        <param name="leader_segment_endpoint_dwell" value="0.25"/>
         <param name="traj_started_topic" value="/UAV1/planning/traj_started"/>
         <!-- 2026-07-27: 前机确认终点后，跟随器发布后机邻近落点并在到达后触发 UAV1 AUTO.LAND。 -->
         <param name="leader_landing_target_topic" value="/UAV0/mission/landing_target"/>
