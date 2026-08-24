@@ -10,6 +10,7 @@
 #include <bspline/Bspline.h>
 #include <bspline/non_uniform_bspline.h>
 #include <quadrotor_msgs/PolynomialTraj.h>
+#include <std_msgs/Int32.h>
 
 namespace
 {
@@ -27,11 +28,15 @@ public:
     private_nh_.param<std::string>("input_topic", input_topic_, "/UAV0/planning/bspline");
     private_nh_.param<std::string>("output_topic", output_topic_,
                                    "/UAV0/planning/autotrans_trajectory");
+    private_nh_.param<std::string>("emergency_brake_topic", emergency_brake_topic_,
+                                   "/UAV0/planning/emergency_brake");
     private_nh_.param<std::string>("frame_id", frame_id_, "UAV0/camera_init");
     private_nh_.param("trajectory_timeout", trajectory_timeout_, 2.0);
 
     output_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTraj>(output_topic_, 2, true);
     input_sub_ = nh_.subscribe(input_topic_, 2, &FuelAutoTransBridge::bsplineCallback, this);
+    emergency_brake_sub_ = nh_.subscribe(
+        emergency_brake_topic_, 2, &FuelAutoTransBridge::emergencyBrakeCallback, this);
     timeout_timer_ = nh_.createTimer(ros::Duration(0.05), &FuelAutoTransBridge::timeoutCallback, this);
 
     ROS_INFO("[fuel_autotrans_bridge] %s (bspline/Bspline) -> %s (quadrotor_msgs/PolynomialTraj), "
@@ -309,13 +314,37 @@ private:
               trajectory_timeout_);
   }
 
+  void emergencyBrakeCallback(const std_msgs::Int32ConstPtr& message)
+  {
+    if (abort_sent_ || last_input_time_.isZero() || message->data < 0 ||
+        static_cast<uint32_t>(message->data) != last_trajectory_id_)
+    {
+      return;
+    }
+
+    quadrotor_msgs::PolynomialTraj abort_message;
+    abort_message.header.stamp = ros::Time::now();
+    abort_message.header.frame_id = frame_id_;
+    abort_message.trajectory_id = last_trajectory_id_;
+    abort_message.action = quadrotor_msgs::PolynomialTraj::ACTION_ABORT;
+    abort_message.has_yaw = false;
+    output_pub_.publish(abort_message);
+    abort_sent_ = true;
+    abort_deadline_ = ros::Time(0);
+    ROS_ERROR("[fuel_autotrans_bridge] Emergency brake for active FUEL trajectory id=%u; "
+              "ACTION_ABORT forwarded to AutoTrans immediately.",
+              last_trajectory_id_);
+  }
+
   ros::NodeHandle nh_;
   ros::NodeHandle private_nh_;
   ros::Subscriber input_sub_;
+  ros::Subscriber emergency_brake_sub_;
   ros::Publisher output_pub_;
   ros::Timer timeout_timer_;
   std::string input_topic_;
   std::string output_topic_;
+  std::string emergency_brake_topic_;
   std::string frame_id_;
   double trajectory_timeout_;
   ros::Time last_input_time_;

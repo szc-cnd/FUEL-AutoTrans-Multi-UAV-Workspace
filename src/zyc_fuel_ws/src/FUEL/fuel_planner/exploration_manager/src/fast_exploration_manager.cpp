@@ -207,6 +207,55 @@ bool FastExplorationManager::pathInsideWorkspaceLock(const vector<Vector3d>& pat
   return true;
 }
 
+void FastExplorationManager::preselectInitialFrontier(const Vector3d& pos, double yaw) {
+  if (!mission_workspace_lock_received_ || !task_search_manager_ ||
+      !task_search_manager_->enabled() || task_search_manager_->landingRequested())
+    return;
+
+  frontier_finder_->getTopViewpointsInfo(
+      pos, ed_->points_, ed_->yaws_, ed_->averages_);
+  int best_index = -1;
+  double best_score = std::numeric_limits<double>::infinity();
+  double best_progress = 0.0;
+  double best_clearance = 0.0;
+  const Vector3d lateral(-mission_workspace_dir_.y(), mission_workspace_dir_.x(), 0.0);
+  for (size_t i = 0; i < ed_->points_.size(); ++i) {
+    const Vector3d frontier_ref =
+        i < ed_->averages_.size() ? ed_->averages_[i] : ed_->points_[i];
+    if (!pointInsideWorkspaceLock(ed_->points_[i]) ||
+        !pointInsideWorkspaceLock(frontier_ref))
+      continue;
+
+    const Vector3d relative = ed_->points_[i] - mission_workspace_origin_;
+    const double progress = relative.dot(mission_workspace_dir_);
+    const double side_offset = std::fabs(relative.dot(lateral));
+    const double clearance = std::max(0.0, sdf_map_->getDistance(ed_->points_[i]));
+    // 1.5m 是首点软偏好而非硬门槛；同等深度下优先通道中心和更空旷的观察位。
+    const double score = std::fabs(progress - initial_entry_target_distance_) +
+                         0.5 * side_offset - std::min(0.60, clearance);
+    if (score < best_score) {
+      best_index = static_cast<int>(i);
+      best_score = score;
+      best_progress = progress;
+      best_clearance = clearance;
+    }
+  }
+  if (best_index < 0) return;
+
+  initial_frontier_point_ = ed_->points_[best_index];
+  initial_frontier_yaw_ = best_index < static_cast<int>(ed_->yaws_.size())
+                              ? ed_->yaws_[best_index]
+                              : yaw;
+  initial_frontier_preselected_ = true;
+  ROS_WARN_THROTTLE(
+      1.0,
+      "[initial_frontier] cached before trigger idx=%d point=(%.2f,%.2f,%.2f) "
+      "door_progress=%.2fm target=%.2fm clearance=%.2fm; trajectory remains gated.",
+      best_index, initial_frontier_point_.x(), initial_frontier_point_.y(),
+      initial_frontier_point_.z(), best_progress, initial_entry_target_distance_,
+      best_clearance);
+}
+
 void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
   const auto old_frontiers = ed_->frontiers_;
   const auto old_boxes = ed_->frontier_boxes_;
@@ -2029,6 +2078,8 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/entry_arrive_dist", ep_->mission_entry_arrive_dist_, 0.6);
   nh.param("mission/entry_yaw", ep_->mission_entry_yaw_, 0.0);
   nh.param("mission/door_back_margin", ep_->mission_door_back_margin_, 0.25);
+  nh.param("mission/task_search/initial_entry_target_distance",
+           initial_entry_target_distance_, 1.50);
   nh.param("mission/forward_progress_weight", ep_->mission_forward_progress_weight_, 1.8);
   nh.param("mission/forward_min_gain", ep_->mission_forward_min_gain_, 0.25);
   nh.param("mission/forward_fallback_step", ep_->mission_forward_fallback_step_, 0.45);
@@ -2120,6 +2171,11 @@ int FastExplorationManager::planExploreMotion(
   bool use_forced_entry_target = false;
   bool use_stage3_target = false;
   bool use_vertical_detour_target = false;
+  const bool use_initial_frontier_snapshot = initial_frontier_preselected_;
+  const Vector3d cached_initial_frontier = initial_frontier_point_;
+  const double cached_initial_yaw = initial_frontier_yaw_;
+  // 预选快照只服务正式触发后的第一次规划；失败重试回到最新地图正常选点。
+  initial_frontier_preselected_ = false;
   if (task_search_manager_ && task_search_manager_->landingRequested()) {
     // 2026-07-13: AUTO.LAND 已由控制器接管后，探索器不再发布新的平移轨迹。
     ROS_WARN_THROTTLE(1.0, "[exit_mission] landing is active; exploration planning stopped.");
@@ -2182,24 +2238,29 @@ int FastExplorationManager::planExploreMotion(
   // 任务搜索每轮都从当前位置和本轮更新地图重新生成frontier。旧位置缓存不能继续参与
   // 选点；暂时不可达点仍只由任务层短时冷却，不永久删除地图区域。
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target &&
-      task_search_manager_) {
+      !use_initial_frontier_snapshot && task_search_manager_) {
     frontier_finder_->clearFrontierHistory();
     task_search_manager_->clearActiveGoal();
   }
 
-  // Search frontiers and group them into clusters
-  frontier_finder_->searchFrontiers();
+  double frontier_time = 0.0;
+  if (!use_initial_frontier_snapshot) {
+    // Search frontiers and group them into clusters
+    frontier_finder_->searchFrontiers();
+    frontier_time = (ros::Time::now() - t1).toSec();
+    t1 = ros::Time::now();
 
-  double frontier_time = (ros::Time::now() - t1).toSec();
-  t1 = ros::Time::now();
-
-  // Find viewpoints (x,y,z,yaw) for all frontier clusters and get visible ones' info
-  frontier_finder_->computeFrontiersToVisit();
-  frontier_finder_->getFrontiers(ed_->frontiers_);
-  frontier_finder_->getFrontierBoxes(ed_->frontier_boxes_);
-  frontier_finder_->getDormantFrontiers(ed_->dead_frontiers_);
-
-  frontier_finder_->getTopViewpointsInfo(pos, ed_->points_, ed_->yaws_, ed_->averages_);
+    // Find viewpoints (x,y,z,yaw) for all frontier clusters and get visible ones' info
+    frontier_finder_->computeFrontiersToVisit();
+    frontier_finder_->getFrontiers(ed_->frontiers_);
+    frontier_finder_->getFrontierBoxes(ed_->frontier_boxes_);
+    frontier_finder_->getDormantFrontiers(ed_->dead_frontiers_);
+    frontier_finder_->getTopViewpointsInfo(pos, ed_->points_, ed_->yaws_, ed_->averages_);
+  } else {
+    t1 = ros::Time::now();
+    ROS_WARN("[initial_frontier] reuse pre-trigger frontier snapshot; latest map/path checks "
+             "still run before trajectory generation.");
+  }
   // 2026-07-20: 不能仅凭原始frontier非空就取消搜索耗尽计时；全部候选都被重复访问、
   // 失败冷却或门平面约束过滤时并没有可执行路径，旧逻辑会让FSM原地空转十几秒。
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target &&
@@ -2253,8 +2314,26 @@ int FastExplorationManager::planExploreMotion(
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target &&
       use_mission_filtered_direct_view &&
       !use_mission_forward_fallback && task_search_manager_ && task_search_manager_->enabled()) {
-    task_candidate_idx = task_search_manager_->selectSearchCandidate(
-        ed_->points_, ed_->yaws_, ed_->frontiers_, pos, yaw[0]);
+    if (use_initial_frontier_snapshot) {
+      double nearest_distance = 0.35;
+      for (size_t i = 0; i < ed_->points_.size(); ++i) {
+        const double distance =
+            (ed_->points_[i].head<2>() - cached_initial_frontier.head<2>()).norm();
+        if (distance < nearest_distance) {
+          nearest_distance = distance;
+          task_candidate_idx = static_cast<int>(i);
+        }
+      }
+      if (task_candidate_idx >= 0) {
+        if (task_candidate_idx < static_cast<int>(ed_->yaws_.size()))
+          ed_->yaws_[task_candidate_idx] = cached_initial_yaw;
+        ROS_WARN("[initial_frontier] reuse validated cached candidate idx=%d match=%.2fm.",
+                 task_candidate_idx, nearest_distance);
+      }
+    }
+    if (task_candidate_idx < 0)
+      task_candidate_idx = task_search_manager_->selectSearchCandidate(
+          ed_->points_, ed_->yaws_, ed_->frontiers_, pos, yaw[0]);
     if (task_candidate_idx < 0) {
       // 2026-07-20: 原始frontier存在但没有任何可执行候选时也启动配置时长的耗尽确认；
       // 优先使用已经稳定确认并锁存的最终出口，确认期间才允许安全短步恢复。

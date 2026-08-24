@@ -34,3 +34,10 @@ def test_fuel_timeout_starts_after_active_trajectory_ends():
     assert "trajectory_end > last_input_time_ ? trajectory_end : last_input_time_" in FUEL_SOURCE
     assert "abort_deadline_ = active_until + ros::Duration(trajectory_timeout_)" in FUEL_SOURCE
     assert "ros::Time::now() <= abort_deadline_" in FUEL_SOURCE
+
+
+def test_fuel_emergency_brake_immediately_aborts_matching_autotrans_trajectory():
+    assert '"emergency_brake_topic"' in FUEL_SOURCE
+    assert "emergencyBrakeCallback" in FUEL_SOURCE
+    assert "message->data) != last_trajectory_id_" in FUEL_SOURCE
+    assert "abort_deadline_ = ros::Time(0)" in FUEL_SOURCE

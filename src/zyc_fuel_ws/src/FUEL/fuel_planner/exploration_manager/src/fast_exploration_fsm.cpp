@@ -920,6 +920,7 @@ void FastExplorationFSM::frontierCallback(const ros::TimerEvent& e) {
 
     ft->getFrontiers(ed->frontiers_);
     ft->getFrontierBoxes(ed->frontier_boxes_);
+    expl_manager_->preselectInitialFrontier(fd_->odom_pos_, fd_->odom_yaw_);
 
     // Draw frontier and bounding box
     for (int i = 0; i < ed->frontiers_.size(); ++i) {

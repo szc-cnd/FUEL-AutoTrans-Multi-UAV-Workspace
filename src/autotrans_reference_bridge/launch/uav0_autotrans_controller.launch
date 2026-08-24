@@ -11,6 +11,7 @@
   <node pkg="autotrans_reference_bridge" type="fuel_autotrans_bridge_node"
         name="fuel_autotrans_bridge" output="screen">
     <param name="input_topic" value="/UAV0/planning/bspline"/>
+    <param name="emergency_brake_topic" value="/UAV0/planning/emergency_brake"/>
     <param name="output_topic"
            value="$(eval '/UAV0/planning/autotrans_trajectory' if arg('pure_fuel_mode') else '/UAV0/fuel/autotrans_trajectory')"/>
     <param name="frame_id" value="UAV0/camera_init"/>

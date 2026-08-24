@@ -47,6 +47,8 @@ public:
   void reportTrajectoryCollision();
   // 2026-07-22: 由FSM里程计回调连续更新任务航迹，旧路判断不再只依赖稀疏重规划时刻。
   void updateMissionOdometry(const Vector3d& pos, double yaw);
+  // 门确认后提前缓存首个观察点；只做选点，不生成或发布轨迹。
+  void preselectInitialFrontier(const Vector3d& pos, double yaw);
   bool consumeRcSearchLandingStartRequest();
   bool shouldStartInflationHistoryEscape(const Vector3d& odom_pos) const;
   bool detectMappedTurnDuringExecution(double yaw, Vector3d& direction);
@@ -126,6 +128,10 @@ private:
   vector<Vector3d> camera_scanned_obstacles_;
   Vector3d mission_workspace_origin_{0.0, 0.0, 0.0};
   Vector3d mission_workspace_dir_{1.0, 0.0, 0.0};
+  bool initial_frontier_preselected_{false};
+  Vector3d initial_frontier_point_{0.0, 0.0, 0.0};
+  double initial_frontier_yaw_{0.0};
+  double initial_entry_target_distance_{1.50};
   // 2026-07-14: 保存任务层请求的最终目标；执行期碰撞不能只冷却 5m 截断后的中间点。
   Vector3d last_requested_goal_{0.0, 0.0, 0.0};
   bool has_last_requested_goal_{false};
