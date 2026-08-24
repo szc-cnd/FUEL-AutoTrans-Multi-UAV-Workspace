@@ -35,6 +35,32 @@ class PositionCommandLatchStaticTest(unittest.TestCase):
         self.assertNotIn("cmd_data.yaw, cmd_data.yaw_rate", cmd_ctrl)
         self.assertIn("entry_command_yaw_, 0.0", cmd_ctrl)
 
+    def test_streaming_position_command_does_not_relatch_yaw(self):
+        source = FSM_SOURCE.read_text(encoding="utf-8")
+        start = source.index("void MPCFSM::CMD_CTRL_process()")
+        end = source.index("void MPCFSM::setEstimateState", start)
+        cmd_ctrl = source[start:end]
+
+        guard = "const bool latch_entry_yaw = !entry_command_active_ ||"
+        new_task = (
+            "latched_entry_command_.msg.trajectory_id != "
+            "cmd_data.msg.trajectory_id;"
+        )
+        yaw_assignment = "entry_command_yaw_ = landingSearchYawReference("
+        activate = "entry_command_active_ = true;"
+        self.assertIn(guard, cmd_ctrl)
+        self.assertIn(new_task, cmd_ctrl)
+        self.assertEqual(cmd_ctrl.count(yaw_assignment), 1)
+        self.assertLess(cmd_ctrl.index(guard), cmd_ctrl.index(yaw_assignment))
+        self.assertLess(cmd_ctrl.index(new_task), cmd_ctrl.index(yaw_assignment))
+        self.assertLess(cmd_ctrl.index(yaw_assignment), cmd_ctrl.index(activate))
+
+        yaw_guard_start = cmd_ctrl.index("if (latch_entry_yaw)")
+        yaw_guard_end = cmd_ctrl.index(activate, yaw_guard_start)
+        yaw_guard = cmd_ctrl[yaw_guard_start:yaw_guard_end]
+        self.assertIn(yaw_assignment, yaw_guard)
+        self.assertNotIn("latched_entry_command_ = cmd_data;", yaw_guard)
+
     def test_position_command_is_forwarded_without_entry_limiter(self):
         source = FSM_SOURCE.read_text(encoding="utf-8")
         header = FSM_HEADER.read_text(encoding="utf-8")

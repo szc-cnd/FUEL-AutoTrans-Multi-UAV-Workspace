@@ -151,7 +151,8 @@ namespace PayloadMPC
 		// 最后一条有效入口 PositionCommand 持续作为 NMPC 世界系参考，直到新命令或完整轨迹接管。
 		Command_Data_t latched_entry_command_;
 		ros::Time last_entry_command_stamp_{0};
-		// 入口点飞行忽略规划器 yaw；收到新目标时锁定无人机当前世界系偏航角，单位 rad。
+		// 入口点飞行忽略规划器 yaw；入口参考首次激活或 trajectory_id 变化时锁定
+		// 无人机当前世界系偏航角，后续同任务高频 PositionCommand 只更新平移参考，单位 rad。
 		double entry_command_yaw_{0.0};
 		bool entry_command_active_{false};
 		uint32_t last_reported_trajectory_id_{0};

@@ -738,15 +738,23 @@ namespace PayloadMPC
 
 					if (command_valid && attitude_valid)
 					{
+						// PositionCommand 是规划器连续发布的高频参考流，不是每一帧都代表新任务。
+						// 只在该入口参考首次激活时锁存当前航向；后续帧继续更新位置、速度、
+						// 加速度和 jerk，但必须保持同一个 yaw 参考，避免目标航向追随实际航向漂移。
+						const bool latch_entry_yaw = !entry_command_active_ ||
+							latched_entry_command_.msg.trajectory_id != cmd_data.msg.trajectory_id;
 						latched_entry_command_ = cmd_data;
-						entry_command_yaw_ = landingSearchYawReference(
-							get_yaw_from_quaternion(force_attitude_odom_data.q));
+						if (latch_entry_yaw)
+						{
+							entry_command_yaw_ = landingSearchYawReference(
+								get_yaw_from_quaternion(force_attitude_odom_data.q));
+							ROS_INFO("[CMD] 收到新目标：位置=(%.2f, %.2f, %.2f) m。",
+								latched_entry_command_.p.x(), latched_entry_command_.p.y(),
+								latched_entry_command_.p.z());
+							ROS_INFO("[CMD] 收到 PositionCommand，开始跟踪目标。");
+							ROS_INFO("[CMD] 忽略规划器 yaw，锁存当前航向 %.2f rad。", entry_command_yaw_);
+						}
 						entry_command_active_ = true;
-						ROS_INFO("[CMD] 收到新目标：位置=(%.2f, %.2f, %.2f) m。",
-							latched_entry_command_.p.x(), latched_entry_command_.p.y(),
-							latched_entry_command_.p.z());
-						ROS_INFO("[CMD] 收到 PositionCommand，开始跟踪目标。");
-						ROS_INFO("[CMD] 忽略规划器 yaw，保持当前航向 %.2f rad。", entry_command_yaw_);
 					}
 					else
 					{
