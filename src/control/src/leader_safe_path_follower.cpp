@@ -84,8 +84,8 @@ class LeaderSafePathFollower {
                             "/UAV1/fast_lio/cloud_registered");
     pnh_.param("enable_search_landing", enable_search_landing_, false);
     // 2026-07-29: 起飞就绪由各自 FAST-LIO 高度锁存，不再依赖 start_after_hover Bool。
-    pnh_.param("leader_start_height", leader_start_height_, 0.5);
-    pnh_.param("follower_start_height", follower_start_height_, 0.5);
+    pnh_.param("leader_start_height", leader_start_height_, 0.3);
+    pnh_.param("follower_start_height", follower_start_height_, 0.3);
     pnh_.param<std::string>("command_topic", command_topic_,
                             "/UAV1/planning/pos_cmd");
     // 2026-07-28: 新模式只向UAV1独立Diff发布离散目标；旧PositionCommand直控保留为可回退开关。
@@ -247,7 +247,8 @@ class LeaderSafePathFollower {
     pnh_.param("leader_odom_max_transport_age",
                leader_odom_max_transport_age_, 0.50);
     pnh_.param("cloud_timeout", cloud_timeout_, 0.60);
-    pnh_.param("min_record_height", min_record_height_, 0.35);
+    // 不得高于leader_start_height，否则双机已达到开始门槛后仍无法形成可接力历史轨迹。
+    pnh_.param("min_record_height", min_record_height_, 0.30);
     pnh_.param("obstacle_check_enabled", obstacle_check_enabled_, true);
     pnh_.param("require_fresh_cloud", require_fresh_cloud_, true);
     pnh_.param("obstacle_radius", obstacle_radius_, 0.28);
@@ -3401,7 +3402,7 @@ class LeaderSafePathFollower {
   double follower_alignment_x_{-1.20}, follower_alignment_y_{0.0};
   double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
   double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
-  double leader_start_height_{0.5}, follower_start_height_{0.5};
+  double leader_start_height_{0.3}, follower_start_height_{0.3};
   // 默认0.70m路径间隔、0.70m航点发布门槛和持续警戒间隔；0.50m内主动退让。
   double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.70};
   double waypoint_release_min_separation_{0.70};
@@ -3426,7 +3427,7 @@ class LeaderSafePathFollower {
   double max_target_step_{0.55}, route_tracking_lookahead_{0.30};
   double cruise_speed_{0.35}, max_vertical_speed_{0.20};
   double odom_timeout_{0.50}, leader_odom_max_transport_age_{0.50};
-  double cloud_timeout_{0.60}, min_record_height_{0.35};
+  double cloud_timeout_{0.60}, min_record_height_{0.30};
   double obstacle_radius_{0.28}, obstacle_z_margin_{0.20}, obstacle_ignore_near_{0.18};
   double dynamic_obstacle_retention_{0.80}, dynamic_obstacle_safety_radius_{0.35};
   double dynamic_obstacle_z_margin_{0.18};

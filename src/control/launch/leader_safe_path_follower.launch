@@ -93,8 +93,9 @@
                value="$(arg enable_dynamic_obstacle_detection)"/>
         <!-- 2026-07-29: 不再依赖 start_after_hover；双机分别达到高度后锁存就绪，
              UAV1 仍要等接力目标发布并由 Diff 生成真实轨迹后才运动。 -->
-        <param name="leader_start_height" value="0.5"/>
-        <param name="follower_start_height" value="0.5"/>
+        <param name="leader_start_height" value="0.3"/>
+        <param name="follower_start_height" value="0.3"/>
+        <param name="min_record_height" value="0.3"/>
         <param name="command_topic" value="/UAV1/planning/pos_cmd"/>
         <!-- 2026-07-28: 禁止接力管理器直控后机，改向UAV1 Diff发布离散目标。 -->
         <param name="use_diff_planner" value="true"/>

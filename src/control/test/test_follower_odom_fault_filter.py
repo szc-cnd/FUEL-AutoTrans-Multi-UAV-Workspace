@@ -41,6 +41,15 @@ def test_launch_requires_three_consecutive_jump_samples():
     assert 'name="follower_odom_jump_confirm_samples" value="3"' in LAUNCH
 
 
+def test_dual_uav_accepts_relay_trajectory_after_both_reach_030m():
+    assert 'name="leader_start_height" value="0.3"' in LAUNCH
+    assert 'name="follower_start_height" value="0.3"' in LAUNCH
+    assert 'name="min_record_height" value="0.3"' in LAUNCH
+    assert 'pnh_.param("leader_start_height", leader_start_height_, 0.3)' in SOURCE
+    assert 'pnh_.param("follower_start_height", follower_start_height_, 0.3)' in SOURCE
+    assert 'pnh_.param("min_record_height", min_record_height_, 0.30)' in SOURCE
+
+
 def test_diff_planning_failure_reselects_route_point_after_retreat():
     status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
         "bool getLaggedTarget", maxsplit=1
