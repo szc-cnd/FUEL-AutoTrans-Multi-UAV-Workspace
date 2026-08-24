@@ -140,7 +140,9 @@ def test_diff_recovery_subgoal_cannot_complete_relay_and_status_is_sequenced():
         "bool getLaggedTarget", 1
     )[0]
     assert 'const std::string stamp_prefix = "goal_stamp_ns="' in status
-    assert "response_goal_stamp_ns != diff_active_goal_stamp_ns_" in status
+    assert "response_goal_stamp_ns == diff_active_goal_stamp_ns_" in status
+    assert "response_matches_active_goal" in status
+    assert "late_success_for_active_goal" in status
     assert "ignore stale UAV1 Diff status" in status
     assert source.count("stampDiffGoalId(&goal);") == 2
 

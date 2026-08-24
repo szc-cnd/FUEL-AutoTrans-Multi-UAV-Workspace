@@ -1188,11 +1188,24 @@ class LeaderSafePathFollower {
       }
     }
 
-    // planning/status为锁存话题且规划线程可能延迟完成。只有目标时间戳、接力索引都
-    // 与当前活动目标一致的回执才可改变HOLD/恢复状态，上一条退让轨迹不能污染重发目标。
-    if (!response_goal_stamp_valid || !diff_goal_published_ ||
-        diff_goal_index_ != active_relay_index_ ||
-        response_goal_stamp_ns != diff_active_goal_stamp_ns_) {
+    geometry_msgs::Point accepted;
+    const bool accepted_valid =
+        status == "TRAJECTORY_PUBLISHED" &&
+        static_cast<bool>(stream >> accepted.x >> accepted.y >> accepted.z);
+
+    // planning/status为锁存话题且规划线程可能延迟完成。目标时间戳和接力索引必须
+    // 与当前活动目标一致。规划器可能先报PLANNING_FAILED、随后对同一目标成功；在
+    // 新恢复目标尚未发布前，这个同时间戳成功回执不是旧消息，必须接收以避免状态机
+    // 锁在HOLD而控制器已经收到新轨迹。
+    const bool response_matches_active_goal =
+        response_goal_stamp_valid && diff_goal_index_ == active_relay_index_ &&
+        response_goal_stamp_ns == diff_active_goal_stamp_ns_;
+    const bool late_success_for_active_goal =
+        response_matches_active_goal && !diff_goal_published_ &&
+        status == "TRAJECTORY_PUBLISHED" && accepted_valid &&
+        !diff_separation_hold_active_;
+    if (!response_matches_active_goal ||
+        (!diff_goal_published_ && !late_success_for_active_goal)) {
       const std::string response_stamp_label =
           response_goal_stamp_valid ? std::to_string(response_goal_stamp_ns) : "invalid";
       ROS_WARN("[safe_follower] ignore stale UAV1 Diff status=%s goal_stamp_ns=%s; "
@@ -1203,10 +1216,16 @@ class LeaderSafePathFollower {
                static_cast<unsigned long long>(diff_active_goal_stamp_ns_));
       return;
     }
-    geometry_msgs::Point accepted;
-    const bool accepted_valid =
-        status == "TRAJECTORY_PUBLISHED" &&
-        static_cast<bool>(stream >> accepted.x >> accepted.y >> accepted.z);
+    if (late_success_for_active_goal) {
+      diff_goal_published_ = true;
+      diff_recovery_requested_ = false;
+      diff_recovery_retreat_requested_ = false;
+      diff_recovery_goal_valid_ = false;
+      diff_recovery_goal_is_retreat_ = false;
+      ROS_WARN("[safe_follower] accept delayed success for current UAV1 Diff goal "
+               "stamp_ns=%llu after an earlier failure response.",
+               static_cast<unsigned long long>(response_goal_stamp_ns));
+    }
 
     // 间距保护期间只允许当前退让目标解除锁点；旧接力轨迹的延迟状态不能让后机再次前冲。
     if (diff_separation_hold_active_) {
@@ -1269,6 +1288,9 @@ class LeaderSafePathFollower {
       // 2026-07-28: 原轨迹规划失败后立刻丢弃残余速度并锁点，恢复子目标被接受前不允许漂移。
       setDiffWaitPositionHold(true, status);
       ++diff_planning_failure_events_;
+      // 失败的中间点不能继续缓存重发。后退完成后的下一周期必须重新从UAV0已经
+      // 实飞的稠密历史轨迹选择前向子点，而不是再次撞同一个局部目标。
+      if (status == "PLANNING_FAILED") diff_route_subgoal_valid_ = false;
       diff_recovery_requested_ = true;
       diff_recovery_retreat_requested_ = status == "PLANNING_FAILED";
       diff_recovery_goal_valid_ = false;
@@ -2334,7 +2356,8 @@ class LeaderSafePathFollower {
       }
     }
 
-    // 原接力点规划失败后先沿前机已验证的稠密路线后退，再从开阔位置重发原目标。
+    // 原接力点规划失败后先沿前机已验证的稠密路线后退，再从开阔位置重新选择
+    // 前向历史轨迹子点，禁止在同一控制周期直接重发刚失败的原目标。
     // Diff可能把占据的退让目标投影到附近安全点，因此以实际接受点作为到达判据。
     const geometry_msgs::Point recovery_arrival_goal =
         diff_accepted_goal_valid_ ? diff_accepted_goal_local_ : diff_recovery_goal_local_;
@@ -2358,8 +2381,11 @@ class LeaderSafePathFollower {
       diff_goal_published_ = false;
       diff_accepted_goal_valid_ = false;
       setDiffWaitPositionHold(
-          true, completed_retreat ? "failure retreat reached; replan original relay"
+          true, completed_retreat ? "failure retreat reached; select new route subgoal"
                                   : "outside-map forward subgoal reached");
+      // 返回后让下一控制周期先经过上方的verified-route选点分支。此前这里继续向下
+      // 执行，会立刻把远端原目标再次发给Diff，历史轨迹子点逻辑没有运行机会。
+      if (completed_retreat) return true;
     }
     if (diff_recovery_requested_ && !terminal_relay) {
       RoutePoint recovery_world;
@@ -2516,7 +2542,12 @@ class LeaderSafePathFollower {
         setDiffWaitPositionHold(
             true, route_subgoal_completed ? "verified-route subgoal reached"
                                           : "clipped endpoint reached; retry current subgoal");
-        if (route_subgoal_completed) diff_route_subgoal_valid_ = false;
+        if (route_subgoal_completed) {
+          diff_route_subgoal_valid_ = false;
+          // 已经沿新选历史点取得真实进展，后续点的失败计数重新开始；避免两个
+          // 不同子点各失败一次就被累计成当前接力段永久HOLD。
+          diff_failure_retreat_attempts_ = 0;
+        }
         relay_arrival_stamp_ = ros::Time(0);
         diff_endpoint_capture_stamp_ = ros::Time(0);
         diff_goal_published_ = false;
