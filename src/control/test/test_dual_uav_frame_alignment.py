@@ -20,6 +20,7 @@ UAV1_DIFF_RVIZ = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/include/exp.rviz"
 )
 UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
+UAV1_SENSOR_STACK = ROOT.parents[1] / "shfiles/run_uav1_sensor_stack.sh"
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -411,6 +412,18 @@ def test_uav1_six_starts_down_camera_and_shows_combined_image_in_diff_rviz():
     )
     assert image["Enabled"] is True
     assert image["Value"] is True
+
+
+def test_uav1_down_camera_waits_for_busy_device_and_retries_without_killing_owner():
+    script = UAV1_SENSOR_STACK.read_text(encoding="utf-8")
+    landing = script.split("run_landing()", 1)[1].split(
+        '[ "$#" -eq 1 ]', 1
+    )[0]
+    assert "UAV1_DOWN_CAMERA_START_TIMEOUT" in script
+    assert 'fuser "$camera_device"' in landing
+    assert "camera_launch_attempt=$((camera_launch_attempt + 1))" in landing
+    assert "while [ \"$(date +%s)\" -lt \"$camera_start_deadline\" ]" in landing
+    assert 'kill ' not in landing
 
 
 def test_uav1_diff_rviz_shows_high_frequency_odometry_and_moving_drone_mesh():

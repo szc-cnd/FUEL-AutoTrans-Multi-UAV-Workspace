@@ -13,6 +13,7 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MATCH_WS=$(dirname -- "$SCRIPT_DIR")
 WAIT_TIMEOUT=$(printenv WAIT_TIMEOUT 2>/dev/null || echo 45)
+DOWN_CAMERA_START_TIMEOUT=$(printenv UAV1_DOWN_CAMERA_START_TIMEOUT 2>/dev/null || echo 20)
 
 usage()
 {
@@ -138,14 +139,57 @@ run_landing()
     camera_device=$(find_down_camera)
     camera_info="$HOME/.ros/camera_info/down_camera.yaml"
     [ -r "$camera_info" ] || fail "未找到下视相机标定文件：$camera_info。"
+    case "$DOWN_CAMERA_START_TIMEOUT" in
+        ''|*[!0-9]*)
+            fail "UAV1_DOWN_CAMERA_START_TIMEOUT 必须是正整数秒。"
+            ;;
+    esac
+    [ "$DOWN_CAMERA_START_TIMEOUT" -gt 0 ] ||
+        fail "UAV1_DOWN_CAMERA_START_TIMEOUT 必须大于 0。"
 
     echo "[UAV1 Landing] 下视相机：$camera_device"
     echo "[UAV1 Landing] 仅启动下视相机；搜索和精降由后机接力入口启动。"
-    exec roslaunch precision_landing landing_stack.launch \
-        vehicle_ns:=UAV1 \
-        video_device:="$camera_device" \
-        camera_info_url:="file://$camera_info" \
-        enable_precision_landing:=false
+    camera_start_deadline=$(($(date +%s) + DOWN_CAMERA_START_TIMEOUT))
+    camera_launch_attempt=0
+    landing_stop_requested=0
+    trap 'landing_stop_requested=1' INT TERM
+
+    while [ "$(date +%s)" -lt "$camera_start_deadline" ]; do
+        # usb_cam尚未建立ROS话题时，设备也可能被预览软件或上一次残留进程
+        # 短暂占用。只等待并报告PID，不擅自终止未知进程。
+        camera_holder_pids=$(fuser "$camera_device" 2>/dev/null || true)
+        if [ -n "$camera_holder_pids" ]; then
+            echo "[UAV1 Landing][等待] 相机设备忙，占用 PID:${camera_holder_pids}；2 秒后重试。"
+            sleep 2
+            continue
+        fi
+
+        camera_launch_attempt=$((camera_launch_attempt + 1))
+        echo "[UAV1 Landing] 启动 usb_cam（第 $camera_launch_attempt 次）。"
+        if roslaunch precision_landing landing_stack.launch \
+            vehicle_ns:=UAV1 \
+            video_device:="$camera_device" \
+            camera_info_url:="file://$camera_info" \
+            enable_precision_landing:=false; then
+            camera_launch_status=0
+        else
+            camera_launch_status=$?
+        fi
+
+        if [ "$landing_stop_requested" -eq 1 ]; then
+            trap - INT TERM
+            return 0
+        fi
+        echo "[UAV1 Landing][重试] usb_cam 已退出（状态 $camera_launch_status），设备可能刚刚释放。"
+        sleep 1
+    done
+
+    trap - INT TERM
+    camera_holder_pids=$(fuser "$camera_device" 2>/dev/null || true)
+    if [ -n "$camera_holder_pids" ]; then
+        fail "等待下视相机设备释放超时，占用 PID:${camera_holder_pids}。"
+    fi
+    fail "下视相机在 ${DOWN_CAMERA_START_TIMEOUT}s 内连续启动失败；请查看最近的 UAV1-down_camera 日志。"
 }
 
 [ "$#" -eq 1 ] || {
