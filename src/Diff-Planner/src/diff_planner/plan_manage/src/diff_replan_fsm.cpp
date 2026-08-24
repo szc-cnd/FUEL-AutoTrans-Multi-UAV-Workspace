@@ -41,6 +41,7 @@ namespace diff_planner
     nh.param("fsm/escape_min_clearance", escape_min_clearance_, 0.20);
     nh.param("fsm/escape_clearance_search_radius", escape_clearance_search_radius_, 0.60);
     nh.param("fsm/escape_max_occupied_prefix", escape_max_occupied_prefix_, 0.20);
+    nh.param("fsm/escape_recovery_height", escape_recovery_height_, 0.60);
     nh.param("fsm/escape_free_cycles", escape_free_cycles_, 5);
     nh.param("fsm/escape_max_attempts", escape_max_attempts_, 2);
     if (!std::isfinite(escape_max_distance_) || escape_max_distance_ <= 0.0)
@@ -59,12 +60,15 @@ namespace diff_planner
       escape_clearance_search_radius_ = 0.60;
     if (!std::isfinite(escape_max_occupied_prefix_) || escape_max_occupied_prefix_ <= 0.0)
       escape_max_occupied_prefix_ = 0.20;
+    if (!std::isfinite(escape_recovery_height_) || escape_recovery_height_ <= 0.0)
+      escape_recovery_height_ = 0.60;
     escape_free_cycles_ = std::max(1, escape_free_cycles_);
     escape_max_attempts_ = std::max(1, escape_max_attempts_);
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
     nh.param("fsm/mondify_final_goal", mondify_final_goal_, true);
+    nh.param("fsm/preserve_modified_goal_height", preserve_modified_goal_height_, false);
     nh.param("fsm/enable_stuck_detect", enable_stuck_detect_, true);
     // 2026-07-28: 保留原生Diff编队默认行为；异构FUEL->Diff接力由launch显式关闭此前序轨迹门槛。
     nh.param("fsm/require_pre_agent_trajectory", require_pre_agent_trajectory_, true);
@@ -160,6 +164,7 @@ namespace diff_planner
     occupied_recovery_active_ = false;
     occupied_recovery_episode_ = false;
     occupied_recovery_from_history_ = false;
+    occupied_recovery_vertical_ = false;
     occupied_recovery_failure_reported_ = false;
 
     /* callback */
@@ -1185,6 +1190,30 @@ namespace diff_planner
     return false;
   }
 
+  bool DiffReplanFSM::selectVerticalRecoveryTarget(Eigen::Vector3d &target,
+                                                   double &clearance)
+  {
+    if (odom_pos_.z() >= escape_recovery_height_ - escape_reach_tolerance_)
+      return false;
+
+    Eigen::Vector3d candidate = odom_pos_;
+    candidate.z() = escape_recovery_height_;
+    double occupied_prefix = 0.0;
+    if (!validateRecoverySegment(odom_pos_, candidate, true, &occupied_prefix))
+      return false;
+
+    const double candidate_clearance = estimateInflatedClearance(candidate);
+    if (candidate_clearance + 1.0e-6 < escape_min_clearance_)
+      return false;
+
+    target = candidate;
+    clearance = candidate_clearance;
+    ROS_WARN("[局部脱障] 当前低于名义高度，优先固定XY上升至 %.3f m；"
+             "占据前缀 %.3f m，终点净空 %.3f m。",
+             escape_recovery_height_, occupied_prefix, clearance);
+    return true;
+  }
+
   bool DiffReplanFSM::selectLateralRecoveryTarget(Eigen::Vector3d &target,
                                                   double &clearance)
   {
@@ -1264,6 +1293,13 @@ namespace diff_planner
                                                    bool &from_history,
                                                    double &clearance)
   {
+    occupied_recovery_vertical_ = false;
+    if (selectVerticalRecoveryTarget(target, clearance))
+    {
+      from_history = false;
+      occupied_recovery_vertical_ = true;
+      return true;
+    }
     if (selectHistoryRecoveryTarget(target, clearance))
     {
       from_history = true;
@@ -1313,15 +1349,22 @@ namespace diff_planner
 
     visualization_->displayGoalPoint(
         target,
-        from_history ? Eigen::Vector4d(0.0, 1.0, 0.2, 1.0)
-                     : Eigen::Vector4d(0.1, 0.8, 1.0, 1.0),
+        occupied_recovery_vertical_
+            ? Eigen::Vector4d(1.0, 0.7, 0.1, 1.0)
+            : (from_history ? Eigen::Vector4d(0.0, 1.0, 0.2, 1.0)
+                            : Eigen::Vector4d(0.1, 0.8, 1.0, 1.0)),
         0.18, 1000 + planner_manager_->pp_.drone_id);
-    publishPlanningStatus(from_history ? "OCCUPIED_RECOVERY_HISTORY"
-                                       : "OCCUPIED_RECOVERY_LATERAL");
+    publishPlanningStatus(occupied_recovery_vertical_
+                              ? "OCCUPIED_RECOVERY_VERTICAL"
+                              : (from_history ? "OCCUPIED_RECOVERY_HISTORY"
+                                              : "OCCUPIED_RECOVERY_LATERAL"));
     ROS_WARN("[局部脱障] 开始第 %d/%d 次低速脱障，target=(%.3f, %.3f, %.3f)，"
              "来源=%s，净空=%.3f m，截止时间=%.3f。",
              occupied_recovery_attempt_count_, escape_max_attempts_, target.x(),
-             target.y(), target.z(), from_history ? "历史自由轨迹" : "实时侧向搜索",
+             target.y(), target.z(), occupied_recovery_vertical_
+                                           ? "固定XY恢复名义高度"
+                                           : (from_history ? "历史自由轨迹"
+                                                           : "实时侧向搜索"),
              clearance, occupied_recovery_deadline_);
     return true;
   }
@@ -1535,6 +1578,8 @@ namespace diff_planner
       for (double t = planner_manager_->traj_.global_traj.duration; t > 0; t -= t_step)
       {
         Eigen::Vector3d pt = planner_manager_->traj_.global_traj.traj.getPos(t);
+        if (preserve_modified_goal_height_)
+          pt.z() = orig_goal.z();
         if (!planner_manager_->grid_map_->getInflateOccupancy(pt))
         {
           for (int i = 6; i > 0; i--)
@@ -1542,6 +1587,8 @@ namespace diff_planner
             if (t - i * t_step > 0)
             {
               Eigen::Vector3d pt_tmp = planner_manager_->traj_.global_traj.traj.getPos(t - i * t_step);
+              if (preserve_modified_goal_height_)
+                pt_tmp.z() = orig_goal.z();
               if (!planner_manager_->grid_map_->getInflateOccupancy(pt_tmp))
               {
                 pt = pt_tmp;

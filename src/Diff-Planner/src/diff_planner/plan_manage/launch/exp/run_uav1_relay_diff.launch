@@ -43,7 +43,7 @@
         <arg name="lidar_p_miss" value="0.35"/>
         <!-- 2026-07-28: 后机最新日志在第4个点出现start_occ=3并持续50s；3s衰减移动球/前机鬼影，
              360度雷达持续命中的真实墙体仍会保持占据。 -->
-        <arg name="fading_time" value="3.0"/>
+        <arg name="fading_time" value="0.8"/>
         <arg name="obstacle_clearance" value="0.18"/>
         <!-- 2026-07-28: FAST-LIO点云/里程计均为UAV1局部坐标，不叠加出生点偏移。 -->
         <arg name="init_x" value="0.0"/>
@@ -60,14 +60,16 @@
         <arg name="require_pre_agent_trajectory" value="false"/>
         <!-- 2026-07-28: 后机规划失败由safe_follower改发已验证短子目标，禁用会阻塞FSM并导致Lost heartbeat的随机初始化。 -->
         <arg name="enable_random_global_init" value="false"/>
-        <!-- 目标被地图判为占据时沿原全局轨迹换到后方自由点；自身进入膨胀占据区时低速退回近期自由位置。 -->
+        <!-- 目标被占据时只调整XY并保持0.6m目标高度；自身低处进入膨胀占据时先原地升回0.6m。 -->
         <arg name="enable_occupied_recovery" value="true"/>
+        <arg name="preserve_modified_goal_height" value="true"/>
         <!-- 单线程规划内部若不返回，由独立看门狗SIGKILL并自动拉起干净进程。 -->
         <arg name="planner_respawn" value="true"/>
         <arg name="planner_respawn_delay" value="0.2"/>
         <arg name="escape_max_distance" value="0.40"/>
         <arg name="escape_history_time" value="1.50"/>
         <arg name="escape_speed" value="0.10"/>
+        <arg name="escape_recovery_height" value="0.60"/>
         <arg name="point_num" value="1"/>
         <arg name="point0_x" value="0.0"/><arg name="point0_y" value="0.0"/><arg name="point0_z" value="0.60"/>
         <arg name="point1_x" value="0.0"/><arg name="point1_y" value="0.0"/><arg name="point1_z" value="0.60"/>

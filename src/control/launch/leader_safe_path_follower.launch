@@ -171,6 +171,8 @@
         <param name="fixed_follow_height" value="0.60"/>
         <param name="follow_height_min" value="0.60"/>
         <param name="follow_height_max" value="0.70"/>
+        <!-- 前机偏离0.6m超过0.1m通常正在上下避障；保留XY路线，但不选该点作为后机规划终点。 -->
+        <param name="leader_route_height_tolerance" value="0.10"/>
         <param name="separation_recovery_distance" value="0.50"/>
         <param name="separation_release_distance" value="0.70"/>
         <param name="emergency_retreat_step" value="0.35"/>

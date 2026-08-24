@@ -97,6 +97,7 @@ namespace diff_planner
     double escape_min_clearance_;
     double escape_clearance_search_radius_;
     double escape_max_occupied_prefix_;
+    double escape_recovery_height_;
     int escape_free_cycles_;
     int escape_max_attempts_;
     bool flag_realworld_experiment_;
@@ -106,6 +107,7 @@ namespace diff_planner
     bool need_hover_stop_;
     bool depth_timeout_emergency_{false};
     bool mondify_final_goal_;
+    bool preserve_modified_goal_height_;
     bool enable_stuck_detect_; // Whether to enable stuck detection
     // 2026-07-28: FUEL->Diff接力模式可关闭原生Diff编队的“等待所有前序无人机轨迹”门槛。
     bool require_pre_agent_trajectory_;
@@ -157,6 +159,7 @@ namespace diff_planner
     bool occupied_recovery_active_;
     bool occupied_recovery_episode_;
     bool occupied_recovery_from_history_;
+    bool occupied_recovery_vertical_;
     bool occupied_recovery_failure_reported_;
 
     /* ROS utils */
@@ -191,6 +194,8 @@ namespace diff_planner
                                       double &clearance);
     bool selectHistoryRecoveryTarget(Eigen::Vector3d &target,
                                      double &clearance);
+    bool selectVerticalRecoveryTarget(Eigen::Vector3d &target,
+                                      double &clearance);
     bool selectLateralRecoveryTarget(Eigen::Vector3d &target,
                                      double &clearance);
     bool validateRecoverySegment(const Eigen::Vector3d &start,
