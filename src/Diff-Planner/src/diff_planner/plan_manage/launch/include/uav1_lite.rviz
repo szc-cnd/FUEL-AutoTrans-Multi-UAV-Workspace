@@ -1,23 +1,4 @@
-Panels:
-  - Class: rviz/Displays
-    Help Height: 0
-    Name: Displays
-    Property Tree Widget:
-      Expanded:
-        - /Global Options1
-        - /UAV0 (leader)1
-        - /UAV1 (follower)1
-        - /UAV1 (follower)1/Planning1
-        - /UAV1 (follower)1/Mapping1
-      Splitter Ratio: 0.5
-    Tree Height: 520
-  - Class: rviz/Views
-    Name: Views
-    Splitter Ratio: 0.5
-  - Class: rviz/Time
-    Name: Time
-    SyncMode: 0
-    SyncSource: ""
+Panels: []
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -241,18 +222,6 @@ Visualization Manager:
                 {}
               Queue Size: 100
               Value: true
-            - Class: rviz/Image
-              Enabled: false
-              Image Topic: /drone_0_pcl_render_node/colordepth
-              Max Value: 1
-              Median window: 5
-              Min Value: 0
-              Name: depth
-              Normalize Range: true
-              Queue Size: 2
-              Transport Hint: raw
-              Unreliable: false
-              Value: false
           Enabled: true
           Name: Simulation
       Enabled: true
@@ -416,25 +385,13 @@ Visualization Manager:
               Transport Hint: raw
               Unreliable: false
               Value: true
-            - Class: rviz/Image
-              Enabled: false
-              Image Topic: /drone_1_pcl_render_node/depth
-              Max Value: 1
-              Median window: 5
-              Min Value: 0
-              Name: depth
-              Normalize Range: true
-              Queue Size: 2
-              Transport Hint: raw
-              Unreliable: false
-              Value: false
           Enabled: true
           Name: Simulation
       Enabled: true
       Name: UAV1 (follower)
   Enabled: true
   Global Options:
-    Background Color: 48; 48; 48
+    Background Color: 255; 255; 255
     Default Light: true
     Fixed Frame: UAV1/camera_init
     Frame Rate: 30
@@ -475,15 +432,9 @@ Visualization Manager:
       Yaw: 3.14
     Saved: ~
 Window Geometry:
-  Displays:
-    collapsed: false
   Height: 900
   Hide Left Dock: false
   Hide Right Dock: true
-  Time:
-    collapsed: true
-  Views:
-    collapsed: true
   Width: 1440
   X: 40
   Y: 40
