@@ -291,9 +291,10 @@ void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
   }
 
   // 门平面只负责禁止回到入口外侧，不能证明门前历史地图中的横向 frontier
-  // 属于当前通道。保留累计占据地图，但在选点前复用现有 A* 和任务边界审核，
-  // 只让从入口内侧当前位置可达且不回穿入口的候选进入评分。
+  // 属于当前通道。保留累计占据地图，但在选点前只审核 A* 连通性和入口平面，
+  // 禁回头/已完成路线仍放在选点后判断，避免刚进门时把全部候选提前拒绝。
   int rejected_disconnected = 0;
+  int rejected_boundary = 0;
   if (workspace_lock_active && task_search_manager_ && task_search_manager_->enabled() &&
       planner_manager_ && planner_manager_->path_finder_) {
     vector<vector<Vector3d>> connected_frontiers;
@@ -309,11 +310,12 @@ void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
           planner_manager_->path_finder_->search(pos, goal) == Astar::REACH_END;
       const vector<Vector3d> path =
           reachable ? planner_manager_->path_finder_->getPath() : vector<Vector3d>{};
-      const bool path_allowed = reachable && !path.empty() &&
-          pathInsideWorkspaceLock(path) &&
-          task_search_manager_->isRecoveryPathAllowed(path, false);
-      if (!path_allowed) {
+      if (!reachable || path.empty()) {
         ++rejected_disconnected;
+        continue;
+      }
+      if (!pathInsideWorkspaceLock(path)) {
+        ++rejected_boundary;
         continue;
       }
       connected_frontiers.push_back(ed_->frontiers_[i]);
@@ -330,10 +332,10 @@ void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
   }
   ROS_WARN_THROTTLE(1.0,
                     "[workspace_lock] frontier kept=%zu rejected_workspace=%d rejected_takeoff=%d "
-                    "rejected_region=%d rejected_disconnected=%d lock=%d received=%d "
-                    "static_region=%d.",
+                    "rejected_region=%d rejected_disconnected=%d rejected_boundary=%d "
+                    "lock=%d received=%d static_region=%d.",
                     ed_->points_.size(), rejected_workspace, rejected_takeoff, rejected_region,
-                    rejected_disconnected,
+                    rejected_disconnected, rejected_boundary,
                     static_cast<int>(workspace_lock_active),
                     static_cast<int>(mission_workspace_lock_received_),
                     static_cast<int>(use_static_search_region));
