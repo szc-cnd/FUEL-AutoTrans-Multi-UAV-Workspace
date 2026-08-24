@@ -192,11 +192,6 @@ bool FastExplorationManager::pointInsideWorkspaceLock(const Vector3d& pt) const 
   if (!ep_->mission_global_no_return_ || !ep_->mission_use_workspace_lock_ ||
       !mission_workspace_lock_received_)
     return true;
-  // 2026-07-23: 动态workspace_lock描述的是入口门，不是整个U形赛道的世界半平面。
-  // TaskSearchManager确认已穿入口后，该锁对frontier、fallback和A*路径统一退休。
-  if (task_search_manager_ && !task_search_manager_->entryWorkspaceLockActive())
-    return true;
-
   const Vector3d rel = pt - mission_workspace_origin_;
   const double progress = rel.x() * mission_workspace_dir_.x() + rel.y() * mission_workspace_dir_.y();
   return progress >= -ep_->mission_door_back_margin_;
@@ -227,11 +222,10 @@ void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
   int rejected_workspace = 0;
   int rejected_takeoff = 0;
   int rejected_region = 0;
-  // 2026-07-23: 日志和“空集合是否硬锁存”必须使用实际状态，不能继续只看参数开关；
-  // 否则入口已退休后仍会把空frontier误当成门外硬拒绝。
+  // 入口是整段任务的永久禁回头边界：进入后仍持续比较候选点和完整A*路径，
+  // 防止后续地图更新再次把入口外侧frontier选回来。
   const bool workspace_lock_active =
-      ep_->mission_use_workspace_lock_ && mission_workspace_lock_received_ &&
-      (!task_search_manager_ || task_search_manager_->entryWorkspaceLockActive());
+      ep_->mission_use_workspace_lock_ && mission_workspace_lock_received_;
 
   // 2026-07-10: 收到动态门平面后，门后搜索方向由 workspace_lock 决定；旧的静态 search_region
   // 只适合早期固定地图验证，不能再误杀当前门方向上的候选点。
