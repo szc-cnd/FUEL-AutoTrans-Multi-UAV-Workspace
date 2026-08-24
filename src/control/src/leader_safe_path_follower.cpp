@@ -96,6 +96,9 @@ class LeaderSafePathFollower {
                             "/UAV1/planning/traj_started");
     // 2026-07-28: Diff若因瞬时占据把目标改到当前位置，周期重发原接力点，不能一次发送后永久锁死。
     pnh_.param("diff_goal_retry_period", diff_goal_retry_period_, 1.0);
+    // 单次目标从首次发布起的总应答上限。与周期重发计时分离，规划器假死时
+    // 必须把当前候选判失败并换点，不能每次重发都把超时起点向后推。
+    pnh_.param("diff_goal_response_timeout", diff_goal_response_timeout_, 2.0);
     // 2026-07-28: 订阅UAV1 Diff明确规划状态；失败后沿前机实飞路线短步恢复。
     pnh_.param<std::string>("diff_status_topic", diff_status_topic_,
                             "/drone_1_planning/status");
@@ -119,6 +122,8 @@ class LeaderSafePathFollower {
         !std::isfinite(diff_failure_retreat_arrive_radius_) ||
         diff_failure_retreat_distance_ <= diff_failure_retreat_arrive_radius_ ||
         diff_failure_retreat_arrive_radius_ <= 0.0 ||
+        !std::isfinite(diff_goal_response_timeout_) ||
+        diff_goal_response_timeout_ <= 0.0 ||
         !std::isfinite(diff_candidate_blacklist_duration_) ||
         diff_candidate_blacklist_duration_ <= 0.0 ||
         !std::isfinite(diff_candidate_blacklist_radius_) ||
@@ -1254,6 +1259,59 @@ class LeaderSafePathFollower {
     diff_active_goal_stamp_ns_ = goal_stamp_ns;
   }
 
+  void handleDiffPlanningFailure(const std::string& status,
+                                 const ros::Time& now) {
+    // 普通规划失败只锁点到下一条轨迹产生。当前候选立即拉黑并换相邻点；
+    // 连续多个前向候选失败后，沿UAV1自己的实飞轨迹退一步，不进入人工恢复终态。
+    setDiffWaitPositionHold(true, status);
+    ++diff_planning_failure_events_;
+    const bool failed_retreat =
+        diff_recovery_goal_valid_ && diff_recovery_goal_is_retreat_;
+    const bool failed_forward_candidate =
+        diff_route_subgoal_valid_ && !diff_recovery_goal_valid_;
+    if (failed_retreat) {
+      const double retreat_key = -1000.0 - static_cast<double>(
+          diff_follower_retreat_target_index_ ==
+                  std::numeric_limits<std::size_t>::max()
+              ? 0
+              : diff_follower_retreat_target_index_);
+      blacklistRouteCandidate(diff_recovery_goal_local_, retreat_key, now,
+                              "UAV1-history retreat planning failed");
+      ++diff_failure_retreat_attempts_;
+      diff_recovery_requested_ = true;
+      diff_recovery_retreat_requested_ = true;
+    } else if (failed_forward_candidate) {
+      blacklistRouteCandidate(diff_route_subgoal_local_,
+                              diff_route_subgoal_progress_, now, status);
+      ++diff_forward_candidate_failures_;
+      diff_route_subgoal_valid_ = false;
+      diff_route_subgoal_completes_relay_ = false;
+      diff_clipped_retry_count_ = 0;
+      const bool need_retreat =
+          diff_forward_candidate_failures_ >=
+          diff_forward_failures_before_retreat_;
+      diff_recovery_requested_ = need_retreat;
+      diff_recovery_retreat_requested_ = need_retreat;
+    } else {
+      // 终端点或没有活动短点时保留任务目标，仅触发下一周期重新规划。
+      diff_recovery_requested_ = false;
+      diff_recovery_retreat_requested_ = false;
+    }
+    diff_recovery_goal_valid_ = false;
+    diff_recovery_goal_is_retreat_ = false;
+    diff_goal_published_ = false;
+    diff_accepted_goal_valid_ = false;
+    diff_command_seen_for_goal_ = false;
+    diff_goal_first_publish_stamp_ = ros::Time(0);
+    ROS_ERROR_THROTTLE(
+        0.5,
+        "[safe_follower] UAV1 Diff status=%s; next action=%s, forward failures=%d.",
+        status.c_str(), diff_recovery_retreat_requested_
+                            ? "retreat on UAV1 executed history"
+                            : "select another UAV0-history candidate",
+        diff_forward_candidate_failures_);
+  }
+
   void leaderTaskStatusCallback(const std_msgs::String::ConstPtr& msg) {
     if (!enable_search_landing_) {
       leader_outside_exit_ = false;
@@ -1382,58 +1440,11 @@ class LeaderSafePathFollower {
     }
     // A non-stale status is the planner's response to the current goal.
     diff_plan_response_received_ = true;
+    diff_goal_first_publish_stamp_ = ros::Time(0);
     // A true planning failure backs away first. An outside-map goal still uses the
     // existing short forward point because retreating cannot bring that goal into the map.
     if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
-      // 规划失败只短暂锁点到下一条轨迹生成。当前候选立即拉黑并换相邻点；连续多个
-      // 前向候选均失败后，沿UAV1自己已经执行的轨迹退一步。任何次数都不进入人工恢复终态。
-      setDiffWaitPositionHold(true, status);
-      ++diff_planning_failure_events_;
-      const ros::Time now = ros::Time::now();
-      const bool failed_retreat =
-          diff_recovery_goal_valid_ && diff_recovery_goal_is_retreat_;
-      const bool failed_forward_candidate =
-          diff_route_subgoal_valid_ && !diff_recovery_goal_valid_;
-      if (failed_retreat) {
-        const double retreat_key = -1000.0 - static_cast<double>(
-            diff_follower_retreat_target_index_ ==
-                    std::numeric_limits<std::size_t>::max()
-                ? 0
-                : diff_follower_retreat_target_index_);
-        blacklistRouteCandidate(diff_recovery_goal_local_, retreat_key, now,
-                                "UAV1-history retreat planning failed");
-        ++diff_failure_retreat_attempts_;
-        diff_recovery_requested_ = true;
-        diff_recovery_retreat_requested_ = true;
-      } else if (failed_forward_candidate) {
-        blacklistRouteCandidate(diff_route_subgoal_local_,
-                                diff_route_subgoal_progress_, now,
-                                status);
-        ++diff_forward_candidate_failures_;
-        diff_route_subgoal_valid_ = false;
-        diff_route_subgoal_completes_relay_ = false;
-        diff_clipped_retry_count_ = 0;
-        const bool need_retreat =
-            diff_forward_candidate_failures_ >=
-            diff_forward_failures_before_retreat_;
-        diff_recovery_requested_ = need_retreat;
-        diff_recovery_retreat_requested_ = need_retreat;
-      } else {
-        // 终端点或没有活动短点时保持任务目标，仅触发下一周期重新规划，不锁死状态机。
-        diff_recovery_requested_ = false;
-        diff_recovery_retreat_requested_ = false;
-      }
-      diff_recovery_goal_valid_ = false;
-      diff_recovery_goal_is_retreat_ = false;
-      diff_goal_published_ = false;
-      diff_accepted_goal_valid_ = false;
-      ROS_ERROR_THROTTLE(
-          0.5,
-          "[safe_follower] UAV1 Diff status=%s; next action=%s, forward failures=%d.",
-          status.c_str(), diff_recovery_retreat_requested_
-                              ? "retreat on UAV1 executed history"
-                              : "select another UAV0-history candidate",
-          diff_forward_candidate_failures_);
+      handleDiffPlanningFailure(status, ros::Time::now());
     } else if (status == "TRAJECTORY_PUBLISHED") {
       // 2026-07-28: 只有Diff确认新轨迹已发布才解除等待锁点，避免“先解锁、后规划”空窗。
       setDiffWaitPositionHold(false, "new Diff trajectory published");
@@ -2911,6 +2922,22 @@ class LeaderSafePathFollower {
     }
     relay_arrival_stamp_ = ros::Time(0);
 
+    // 规划器若连状态都不返回，总应答计时必须把当前候选判失败，而不是靠周期重发
+    // 永久刷新超时。独立看门狗会重启假死进程；此处保证候选状态机立即继续。
+    const bool response_timeout = diff_goal_published_ &&
+        !diff_plan_response_received_ && !diff_goal_first_publish_stamp_.isZero() &&
+        (now - diff_goal_first_publish_stamp_).toSec() >=
+            diff_goal_response_timeout_;
+    if (response_timeout) {
+      const double wait_time = (now - diff_goal_first_publish_stamp_).toSec();
+      ROS_ERROR("[safe_follower] UAV1 Diff TOTAL RESPONSE TIMEOUT %.2fs at "
+                "relay=%zu/%zu; blacklist current candidate and continue.",
+                wait_time, active_relay_index_ + 1, relay_waypoints_.size());
+      diff_plan_response_received_ = true;
+      handleDiffPlanningFailure("PLANNER_RESPONSE_TIMEOUT", now);
+      return true;
+    }
+
     // 2026-07-28: 已收到规划成功但PositionCommand已经失活，说明控制器正在零速度等待；
     // 未进入近目标捕获区时必须重发当前点，不能让旧accepted状态永久占住活动索引。
     const bool command_stale = diff_goal_published_ && diff_plan_response_received_ &&
@@ -2979,6 +3006,9 @@ class LeaderSafePathFollower {
       const double local_yaw = worldYawToFollower(desired_world.yaw);
       goal.pose.orientation.w = std::cos(local_yaw * 0.5);
       goal.pose.orientation.z = std::sin(local_yaw * 0.5);
+      const bool starts_new_response_window =
+          !diff_goal_published_ || diff_goal_index_ != active_relay_index_ ||
+          diff_goal_first_publish_stamp_.isZero();
       stampDiffGoalId(&goal);
       diff_goal_pub_.publish(goal);
       diff_goal_index_ = active_relay_index_;
@@ -2987,6 +3017,7 @@ class LeaderSafePathFollower {
       diff_accepted_goal_valid_ = false;
       diff_command_seen_for_goal_ = false;
       diff_goal_publish_stamp_ = now;
+      if (starts_new_response_window) diff_goal_first_publish_stamp_ = now;
       publishTarget(desired_world.position);
       ROS_ERROR("[safe_follower] SEND UAV1 DIFF goal %zu/%zu local=(%.2f,%.2f,%.2f).",
                 active_relay_index_ + 1, relay_waypoints_.size(), command_local.x,
@@ -3401,6 +3432,7 @@ class LeaderSafePathFollower {
   double dynamic_obstacle_z_margin_{0.18};
   double dynamic_retention_route_half_width_{0.70};  // 2026-07-28: 动态保留只覆盖通道中心带，墙边框立即淘汰。
   double diff_goal_retry_period_{1.0};  // 2026-07-28: 仅Diff无任何状态应答时使用的超时重试周期。
+  double diff_goal_response_timeout_{2.0};  // 首次发布到任意规划状态的总上限。
   double diff_recovery_arrive_radius_{0.18};  // 2026-07-28: 短子目标切换半径。
   double diff_failure_retreat_distance_{0.40};  // 规划失败后沿已验证路线后退的距离。
   double diff_failure_retreat_arrive_radius_{0.10};
@@ -3450,6 +3482,7 @@ class LeaderSafePathFollower {
   RoutePoint last_leader_sample_;  // 2026-07-20: 最近一次达到采样间距的前机点，仅用于运动方向判断。
   ros::Time terminal_arrival_stamp_, relay_arrival_stamp_;
   ros::Time diff_goal_publish_stamp_;  // 2026-07-28: 防止瞬时假占据导致一次性目标永久失效。
+  ros::Time diff_goal_first_publish_stamp_;  // 不被同一点周期重发刷新的总应答计时。
   ros::Time diff_command_stamp_, diff_endpoint_capture_stamp_;  // 2026-07-28: 轨迹存活与近目标捕获计时。
   ros::Time motion_monitor_start_, recovery_attempt_start_;
   ros::Time blocked_since_;  // 2026-07-27: 当前串行检查点连续被自身点云阻挡的起始时间。

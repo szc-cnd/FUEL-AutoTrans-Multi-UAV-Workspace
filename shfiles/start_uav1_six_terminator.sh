@@ -30,7 +30,7 @@ HIGH_FREQ_ODOM_TOPIC="/UAV1/fast_lio/Odom_high_freq"
 ODOM_TOPIC="${HIGH_FREQ_ODOM_TOPIC}"
 CLOUD_TOPIC="/UAV1/fast_lio/cloud_registered"
 DOWN_CAMERA_TOPIC="/UAV1/down_camera/image_raw"
-PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"
+PLANNER_HEARTBEAT_TOPIC="/drone_1_planning/heartbeat"
 VISION_POSE_TOPIC="/UAV1/mavros/vision_pose/pose"
 VISION_STABILIZE_SECONDS="${UAV1_SIX_VISION_STABILIZE_SECONDS:-4}"
 

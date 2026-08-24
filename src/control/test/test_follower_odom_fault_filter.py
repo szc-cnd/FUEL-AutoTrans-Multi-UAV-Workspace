@@ -45,12 +45,16 @@ def test_diff_planning_failure_reselects_route_point_after_retreat():
     status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
         "bool getLaggedTarget", maxsplit=1
     )[0]
+    failure_handler = SOURCE.split(
+        "void handleDiffPlanningFailure", maxsplit=1
+    )[1].split("void leaderTaskStatusCallback", maxsplit=1)[0]
     execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
         "void timerCallback", maxsplit=1
     )[0]
 
-    assert "blacklistRouteCandidate" in status_callback
-    assert "diff_forward_failures_before_retreat_" in status_callback
+    assert "handleDiffPlanningFailure(status" in status_callback
+    assert "blacklistRouteCandidate" in failure_handler
+    assert "diff_forward_failures_before_retreat_" in failure_handler
     assert "getFollowerHistoryRetreatTarget" in execution
     assert '"failure retreat reached; select new route subgoal"' in execution
     assert "if (completed_retreat) return true;" in execution
@@ -72,8 +76,11 @@ def test_outside_map_uses_forward_recovery_instead_of_retreat():
     status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
         "bool getLaggedTarget", maxsplit=1
     )[0]
+    failure_handler = SOURCE.split(
+        "void handleDiffPlanningFailure", maxsplit=1
+    )[1].split("void leaderTaskStatusCallback", maxsplit=1)[0]
     assert 'status == "GOAL_REJECTED_OUTSIDE_MAP"' in status_callback
-    assert '"select another UAV0-history candidate"' in status_callback
+    assert '"select another UAV0-history candidate"' in failure_handler
 
 
 def test_matching_delayed_success_is_not_misclassified_as_stale():
@@ -118,6 +125,17 @@ def test_candidate_blacklist_and_clipped_retry_are_bounded():
     assert "clipped endpoint retry limit reached" in SOURCE
     assert "stale-command retry limit reached" in SOURCE
     assert "if (reselect_after_stale) return true;" in SOURCE
+
+
+def test_planner_no_response_has_total_timeout_and_switches_candidate():
+    execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
+        "void timerCallback", maxsplit=1
+    )[0]
+    assert 'name="diff_goal_response_timeout" value="2.0"' in LAUNCH
+    assert "diff_goal_first_publish_stamp_" in execution
+    assert "TOTAL RESPONSE TIMEOUT" in execution
+    assert 'handleDiffPlanningFailure("PLANNER_RESPONSE_TIMEOUT", now)' in execution
+    assert "if (starts_new_response_window) diff_goal_first_publish_stamp_ = now;" in execution
 
 
 def test_follower_odom_fault_recovers_without_restart():

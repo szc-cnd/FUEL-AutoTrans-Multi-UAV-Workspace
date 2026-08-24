@@ -93,6 +93,8 @@
     <!-- 2026-07-28: 允许接力实例关闭可能长时间阻塞的随机全局轨迹初始化，默认兼容原Diff。 -->
     <arg name="enable_random_global_init" default="true"/>
     <arg name="drone_id"/>
+    <arg name="planner_heartbeat_topic"
+         default="/drone_$(arg drone_id)_traj_server/heartbeat"/>
     <arg name="init_x"/>
 	<arg name="init_y"/>
 	<arg name="init_z"/>
@@ -103,16 +105,22 @@
     <arg name="stuck_detect_grace_time" default="6.0"/>
     <!-- 2026-07-07: 暴露固定世界窗口保留开关，供小场景把历史障碍长期保留给规划使用。 -->
     <arg name="preserve_global_map" default="false"/>
+    <!-- 规划器由外部心跳看门狗精确终止时，roslaunch自动创建全新的规划进程和地图。 -->
+    <arg name="planner_respawn" default="false"/>
+    <arg name="planner_respawn_delay" default="0.2"/>
     <!-- main node -->
     <!-- <node pkg="diff_planner" name="diff_planner_node" type="diff_planner_node" output="screen" launch-prefix="valgrind"> -->
-    <node pkg="diff_planner" name="drone_$(arg drone_id)_diff_planner_node" type="diff_planner_node" output="screen">
+    <node pkg="diff_planner" name="drone_$(arg drone_id)_diff_planner_node"
+          type="diff_planner_node" output="screen"
+          respawn="$(arg planner_respawn)"
+          respawn_delay="$(arg planner_respawn_delay)">
         <remap from="~odom_world" to="$(arg odom_topic)"/>
         <remap from="~mandatory_stop" to="/mandatory_stop_to_planner"/>
         <remap from="~planning/trajectory" to = "/drone_$(arg drone_id)_planning/trajectory"/>
         <remap from="~planning/data_display" to = "/drone_$(arg drone_id)_planning/data_display"/>
         <remap from="~planning/broadcast_traj_send" to = "/broadcast_traj_from_planner"/>
         <remap from="~planning/broadcast_traj_recv" to = "/broadcast_traj_to_planner"/>
-        <remap from="~planning/heartbeat" to = "/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <remap from="~planning/heartbeat" to="$(arg planner_heartbeat_topic)"/>
         <!-- 2026-07-28: 暴露每架Diff规划结果，供接力管理器在失败时切换到安全短子目标。 -->
         <remap from="~planning/status" to = "/drone_$(arg drone_id)_planning/status"/>
         <remap from="~grid_map/odom" to="$(arg odom_topic)"/>

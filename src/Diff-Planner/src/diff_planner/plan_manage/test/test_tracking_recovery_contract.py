@@ -14,6 +14,7 @@ RELAY_LAUNCH = PACKAGE / "launch" / "exp" / "run_uav1_relay_diff.launch"
 MANAGER_SOURCE = PACKAGE / "src" / "planner_manager.cpp"
 OPTIMIZER_HEADER = DIFF_ROOT / "traj_opt" / "include" / "optimizer" / "poly_traj_optimizer.h"
 OPTIMIZER_SOURCE = DIFF_ROOT / "traj_opt" / "src" / "poly_traj_optimizer.cpp"
+WATCHDOG = PACKAGE / "scripts" / "diff_planner_watchdog.py"
 
 
 def test_local_trajectory_id_does_not_reset_on_global_waypoint_change():
@@ -74,6 +75,22 @@ def test_planning_wall_timeout_covers_initial_check_and_lbfgs():
     assert 'checkPlanningTimeout("trajectory initialization")' in manager
     assert 'checkPlanningTimeout("LBFGS line search")' in optimizer
     assert 'name="planning_timeout" default="0.8"' in launch
+
+
+def test_uav1_hard_watchdog_restarts_only_the_stuck_planner_process():
+    advanced = ADVANCED_LAUNCH.read_text(encoding="utf-8")
+    relay = RELAY_LAUNCH.read_text(encoding="utf-8")
+    watchdog = WATCHDOG.read_text(encoding="utf-8")
+
+    assert 'respawn="$(arg planner_respawn)"' in advanced
+    assert '<arg name="planner_respawn" value="true"/>' in relay
+    assert 'value="/drone_1_planning/heartbeat"' in relay
+    assert '<remap from="~heartbeat" to="/drone_1_planning/heartbeat"/>' in relay
+    assert "os.kill(pid, signal.SIGKILL)" in watchdog
+    assert '"PLANNING_FAILED goal_stamp_ns={}"' in watchdog
+    assert 'cmdline_path = "/proc/{}/cmdline"' in watchdog
+    assert "self._safety_hold_pub.publish(Bool(data=True))" in watchdog
+    assert 'name="safety_hold_topic" value="/UAV1/planning/safety_hold"' in relay
 
 
 def test_trajectory_sampling_rejects_non_progressing_loops():

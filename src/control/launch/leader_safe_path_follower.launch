@@ -101,6 +101,8 @@
         <param name="diff_goal_topic" value="/UAV1/planning/goal"/>
         <!-- 2026-07-28: 仅在3秒内连规划状态都未收到时重发，禁止飞行中1Hz覆盖Diff轨迹。 -->
         <param name="diff_goal_retry_period" value="3.0"/>
+        <!-- 看门狗正常在1.2s重启假死规划器；2.0s总应答上限是独立的第二道保险。 -->
+        <param name="diff_goal_response_timeout" value="2.0"/>
         <!-- 前向点失败后短时拉黑并换UAV0历史轨迹相邻点；一组候选均失败时沿UAV1自身实飞栈退让。 -->
         <param name="diff_status_topic" value="/drone_1_planning/status"/>
         <param name="diff_recovery_arrive_radius" value="0.18"/>

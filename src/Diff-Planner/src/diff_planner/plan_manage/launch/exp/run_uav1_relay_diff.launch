@@ -14,6 +14,7 @@
     <!-- 2026-07-28: flight_type=1启用运行时外部目标；占位航点不会在该模式执行。 -->
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="drone_id" value="1"/>
+        <arg name="planner_heartbeat_topic" value="/drone_1_planning/heartbeat"/>
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="camera_pose_topic" value="no_use_uav1_pose"/>
         <arg name="depth_topic" value="no_use_uav1_depth"/>
@@ -61,6 +62,9 @@
         <arg name="enable_random_global_init" value="false"/>
         <!-- 目标被地图判为占据时沿原全局轨迹换到后方自由点；自身进入膨胀占据区时低速退回近期自由位置。 -->
         <arg name="enable_occupied_recovery" value="true"/>
+        <!-- 单线程规划内部若不返回，由独立看门狗SIGKILL并自动拉起干净进程。 -->
+        <arg name="planner_respawn" value="true"/>
+        <arg name="planner_respawn_delay" value="0.2"/>
         <arg name="escape_max_distance" value="0.40"/>
         <arg name="escape_history_time" value="1.50"/>
         <arg name="escape_speed" value="0.10"/>
@@ -72,12 +76,25 @@
         <arg name="point4_x" value="0.0"/><arg name="point4_y" value="0.0"/><arg name="point4_z" value="0.60"/>
     </include>
 
+    <node pkg="diff_planner" type="diff_planner_watchdog.py"
+          name="uav1_diff_planner_watchdog" output="screen" required="true">
+        <param name="planner_node" value="/drone_1_diff_planner_node"/>
+        <param name="expected_executable" value="diff_planner_node"/>
+        <param name="goal_topic" value="$(arg goal_topic)"/>
+        <param name="heartbeat_topic" value="/drone_1_planning/heartbeat"/>
+        <param name="status_topic" value="/drone_1_planning/status"/>
+        <param name="safety_hold_topic" value="/UAV1/planning/safety_hold"/>
+        <param name="heartbeat_timeout" value="1.2"/>
+        <param name="minimum_goal_age" value="0.4"/>
+    </node>
+
     <!-- 2026-07-28: UAV1 traj_server是后机PositionCommand唯一发布者，并独立发布真实轨迹接管信号。 -->
     <node pkg="diff_planner" name="drone_1_traj_server" type="traj_server" output="screen">
         <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
         <remap from="~planning/trajectory" to="/drone_1_planning/trajectory"/>
         <remap from="/planning/yaw" to="/UAV1/planning/yaw"/>
-        <remap from="~heartbeat" to="/drone_1_traj_server/heartbeat"/>
+        <!-- 与看门狗共用规划器真实心跳；该节点只订阅，不发布心跳。 -->
+        <remap from="~heartbeat" to="/drone_1_planning/heartbeat"/>
         <remap from="/planning/traj_started" to="/UAV1/planning/traj_started"/>
         <param name="traj_server/time_forward" value="0.35" type="double"/>
         <param name="traj_server/yaw_dot_max" value="1.57" type="double"/>

@@ -57,6 +57,11 @@ target_link_libraries(diff_planner_node
 add_dependencies(diff_planner_node ${ldop_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 #add_dependencies(diff_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
+catkin_install_python(PROGRAMS
+  scripts/diff_planner_watchdog.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 ## 2026-07-07: 在联合工作空间里避开 FUEL/plan_manage 的同名 CMake target 冲突，但仍输出 diff_planner/traj_server 可执行文件供原 launch 使用。
 add_executable(diff_traj_server_target src/traj_server.cpp)
 set_target_properties(diff_traj_server_target PROPERTIES OUTPUT_NAME traj_server)
