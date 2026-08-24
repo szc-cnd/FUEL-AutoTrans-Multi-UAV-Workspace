@@ -16,9 +16,10 @@
   <arg name="cmd_trigger_topic" default="/hummingbird/goal"/>
   <!-- bridge 输出的完整 Diff-Planner 多项式轨迹，保持与 Odometry 同一世界坐标语义。 -->
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
+  <arg name="safety_hold_topic" default="/planning/safety_hold"/>
   <!-- Diff-Planner 原始轨迹；logger 单独记录，不直接送入 MPC。 -->
   <arg name="raw_trajectory_topic" default="/drone_1_planning/trajectory"/>
-  <!-- NMPC 恢复超时后通知规划器永久停止；具体实例可映射到自身 mandatory_stop。 -->
+  <!-- NMPC恢复期间通知规划器临时停止；控制器恢复后由planning_restart自动继续当前任务。 -->
   <arg name="planning_stop_topic" default="/planning_stop_trigger"/>
   <arg name="planning_restart_topic" default="/planning_restart_trigger"/>
   <arg name="planner_odom_topic" default="$(arg odom_topic)"/>
@@ -71,6 +72,7 @@
 
     <!-- Optional planner/CMD_CTRL inputs; AUTO_HOVER does not use them. -->
     <remap from="~traj" to="$(arg trajectory_topic)"/>
+    <remap from="~safety_hold" to="$(arg safety_hold_topic)"/>
     <remap from="~start_trigger" to="$(arg start_trigger_topic)"/>
     <remap from="~cmd_trigger" to="$(arg cmd_trigger_topic)"/>
   </node>
@@ -119,6 +121,7 @@
       - "$(arg esc_status_topic)"
       - "$(arg setpoint_topic)"
       - "$(arg trajectory_topic)"
+      - "$(arg safety_hold_topic)"
       - "$(arg raw_trajectory_topic)"
       - "$(arg goal_topic)"
       - "$(arg reference_topic)"

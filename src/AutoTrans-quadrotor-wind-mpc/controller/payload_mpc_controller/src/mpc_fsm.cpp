@@ -100,6 +100,37 @@ namespace PayloadMPC
 		}
 	}
 
+	void MPCFSM::safetyHoldCallback(const std_msgs::Bool::ConstPtr &msg)
+	{
+		const ros::Time now = ros::Time::now();
+		if (msg->data)
+		{
+			if (safety_hold_active_)
+			{
+				// 新的安全原因到来时丢弃此前HOLD期间缓存的轨迹，只保留本次事件后生成的计划。
+				trajectory_data.allowTrajectoryAcceptanceAfter(now);
+				return;
+			}
+			safety_hold_active_ = true;
+			safety_hold_pose_valid_ = !odom_data.rcv_stamp.isZero() &&
+				odom_data.p.allFinite() && force_attitude_odom_data.q.coeffs().allFinite();
+			if (safety_hold_pose_valid_)
+				update_hover_pose();
+			// 立即丢弃旧轨迹，但继续缓存HOLD之后生成的新轨迹。Diff先发布PolyTraj、
+			// 后发布TRAJECTORY_PUBLISHED状态，因此不能在HOLD期间完全关闭轨迹订阅。
+			trajectory_data.allowTrajectoryAcceptanceAfter(now);
+			exec_traj_state_ = HOVER;
+			ROS_ERROR("[安全锁点] ACTIVE：丢弃旧轨迹并锁存当前位置，等待上层确认新轨迹。");
+			return;
+		}
+
+		if (!safety_hold_active_)
+			return;
+		safety_hold_active_ = false;
+		safety_hold_pose_valid_ = false;
+		ROS_WARN("[安全锁点] RELEASED：允许执行HOLD之后缓存的新轨迹。");
+	}
+
 	/*
 			Finite State Machine
 
@@ -618,6 +649,18 @@ namespace PayloadMPC
 	void MPCFSM::CMD_CTRL_process()
 	{
 		ros::Time now_time = ros::Time::now();
+		if (safety_hold_active_)
+		{
+			if (!safety_hold_pose_valid_ && !odom_data.rcv_stamp.isZero())
+			{
+				update_hover_pose();
+				safety_hold_pose_valid_ = true;
+			}
+			controller_.setHoverReference(hover_pose_, hover_yaw_);
+			controller_.execMPC(est_state_, mpc_predicted_states_, mpc_predicted_inputs_);
+			exec_traj_state_ = HOVER;
+			return;
+		}
 		switch (exec_traj_state_)
 		{
 		case HOVER:

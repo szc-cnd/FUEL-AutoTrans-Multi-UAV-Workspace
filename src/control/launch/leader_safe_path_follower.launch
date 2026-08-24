@@ -101,12 +101,17 @@
         <param name="diff_goal_topic" value="/UAV1/planning/goal"/>
         <!-- 2026-07-28: 仅在3秒内连规划状态都未收到时重发，禁止飞行中1Hz覆盖Diff轨迹。 -->
         <param name="diff_goal_retry_period" value="3.0"/>
-        <!-- Diff规划失败后先沿前机实飞路线后退0.4m，再从开阔位置重发原接力点。 -->
+        <!-- 前向点失败后短时拉黑并换UAV0历史轨迹相邻点；一组候选均失败时沿UAV1自身实飞栈退让。 -->
         <param name="diff_status_topic" value="/drone_1_planning/status"/>
         <param name="diff_recovery_arrive_radius" value="0.18"/>
         <param name="diff_failure_retreat_distance" value="0.40"/>
         <param name="diff_failure_retreat_arrive_radius" value="0.10"/>
-        <param name="diff_failure_retreat_max_attempts" value="2"/>
+        <param name="diff_candidate_blacklist_duration" value="4.0"/>
+        <param name="diff_candidate_blacklist_radius" value="0.08"/>
+        <param name="diff_forward_failures_before_retreat" value="3"/>
+        <param name="diff_clipped_retry_limit" value="2"/>
+        <param name="follower_history_sample_spacing" value="0.08"/>
+        <param name="follower_history_max_length" value="30.0"/>
         <param name="traj_started_topic" value="/UAV1/planning/traj_started"/>
         <!-- 2026-07-27: 前机确认终点后，跟随器发布后机邻近落点并在到达后触发 UAV1 AUTO.LAND。 -->
         <param name="leader_landing_target_topic" value="/UAV0/mission/landing_target"/>

@@ -68,6 +68,13 @@ int main(int argc, char **argv)
                                                      ros::VoidConstPtr(),
                                                      ros::TransportHints().tcpNoDelay());
 
+    ros::Subscriber safety_hold_sub =
+        nh.subscribe<std_msgs::Bool>("safety_hold",
+                                     10,
+                                     &PayloadMPC::MPCFSM::safetyHoldCallback,
+                                     &fsm,
+                                     ros::TransportHints().tcpNoDelay());
+
     ros::Subscriber cmd_sub =
         nh.subscribe<quadrotor_msgs::PositionCommand>("cmd",
                                                       100,

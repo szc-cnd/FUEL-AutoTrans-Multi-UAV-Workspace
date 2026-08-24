@@ -6,6 +6,7 @@
   <arg name="planner_odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
   <arg name="cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
   <arg name="trajectory_topic" default="/drone_1_planning/autotrans_trajectory"/>
+  <arg name="safety_hold_topic" default="/UAV1/planning/safety_hold"/>
   <arg name="frame_id" default="UAV1/camera_init"/>
   <!-- MID360 IMU 已旋转到 UAV1/body，且加速度已由 g 换算为包含重力的 m/s^2。 -->
   <arg name="imu_topic" default="/UAV1/livox/imu_mps2"/>
@@ -59,6 +60,7 @@
   <include if="$(arg enable_controller)" file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="$(arg odom_topic)"/>
     <arg name="trajectory_topic" value="$(arg trajectory_topic)"/>
+    <arg name="safety_hold_topic" value="$(arg safety_hold_topic)"/>
     <arg name="imu_topic" value="$(arg imu_topic)"/>
     <arg name="force_attitude_odom_topic" value="$(arg force_attitude_odom_topic)"/>
     <arg name="state_topic" value="$(arg state_topic)"/>

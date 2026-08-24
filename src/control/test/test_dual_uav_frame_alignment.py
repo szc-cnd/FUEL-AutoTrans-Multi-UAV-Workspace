@@ -152,13 +152,13 @@ def test_internal_diff_relay_uses_verified_route_subgoals_without_consuming_rela
     execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
         "void timerCallback", 1
     )[0]
-    assert "active_relay_index_ > 0" in execution
-    assert "getRelayRouteTarget(followerToWorld(current_local), desired_world" in execution
+    assert "selectForwardRouteCandidate(followerToWorld(current_local), desired_world" in execution
     assert "diff_route_subgoal_local_ = candidate" in execution
     assert "diff_route_subgoal_valid_ ? diff_route_subgoal_local_ : desired_local" in execution
+    assert '"nonterminal relay requires verified history candidate"' in execution
 
     intermediate = execution.split(
-        "if (diff_route_subgoal_valid_ || clipped_endpoint_reached)", 1
+        "if ((diff_route_subgoal_valid_ &&", 1
     )[1].split("if (terminal_relay)", 1)[0]
     assert "++active_relay_index_" not in intermediate
     assert "diff_goal_published_ = false" in intermediate
@@ -183,7 +183,9 @@ def test_diff_clipped_endpoint_cannot_complete_original_relay():
     )[0]
     assert "distance3d(diff_accepted_goal_local_, command_local)" in execution
     assert "diff_accepted_goal_tolerance_" in execution
-    assert "clipped endpoint reached; retry current subgoal" in execution
+    assert "clipped endpoint reached; choose flexible retry" in execution
+    assert "diff_clipped_retry_count_ >= diff_clipped_retry_limit_" in execution
+    assert "blacklistRouteCandidate" in execution
 
 
 def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
@@ -210,7 +212,7 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     assert source.count("++active_relay_index_") == 2
 
 
-def test_diff_relay_goal_clearance_can_be_disabled_and_backtracks_current_cache():
+def test_diff_terminal_clearance_is_optional_and_nonterminal_uses_candidate_search():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -237,11 +239,12 @@ def test_diff_relay_goal_clearance_can_be_disabled_and_backtracks_current_cache(
     execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
         "void timerCallback", 1
     )[0]
-    adjustment = execution.split(
-        "if (enable_relay_goal_clearance_ && !terminal_relay", 1
+    terminal_adjustment = execution.split(
+        "if (enable_relay_goal_clearance_ && terminal_relay", 1
     )[1].split("const geometry_msgs::Point desired_local", 1)[0]
-    assert "relay_waypoints_[active_relay_index_] = selected_world" in adjustment
-    assert "++active_relay_index_" not in adjustment
+    assert "relay_waypoints_[active_relay_index_] = selected_world" in terminal_adjustment
+    assert "++active_relay_index_" not in terminal_adjustment
+    assert "selectForwardRouteCandidate" in execution
 
 
 def test_leader_odometry_uses_latest_low_latency_sample_and_rejects_delay():

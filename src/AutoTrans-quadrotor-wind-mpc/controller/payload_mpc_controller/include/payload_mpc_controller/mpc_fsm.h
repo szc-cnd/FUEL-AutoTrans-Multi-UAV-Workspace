@@ -7,6 +7,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/Bool.h>
 #include "mpc_params.h"
 #include "mpc_input.h"
 #include "mpc_controller.h"
@@ -88,6 +89,7 @@ namespace PayloadMPC
 		bool recv_new_odom();
 		void addNewForceObseverState();
 		void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
+		void safetyHoldCallback(const std_msgs::Bool::ConstPtr &msg);
 
 	private:
 		// Subscribers and publisher.
@@ -127,6 +129,8 @@ namespace PayloadMPC
 		bool mpc_recovery_active_{false};
 		bool direct_auto_land_active_{false};
 		bool planning_stop_sent_{false};
+		bool safety_hold_active_{false};
+		bool safety_hold_pose_valid_{false};
 		ros::Time mpc_recovery_start_time_{0};
 		ros::Time last_mpc_recovery_reset_time_{0};
 		int mpc_recovery_success_count_{0};

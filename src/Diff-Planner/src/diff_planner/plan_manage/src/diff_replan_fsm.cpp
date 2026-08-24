@@ -508,8 +508,25 @@ namespace diff_planner
         occupied_recovery_free_count_ = 0;
         callEmergencyStop(odom_pos_);
       }
-      else if (enable_fail_safe_ && odom_vel_.norm() < escape_stop_speed_)
+      else if ((enable_fail_safe_ || depth_timeout_emergency_) &&
+               odom_vel_.norm() < escape_stop_speed_)
       {
+        if (depth_timeout_emergency_)
+        {
+          if (planner_manager_->grid_map_->getOdomDepthTimeout())
+          {
+            ROS_WARN_THROTTLE(0.5, "Depth still unavailable; keep the short safety stop and wait for map recovery.");
+            break;
+          }
+          depth_timeout_emergency_ = false;
+          need_hover_stop_ = false;
+          replan_fail_count_ = 0;
+          last_target_change_time_ = now_sec;
+          stuck_detect_ignore_until_ = now_sec + stuck_detect_grace_time_;
+          ROS_WARN("Depth recovered; automatically resume the current target from measured odometry.");
+          changeFSMExecState(GEN_NEW_TRAJ, "DEPTH_RECOVERED");
+          break;
+        }
         if (swing_wait_active_)
         {
           SwingCollisionResult collision;
@@ -572,12 +589,13 @@ namespace diff_planner
         {
           if (occupied_recovery_attempt_count_ >= escape_max_attempts_)
           {
-            if (!occupied_recovery_failure_reported_)
+            if (now_sec - last_escape_target_search_time_ >= 1.0)
             {
-              ROS_ERROR("[局部脱障] 已达到最大尝试次数 %d，保持固定急停点，禁止盲目继续移动。",
-                        escape_max_attempts_);
-              publishPlanningStatus("OCCUPIED_RECOVERY_FAILED");
-              occupied_recovery_failure_reported_ = true;
+              occupied_recovery_attempt_count_ = 0;
+              occupied_recovery_failure_reported_ = false;
+              last_escape_target_search_time_ = now_sec;
+              ROS_WARN("[局部脱障] 本轮%d个候选均失败；地图刷新后自动开始下一轮候选搜索。",
+                       escape_max_attempts_);
             }
           }
           else if (now_sec - last_escape_target_search_time_ >= 0.20)
@@ -770,8 +788,10 @@ namespace diff_planner
     if (map->getOdomDepthTimeout())
     {
       ROS_ERROR("Depth Lost! EMERGENCY_STOP");
-      enable_fail_safe_ = false;
+      depth_timeout_emergency_ = true;
+      need_hover_stop_ = true;
       changeFSMExecState(EMERGENCY_STOP, "SAFETY");
+      return;
     }
 
     if (enable_swing_obstacle_guard_ && !swing_wait_active_)
@@ -1613,13 +1633,13 @@ namespace diff_planner
 
   void DiffReplanFSM::mandatoryStopCallback(const std_msgs::Empty &msg)
   {
+    (void)msg;
     mandatory_stop_ = true;
     controller_restart_pending_ = false;
     occupied_recovery_active_ = false;
     flag_escape_emergency_ = true;
-    ROS_ERROR("Received a mandatory stop command!");
+    ROS_ERROR("Received controller safety stop; pause planning until restart signal.");
     changeFSMExecState(EMERGENCY_STOP, "Mandatory Stop");
-    enable_fail_safe_ = false;
   }
 
   void DiffReplanFSM::planningRestartCallback(const std_msgs::Empty &msg)
@@ -1627,8 +1647,10 @@ namespace diff_planner
     (void)msg;
     if (mandatory_stop_)
     {
-      ROS_WARN("[控制器恢复] 已收到永久停止信号，忽略重新规划请求。");
-      return;
+      mandatory_stop_ = false;
+      enable_fail_safe_ = true;
+      need_hover_stop_ = false;
+      ROS_WARN("[控制器恢复] 解除控制器临时停止，基于最新里程计恢复当前任务。");
     }
     if (!have_odom_ || !have_target_ || !have_trigger_)
     {

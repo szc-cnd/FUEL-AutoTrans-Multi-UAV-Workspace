@@ -124,3 +124,30 @@ def test_uav1_relay_enables_short_history_retreat_recovery():
     assert '<arg name="escape_max_distance" value="0.40"/>' in launch
     assert '<arg name="escape_history_time" value="1.50"/>' in launch
     assert '<arg name="escape_speed" value="0.10"/>' in launch
+
+
+def test_depth_timeout_waits_for_map_and_automatically_resumes():
+    header = FSM_HEADER.read_text(encoding="utf-8")
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    collision = source.split("/* ---------- check lost of depth ---------- */", 1)[1].split(
+        "if (enable_swing_obstacle_guard_", 1
+    )[0]
+    emergency = source.split("case EMERGENCY_STOP:", 1)[1].split(
+        "case OCCUPIED_RECOVERY:", 1
+    )[0]
+    assert "depth_timeout_emergency_" in header
+    assert "enable_fail_safe_ = false" not in collision
+    assert "depth_timeout_emergency_ = true;" in collision
+    assert 'changeFSMExecState(GEN_NEW_TRAJ, "DEPTH_RECOVERED")' in emergency
+
+
+def test_occupied_recovery_budget_starts_another_automatic_round():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    emergency = source.split("case EMERGENCY_STOP:", 1)[1].split(
+        "case OCCUPIED_RECOVERY:", 1
+    )[0]
+    exhausted = emergency.split(
+        "occupied_recovery_attempt_count_ >= escape_max_attempts_", 1
+    )[1].split("else if", 1)[0]
+    assert "occupied_recovery_attempt_count_ = 0;" in exhausted
+    assert "publishPlanningStatus(\"OCCUPIED_RECOVERY_FAILED\")" not in exhausted

@@ -104,6 +104,7 @@ namespace diff_planner
     bool enable_ground_height_measurement_;
     bool flag_escape_emergency_;
     bool need_hover_stop_;
+    bool depth_timeout_emergency_{false};
     bool mondify_final_goal_;
     bool enable_stuck_detect_; // Whether to enable stuck detection
     // 2026-07-28: FUEL->Diff接力模式可关闭原生Diff编队的“等待所有前序无人机轨迹”门槛。

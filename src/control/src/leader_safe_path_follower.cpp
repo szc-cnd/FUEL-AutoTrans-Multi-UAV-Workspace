@@ -3,6 +3,7 @@
 // 2026-07-16: 取消固定5点上限；内部点可持续释放，只有真实降落请求才结束内部点生成并追加终点。
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -40,6 +41,12 @@ struct DynamicObstacleSample {
   geometry_msgs::Point position;
   geometry_msgs::Vector3 size;
   std::vector<geometry_msgs::Point> predicted_positions;
+};
+
+struct BlockedRouteCandidate {
+  geometry_msgs::Point position;
+  double progress{0.0};
+  ros::Time retry_after;
 };
 
 double distance3d(const geometry_msgs::Point& a, const geometry_msgs::Point& b) {
@@ -93,19 +100,36 @@ class LeaderSafePathFollower {
     pnh_.param<std::string>("diff_status_topic", diff_status_topic_,
                             "/drone_1_planning/status");
     pnh_.param("diff_recovery_arrive_radius", diff_recovery_arrive_radius_, 0.18);
-    // A failed long plan is retried only after UAV1 backs away on UAV0's verified route.
+    // 前进候选来自UAV0稠密历史轨迹；失败点短时拉黑并换相邻点。只有一组前向
+    // 候选均失败时，才沿UAV1自己已经执行的轨迹后退，不再猜UAV0路线上的退让点。
     pnh_.param("diff_failure_retreat_distance", diff_failure_retreat_distance_, 0.40);
     pnh_.param("diff_failure_retreat_arrive_radius",
                diff_failure_retreat_arrive_radius_, 0.10);
-    pnh_.param("diff_failure_retreat_max_attempts",
-               diff_failure_retreat_max_attempts_, 2);
+    pnh_.param("diff_candidate_blacklist_duration",
+               diff_candidate_blacklist_duration_, 4.0);
+    pnh_.param("diff_candidate_blacklist_radius",
+               diff_candidate_blacklist_radius_, 0.08);
+    pnh_.param("diff_forward_failures_before_retreat",
+               diff_forward_failures_before_retreat_, 3);
+    pnh_.param("diff_clipped_retry_limit", diff_clipped_retry_limit_, 2);
+    pnh_.param("follower_history_sample_spacing",
+               follower_history_sample_spacing_, 0.08);
+    pnh_.param("follower_history_max_length", follower_history_max_length_, 30.0);
     if (!std::isfinite(diff_failure_retreat_distance_) ||
         !std::isfinite(diff_failure_retreat_arrive_radius_) ||
         diff_failure_retreat_distance_ <= diff_failure_retreat_arrive_radius_ ||
         diff_failure_retreat_arrive_radius_ <= 0.0 ||
-        diff_failure_retreat_max_attempts_ < 1) {
+        !std::isfinite(diff_candidate_blacklist_duration_) ||
+        diff_candidate_blacklist_duration_ <= 0.0 ||
+        !std::isfinite(diff_candidate_blacklist_radius_) ||
+        diff_candidate_blacklist_radius_ <= 0.0 ||
+        diff_forward_failures_before_retreat_ < 1 || diff_clipped_retry_limit_ < 1 ||
+        !std::isfinite(follower_history_sample_spacing_) ||
+        follower_history_sample_spacing_ <= 0.0 ||
+        !std::isfinite(follower_history_max_length_) ||
+        follower_history_max_length_ <= diff_failure_retreat_distance_) {
       throw std::runtime_error(
-          "leader_safe_path_follower: invalid Diff failure-retreat parameters");
+          "leader_safe_path_follower: invalid flexible Diff recovery parameters");
     }
     pnh_.param<std::string>("leader_landing_target_topic", leader_landing_target_topic_,
                             "/UAV0/mission/landing_target");
@@ -961,11 +985,61 @@ class LeaderSafePathFollower {
     }
   }
 
+  void appendFollowerExecutedPoint(const nav_msgs::Odometry& odom) {
+    RoutePoint point;
+    point.position = followerToWorld(odom.pose.pose.position);
+    point.yaw = yawFromQuaternion(odom.pose.pose.orientation);
+    if (follower_executed_route_.empty()) {
+      point.progress = 0.0;
+      follower_executed_route_.push_back(point);
+      return;
+    }
+    const double segment = distance3d(follower_executed_route_.back().position,
+                                      point.position);
+    if (segment < follower_history_sample_spacing_) return;
+    follower_history_length_ += segment;
+    point.progress = follower_executed_route_.back().progress + segment;
+    follower_executed_route_.push_back(point);
+    while (follower_executed_route_.size() > 2 &&
+           follower_history_length_ > follower_history_max_length_) {
+      follower_history_length_ -= distance3d(follower_executed_route_[0].position,
+                                             follower_executed_route_[1].position);
+      follower_executed_route_.pop_front();
+      if (diff_follower_retreat_target_index_ !=
+              std::numeric_limits<std::size_t>::max() &&
+          diff_follower_retreat_target_index_ > 0) {
+        --diff_follower_retreat_target_index_;
+      }
+    }
+  }
+
+  void truncateFollowerExecutedRoute(std::size_t target_index,
+                                      const geometry_msgs::Point& reached_local) {
+    if (follower_executed_route_.empty()) return;
+    target_index = std::min(target_index, follower_executed_route_.size() - 1);
+    while (follower_executed_route_.size() > target_index + 1) {
+      const std::size_t last = follower_executed_route_.size() - 1;
+      follower_history_length_ -= distance3d(follower_executed_route_[last].position,
+                                             follower_executed_route_[last - 1].position);
+      follower_executed_route_.pop_back();
+    }
+    RoutePoint reached;
+    reached.position = followerToWorld(reached_local);
+    reached.yaw = yawFromQuaternion(follower_odom_.pose.pose.orientation);
+    const double tail = distance3d(follower_executed_route_.back().position,
+                                   reached.position);
+    if (tail >= follower_history_sample_spacing_) {
+      follower_history_length_ += tail;
+      reached.progress = follower_executed_route_.back().progress + tail;
+      follower_executed_route_.push_back(reached);
+    }
+  }
+
   void followerOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
     // 2026-07-22: 用实际里程计位移估计到达速度，不能用规划指令速度代替真实制动状态。
     const ros::Time now = ros::Time::now();
     // 高频里程计会经网络成批到达。速度差分必须使用传感器时间戳，不能使用回调接收时间；
-    // 否则毫米级点云校正除以亚毫秒级回调间隔会被放大成数m/s并误触发永久安全锁。
+    // 否则毫米级点云校正除以亚毫秒级回调间隔会被放大成数m/s并误触发安全锁点。
     const ros::Time sample_stamp = msg->header.stamp;
     if (sample_stamp.isZero()) {
       ROS_WARN_THROTTLE(1.0,
@@ -1011,6 +1085,7 @@ class LeaderSafePathFollower {
               follower_odom_jump_consecutive_samples_ >=
                   follower_odom_jump_confirm_samples_) {
             follower_odom_fault_latched_ = true;
+            follower_odom_recovery_good_samples_ = 0;
             std_msgs::Bool hold_msg;
             hold_msg.data = true;
             follower_safety_hold_pub_.publish(hold_msg);
@@ -1023,6 +1098,27 @@ class LeaderSafePathFollower {
           return;
         }
         follower_odom_jump_consecutive_samples_ = 0;
+        if (follower_odom_fault_latched_) {
+          ++follower_odom_recovery_good_samples_;
+          if (follower_odom_recovery_good_samples_ >= 10) {
+            follower_odom_fault_latched_ = false;
+            follower_odom_recovery_good_samples_ = 0;
+            if (use_diff_planner_) {
+              // 故障期间可能积累了旧规划；恢复后继续保持锁点，直到新目标确实生成新轨迹。
+              setDiffWaitPositionHold(true,
+                                      "odometry recovered; wait fresh Diff trajectory");
+            } else if (!diff_dynamic_hold_active_ &&
+                       !diff_separation_hold_active_) {
+              std_msgs::Bool hold_msg;
+              hold_msg.data = false;
+              follower_safety_hold_pub_.publish(hold_msg);
+            }
+            diff_goal_published_ = false;
+            diff_plan_response_received_ = false;
+            ROS_WARN("[safe_follower] follower odometry recovered after 10 trusted samples; "
+                     "release fault hold and request a fresh Diff trajectory.");
+          }
+        }
         const double alpha = 0.35;
         follower_horizontal_speed_ =
             alpha * raw_horizontal_speed + (1.0 - alpha) * follower_horizontal_speed_;
@@ -1031,6 +1127,7 @@ class LeaderSafePathFollower {
       } else {
         // 长时间通信间断后的首帧不参与速度差分，也不能继承此前的疑似计数。
         follower_odom_jump_consecutive_samples_ = 0;
+        follower_odom_recovery_good_samples_ = 0;
       }
     }
     follower_odom_ = *msg;
@@ -1045,6 +1142,10 @@ class LeaderSafePathFollower {
         traj_started_pub_.publish(std_msgs::Empty());
         traj_started_sent_ = true;
       }
+    }
+    if (follower_started_ && !follower_odom_fault_latched_ &&
+        !diff_recovery_retreat_requested_ && !diff_recovery_goal_is_retreat_) {
+      appendFollowerExecutedPoint(*msg);
     }
   }
 
@@ -1193,17 +1294,16 @@ class LeaderSafePathFollower {
         status == "TRAJECTORY_PUBLISHED" &&
         static_cast<bool>(stream >> accepted.x >> accepted.y >> accepted.z);
 
-    // planning/status为锁存话题且规划线程可能延迟完成。目标时间戳和接力索引必须
-    // 与当前活动目标一致。规划器可能先报PLANNING_FAILED、随后对同一目标成功；在
-    // 新恢复目标尚未发布前，这个同时间戳成功回执不是旧消息，必须接收以避免状态机
-    // 锁在HOLD而控制器已经收到新轨迹。
+    // planning/status为锁存话题且规划线程可能延迟完成。目标时间戳、接力索引和逻辑
+    // 候选必须仍然有效；已经因失败拉黑的候选即使晚到成功，也不能重新放行旧轨迹。
     const bool response_matches_active_goal =
         response_goal_stamp_valid && diff_goal_index_ == active_relay_index_ &&
         response_goal_stamp_ns == diff_active_goal_stamp_ns_;
     const bool late_success_for_active_goal =
         response_matches_active_goal && !diff_goal_published_ &&
         status == "TRAJECTORY_PUBLISHED" && accepted_valid &&
-        !diff_separation_hold_active_;
+        !diff_separation_hold_active_ && !diff_recovery_requested_ &&
+        (diff_route_subgoal_valid_ || diff_recovery_goal_valid_);
     if (!response_matches_active_goal ||
         (!diff_goal_published_ && !late_success_for_active_goal)) {
       const std::string response_stamp_label =
@@ -1222,8 +1322,8 @@ class LeaderSafePathFollower {
       diff_recovery_retreat_requested_ = false;
       diff_recovery_goal_valid_ = false;
       diff_recovery_goal_is_retreat_ = false;
-      ROS_WARN("[safe_follower] accept delayed success for current UAV1 Diff goal "
-               "stamp_ns=%llu after an earlier failure response.",
+      ROS_WARN("[safe_follower] accept delayed success for still-active UAV1 Diff goal "
+               "stamp_ns=%llu.",
                static_cast<unsigned long long>(response_goal_stamp_ns));
     }
 
@@ -1285,22 +1385,55 @@ class LeaderSafePathFollower {
     // A true planning failure backs away first. An outside-map goal still uses the
     // existing short forward point because retreating cannot bring that goal into the map.
     if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
-      // 2026-07-28: 原轨迹规划失败后立刻丢弃残余速度并锁点，恢复子目标被接受前不允许漂移。
+      // 规划失败只短暂锁点到下一条轨迹生成。当前候选立即拉黑并换相邻点；连续多个
+      // 前向候选均失败后，沿UAV1自己已经执行的轨迹退一步。任何次数都不进入人工恢复终态。
       setDiffWaitPositionHold(true, status);
       ++diff_planning_failure_events_;
-      // 失败的中间点不能继续缓存重发。后退完成后的下一周期必须重新从UAV0已经
-      // 实飞的稠密历史轨迹选择前向子点，而不是再次撞同一个局部目标。
-      if (status == "PLANNING_FAILED") diff_route_subgoal_valid_ = false;
-      diff_recovery_requested_ = true;
-      diff_recovery_retreat_requested_ = status == "PLANNING_FAILED";
+      const ros::Time now = ros::Time::now();
+      const bool failed_retreat =
+          diff_recovery_goal_valid_ && diff_recovery_goal_is_retreat_;
+      const bool failed_forward_candidate =
+          diff_route_subgoal_valid_ && !diff_recovery_goal_valid_;
+      if (failed_retreat) {
+        const double retreat_key = -1000.0 - static_cast<double>(
+            diff_follower_retreat_target_index_ ==
+                    std::numeric_limits<std::size_t>::max()
+                ? 0
+                : diff_follower_retreat_target_index_);
+        blacklistRouteCandidate(diff_recovery_goal_local_, retreat_key, now,
+                                "UAV1-history retreat planning failed");
+        ++diff_failure_retreat_attempts_;
+        diff_recovery_requested_ = true;
+        diff_recovery_retreat_requested_ = true;
+      } else if (failed_forward_candidate) {
+        blacklistRouteCandidate(diff_route_subgoal_local_,
+                                diff_route_subgoal_progress_, now,
+                                status);
+        ++diff_forward_candidate_failures_;
+        diff_route_subgoal_valid_ = false;
+        diff_route_subgoal_completes_relay_ = false;
+        diff_clipped_retry_count_ = 0;
+        const bool need_retreat =
+            diff_forward_candidate_failures_ >=
+            diff_forward_failures_before_retreat_;
+        diff_recovery_requested_ = need_retreat;
+        diff_recovery_retreat_requested_ = need_retreat;
+      } else {
+        // 终端点或没有活动短点时保持任务目标，仅触发下一周期重新规划，不锁死状态机。
+        diff_recovery_requested_ = false;
+        diff_recovery_retreat_requested_ = false;
+      }
       diff_recovery_goal_valid_ = false;
       diff_recovery_goal_is_retreat_ = false;
       diff_goal_published_ = false;
       diff_accepted_goal_valid_ = false;
       ROS_ERROR_THROTTLE(
           0.5,
-          "[safe_follower] UAV1 Diff status=%s; request verified-route %s subgoal.",
-          status.c_str(), diff_recovery_retreat_requested_ ? "retreat" : "forward");
+          "[safe_follower] UAV1 Diff status=%s; next action=%s, forward failures=%d.",
+          status.c_str(), diff_recovery_retreat_requested_
+                              ? "retreat on UAV1 executed history"
+                              : "select another UAV0-history candidate",
+          diff_forward_candidate_failures_);
     } else if (status == "TRAJECTORY_PUBLISHED") {
       // 2026-07-28: 只有Diff确认新轨迹已发布才解除等待锁点，避免“先解锁、后规划”空窗。
       setDiffWaitPositionHold(false, "new Diff trajectory published");
@@ -1420,76 +1553,194 @@ class LeaderSafePathFollower {
     return getRouteTrackingTarget(follower_world, relay_target, route_end_index, target);
   }
 
-  bool getDiffFailureRetreatTarget(const geometry_msgs::Point& follower_world,
+  void pruneBlockedRouteCandidates(const ros::Time& now) {
+    blocked_route_candidates_.erase(
+        std::remove_if(blocked_route_candidates_.begin(),
+                       blocked_route_candidates_.end(),
+                       [&now](const BlockedRouteCandidate& candidate) {
+                         return candidate.retry_after <= now;
+                       }),
+        blocked_route_candidates_.end());
+  }
+
+  bool routeCandidateBlocked(const geometry_msgs::Point& candidate_local,
+                             double progress, const ros::Time& now) const {
+    for (const BlockedRouteCandidate& blocked : blocked_route_candidates_) {
+      if (blocked.retry_after <= now) continue;
+      const bool same_progress = std::fabs(blocked.progress - progress) <=
+                                 diff_candidate_blacklist_radius_;
+      const bool same_position = distance3d(blocked.position, candidate_local) <=
+                                 diff_candidate_blacklist_radius_;
+      if (same_progress || same_position) return true;
+    }
+    return false;
+  }
+
+  void blacklistRouteCandidate(const geometry_msgs::Point& candidate_local,
+                               double progress, const ros::Time& now,
+                               const std::string& reason) {
+    pruneBlockedRouteCandidates(now);
+    for (BlockedRouteCandidate& blocked : blocked_route_candidates_) {
+      if (std::fabs(blocked.progress - progress) <= diff_candidate_blacklist_radius_ ||
+          distance3d(blocked.position, candidate_local) <=
+              diff_candidate_blacklist_radius_) {
+        blocked.retry_after = now + ros::Duration(diff_candidate_blacklist_duration_);
+        return;
+      }
+    }
+    BlockedRouteCandidate blocked;
+    blocked.position = candidate_local;
+    blocked.progress = progress;
+    blocked.retry_after = now + ros::Duration(diff_candidate_blacklist_duration_);
+    blocked_route_candidates_.push_back(blocked);
+    ROS_WARN("[safe_follower] temporarily blacklist route candidate progress=%.2f "
+             "local=(%.2f,%.2f,%.2f) for %.1fs reason=%s.",
+             progress, candidate_local.x, candidate_local.y, candidate_local.z,
+             diff_candidate_blacklist_duration_, reason.c_str());
+  }
+
+  bool routePointAtProgress(double progress, RoutePoint* target) const {
+    if (route_.empty()) return false;
+    progress = std::max(route_.front().progress,
+                        std::min(progress, route_.back().progress));
+    if (progress <= route_.front().progress + 1.0e-6) {
+      *target = route_.front();
+      return true;
+    }
+    for (std::size_t i = 1; i < route_.size(); ++i) {
+      if (route_[i].progress + 1.0e-6 < progress) continue;
+      const double span = route_[i].progress - route_[i - 1].progress;
+      const double ratio = span > 1.0e-6
+                               ? std::max(0.0, std::min(1.0,
+                                     (progress - route_[i - 1].progress) / span))
+                               : 0.0;
+      target->position = interpolate(route_[i - 1].position,
+                                     route_[i].position, ratio);
+      target->yaw = route_[i].yaw;
+      target->progress = progress;
+      return true;
+    }
+    *target = route_.back();
+    return true;
+  }
+
+  bool selectForwardRouteCandidate(const geometry_msgs::Point& follower_world,
                                    const RoutePoint& relay_target,
+                                   const ros::Time& now,
                                    RoutePoint* target) {
-    if (route_.size() < 2 || diff_failure_retreat_distance_ <= 0.0) return false;
-
-    // Restrict nearest-point matching to the active relay neighbourhood. This avoids
-    // jumping to a spatially close but topologically different branch in a U-shaped aisle.
-    const double previous_progress =
-        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].progress
-                                : route_.front().progress;
-    const double search_min_progress = std::max(
-        route_.front().progress,
-        previous_progress - diff_failure_retreat_distance_ - path_sample_spacing_);
-    const geometry_msgs::Point previous_position =
-        active_relay_index_ > 0 ? relay_waypoints_[active_relay_index_ - 1].position
-                                : route_.front().position;
-    const double distance_from_previous =
-        std::hypot(follower_world.x - previous_position.x,
-                   follower_world.y - previous_position.y);
-    // Do not let a nearby future leg of a U-shaped route masquerade as current progress.
-    const double plausible_progress_upper =
-        previous_progress + distance_from_previous + 2.0 * path_sample_spacing_;
-    const double search_max_progress = std::min(
-        relay_target.progress + path_sample_spacing_, plausible_progress_upper);
-
-    std::size_t nearest_index = 0;
+    if (route_.empty()) return false;
+    pruneBlockedRouteCandidates(now);
+    const double segment_start_progress = active_relay_index_ > 0
+        ? relay_waypoints_[active_relay_index_ - 1].progress
+        : route_.front().progress;
+    const double segment_end_progress = std::min(relay_target.progress,
+                                                  route_.back().progress);
+    std::size_t route_start_index = 0;
+    while (route_start_index + 1 < route_.size() &&
+           route_[route_start_index].progress + path_sample_spacing_ <
+               segment_start_progress) {
+      ++route_start_index;
+    }
+    const std::size_t search_start_index = diff_allow_route_backtrack_attachment_
+        ? route_start_index
+        : std::max(route_start_index,
+                   std::min(follower_route_index_, route_.size() - 1));
+    const double attachment_distance = std::hypot(
+        route_[search_start_index].position.x - follower_world.x,
+        route_[search_start_index].position.y - follower_world.y);
+    const double plausible_progress_upper = std::min(
+        segment_end_progress + path_sample_spacing_,
+        route_[search_start_index].progress + attachment_distance +
+            max_target_step_ + 2.0 * path_sample_spacing_);
+    std::size_t nearest_index = search_start_index;
     double nearest_distance = std::numeric_limits<double>::infinity();
-    bool found_nearest = false;
-    for (std::size_t i = 0; i < route_.size(); ++i) {
-      if (route_[i].progress < search_min_progress ||
-          route_[i].progress > search_max_progress)
-        continue;
+    for (std::size_t i = search_start_index; i < route_.size(); ++i) {
+      if (route_[i].progress > plausible_progress_upper) break;
       const double distance = std::hypot(route_[i].position.x - follower_world.x,
                                          route_[i].position.y - follower_world.y);
       if (distance < nearest_distance) {
         nearest_distance = distance;
         nearest_index = i;
-        found_nearest = true;
       }
     }
-    if (!found_nearest || nearest_distance > relay_occupied_attachment_radius_) return false;
-
-    const double retreat_progress = std::max(
-        route_.front().progress,
-        route_[nearest_index].progress - diff_failure_retreat_distance_);
-    const double minimum_retreat =
-        std::max(0.15, diff_failure_retreat_arrive_radius_ + 0.05);
-    if (route_[nearest_index].progress - retreat_progress < minimum_retreat) return false;
-
-    std::size_t retreat_index = 0;
-    for (std::size_t i = 1; i < route_.size(); ++i) {
-      if (route_[i].progress + 1.0e-6 < retreat_progress) continue;
-      const double progress_span = route_[i].progress - route_[i - 1].progress;
-      const double ratio = progress_span > 1.0e-6
-                               ? std::max(0.0, std::min(1.0,
-                                     (retreat_progress - route_[i - 1].progress) /
-                                         progress_span))
-                               : 0.0;
+    if (!std::isfinite(nearest_distance)) return false;
+    follower_route_index_ = nearest_index;
+    diff_allow_route_backtrack_attachment_ = false;
+    const double current_progress = std::max(segment_start_progress,
+                                             route_[nearest_index].progress);
+    const double lookahead = std::max(0.18, route_tracking_lookahead_);
+    const std::array<double, 6> steps = {{lookahead, 0.80 * lookahead,
+                                         0.60 * lookahead, 1.20 * lookahead,
+                                         1.50 * lookahead, 0.18}};
+    std::vector<double> tried_progress;
+    for (double step : steps) {
+      step = std::min(step, max_target_step_);
+      const double candidate_progress = std::min(segment_end_progress,
+                                                  current_progress + step);
+      bool duplicate = false;
+      for (double tried : tried_progress) {
+        if (std::fabs(tried - candidate_progress) < 0.03) duplicate = true;
+      }
+      if (duplicate || candidate_progress <= current_progress + 0.05) continue;
+      tried_progress.push_back(candidate_progress);
       RoutePoint candidate;
-      candidate.position = interpolate(route_[i - 1].position, route_[i].position, ratio);
-      candidate.yaw = route_[i].yaw;
-      candidate.progress = retreat_progress;
-      const double retreat_distance =
-          std::hypot(candidate.position.x - follower_world.x,
-                     candidate.position.y - follower_world.y);
-      if (retreat_distance < minimum_retreat) return false;
+      if (!routePointAtProgress(candidate_progress, &candidate)) continue;
+      const geometry_msgs::Point candidate_local =
+          useFollowerCruiseHeight(worldToFollower(candidate.position));
+      if (routeCandidateBlocked(candidate_local, candidate_progress, now)) continue;
+      if (distance3d(candidate_local, follower_odom_.pose.pose.position) <=
+          diff_endpoint_capture_radius_) continue;
+      int occupied_hits = 0;
+      if (relayPointOccupied(candidate_local, &occupied_hits)) {
+        blacklistRouteCandidate(candidate_local, candidate_progress, now,
+                                "point occupied in follower cloud");
+        continue;
+      }
       *target = candidate;
-      retreat_index = i - 1;
-      follower_route_index_ = retreat_index;
       return true;
+    }
+    return false;
+  }
+
+  bool getFollowerHistoryRetreatTarget(const geometry_msgs::Point& follower_local,
+                                       const ros::Time& now, RoutePoint* target) {
+    if (follower_executed_route_.size() < 2) return false;
+    pruneBlockedRouteCandidates(now);
+    const geometry_msgs::Point follower_world = followerToWorld(follower_local);
+    std::size_t nearest_index = follower_executed_route_.size() - 1;
+    double nearest_distance = std::numeric_limits<double>::infinity();
+    for (std::size_t offset = 0; offset < follower_executed_route_.size(); ++offset) {
+      const std::size_t index = follower_executed_route_.size() - 1 - offset;
+      const double distance = std::hypot(
+          follower_executed_route_[index].position.x - follower_world.x,
+          follower_executed_route_[index].position.y - follower_world.y);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        nearest_index = index;
+      }
+      if (offset > 30 && nearest_distance <= relay_occupied_attachment_radius_) break;
+    }
+    if (nearest_distance > std::max(0.50, relay_occupied_attachment_radius_)) return false;
+
+    const std::array<double, 5> retreat_distances = {{
+        diff_failure_retreat_distance_, 0.25, 0.55, 0.18, 0.70}};
+    for (double desired_retreat : retreat_distances) {
+      double accumulated = 0.0;
+      for (std::size_t i = nearest_index; i > 0; --i) {
+        accumulated += distance3d(follower_executed_route_[i].position,
+                                  follower_executed_route_[i - 1].position);
+        if (accumulated + 1.0e-6 < desired_retreat) continue;
+        RoutePoint candidate = follower_executed_route_[i - 1];
+        const geometry_msgs::Point candidate_local =
+            worldToFollower(candidate.position);
+        if (distance3d(candidate_local, follower_local) <=
+            diff_failure_retreat_arrive_radius_ + 0.05)
+          break;
+        if (routeCandidateBlocked(candidate_local, -candidate.progress, now)) break;
+        *target = candidate;
+        diff_follower_retreat_target_index_ = i - 1;
+        return true;
+      }
     }
     return false;
   }
@@ -2292,7 +2543,7 @@ class LeaderSafePathFollower {
     RoutePoint desired_world = relay_waypoints_[active_relay_index_];
     const bool terminal_relay = terminal_mode_active_ &&
                                 active_relay_index_ == terminal_waypoint_index_;
-    if (enable_relay_goal_clearance_ && !terminal_relay && !diff_goal_published_ &&
+    if (enable_relay_goal_clearance_ && terminal_relay && !diff_goal_published_ &&
         !diff_recovery_goal_valid_) {
       if (require_fresh_cloud_ &&
           (!follower_cloud_ || (now - cloud_stamp_).toSec() > cloud_timeout_)) {
@@ -2330,29 +2581,45 @@ class LeaderSafePathFollower {
                        : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
-    // 入口后的内部接力必须沿UAV0已经实飞的稠密折线逐步推进。此前这里直接把相邻的
-    // 2.5m接力点交给Diff，转弯时Diff会把终点裁到近处；跟随器又会误把裁短点当作
-    // 原接力点完成，导致后续目标跨度持续增大。子目标一旦选定，在完成或明确失败前保持不变。
-    if (!terminal_relay && active_relay_index_ > 0 &&
+    // 所有非终端接力都只是路线进度标记。实际下发点必须从UAV0稠密实飞轨迹的多个
+    // 短步候选中选出；选不到时绝不回退为远端接力点直连。
+    if (!terminal_relay &&
         !diff_recovery_requested_ && !diff_recovery_retreat_requested_ &&
         !diff_recovery_goal_valid_ && !diff_route_subgoal_valid_ &&
         !diff_goal_published_) {
       RoutePoint route_step_world;
-      if (getRelayRouteTarget(followerToWorld(current_local), desired_world,
-                              &route_step_world)) {
+      if (selectForwardRouteCandidate(followerToWorld(current_local), desired_world,
+                                      now, &route_step_world)) {
         const geometry_msgs::Point candidate =
             useFollowerCruiseHeight(worldToFollower(route_step_world.position));
         const double candidate_to_relay = distance3d(candidate, desired_local);
-        const double candidate_step = distance3d(candidate, current_local);
-        if (candidate_to_relay > relay_arrive_radius_ &&
-            candidate_step > diff_endpoint_capture_radius_) {
-          diff_route_subgoal_local_ = candidate;
-          diff_route_subgoal_valid_ = true;
-          ROS_WARN("[safe_follower] relay %zu/%zu use verified-route subgoal "
-                   "local=(%.2f,%.2f,%.2f), remaining=%.2fm.",
-                   active_relay_index_ + 1, relay_waypoints_.size(), candidate.x,
-                   candidate.y, candidate.z, candidate_to_relay);
-        }
+        diff_route_subgoal_local_ = candidate;
+        diff_route_subgoal_progress_ = route_step_world.progress;
+        diff_route_subgoal_completes_relay_ =
+            candidate_to_relay <= relay_arrive_radius_;
+        diff_route_subgoal_valid_ = true;
+        diff_clipped_retry_count_ = 0;
+        diff_command_stale_retry_count_ = 0;
+        ROS_WARN("[safe_follower] relay %zu/%zu use UAV0-history candidate "
+                 "progress=%.2f local=(%.2f,%.2f,%.2f), remaining=%.2fm%s.",
+                 active_relay_index_ + 1, relay_waypoints_.size(),
+                 route_step_world.progress, candidate.x, candidate.y, candidate.z,
+                 candidate_to_relay,
+                 diff_route_subgoal_completes_relay_ ? " (milestone capture)" : "");
+      } else {
+        setDiffWaitPositionHold(true, "search alternate UAV0-history candidate");
+        diff_recovery_requested_ = follower_executed_route_.size() >= 2;
+        diff_recovery_retreat_requested_ = diff_recovery_requested_;
+        publishState(diff_recovery_requested_ ? "DIFF_SELECT_UAV1_HISTORY_RETREAT"
+                                              : "DIFF_RETRY_UAV0_HISTORY_CANDIDATES",
+                     1.0, 0.35, 0.0);
+        ROS_WARN_THROTTLE(
+            0.5,
+            "[safe_follower] no clear UAV0-history candidate for relay %zu; %s.",
+            active_relay_index_ + 1,
+            diff_recovery_requested_ ? "retreat on UAV1 executed history"
+                                     : "retry candidates after map/blacklist refresh");
+        return true;
       }
     }
 
@@ -2375,6 +2642,14 @@ class LeaderSafePathFollower {
                diff_recovery_goal_local_.x, diff_recovery_goal_local_.y,
                diff_recovery_goal_local_.z);
       diff_recovery_goal_valid_ = false;
+      if (completed_retreat && diff_follower_retreat_target_index_ !=
+                                   std::numeric_limits<std::size_t>::max()) {
+        truncateFollowerExecutedRoute(diff_follower_retreat_target_index_, current_local);
+        diff_follower_retreat_target_index_ =
+            std::numeric_limits<std::size_t>::max();
+        diff_allow_route_backtrack_attachment_ = true;
+        diff_forward_candidate_failures_ = 0;
+      }
       diff_recovery_requested_ = !completed_retreat;
       diff_recovery_retreat_requested_ = false;
       diff_recovery_goal_is_retreat_ = false;
@@ -2389,25 +2664,16 @@ class LeaderSafePathFollower {
     }
     if (diff_recovery_requested_ && !terminal_relay) {
       RoutePoint recovery_world;
-      if (diff_recovery_retreat_requested_ &&
-          diff_failure_retreat_attempts_ >= diff_failure_retreat_max_attempts_) {
-        setDiffWaitPositionHold(true, "planning-failure retreat attempts exhausted");
-        publishState("DIFF_FAILURE_RETREAT_EXHAUSTED", 1.0, 0.0, 0.0);
-        ROS_ERROR_THROTTLE(
-            1.0,
-            "[safe_follower] relay %zu retreat attempts exhausted (%d); keep HOLD for operator recovery.",
-            active_relay_index_ + 1, diff_failure_retreat_max_attempts_);
-        return true;
-      }
       const bool recovery_target_found =
           diff_recovery_retreat_requested_
-              ? getDiffFailureRetreatTarget(followerToWorld(current_local), desired_world,
-                                            &recovery_world)
+              ? getFollowerHistoryRetreatTarget(current_local, now, &recovery_world)
               : getRelayRouteTarget(followerToWorld(current_local), desired_world,
                                     &recovery_world);
       if (recovery_target_found) {
         const geometry_msgs::Point candidate =
-            useFollowerCruiseHeight(worldToFollower(recovery_world.position));
+            diff_recovery_retreat_requested_
+                ? worldToFollower(recovery_world.position)
+                : useFollowerCruiseHeight(worldToFollower(recovery_world.position));
         const double required_distance = diff_recovery_retreat_requested_
                                              ? diff_failure_retreat_arrive_radius_
                                              : diff_recovery_arrive_radius_;
@@ -2415,15 +2681,15 @@ class LeaderSafePathFollower {
           diff_recovery_goal_local_ = candidate;
           diff_recovery_goal_valid_ = true;
           diff_recovery_goal_is_retreat_ = diff_recovery_retreat_requested_;
+          diff_command_stale_retry_count_ = 0;
           if (diff_recovery_goal_is_retreat_) ++diff_failure_retreat_attempts_;
           diff_recovery_requested_ = false;
           diff_recovery_retreat_requested_ = false;
           if (diff_recovery_goal_is_retreat_) {
-            ROS_ERROR("[safe_follower] UAV1 Diff failure retreat %d/%d local=(%.2f,%.2f,%.2f), "
-                      "back %.2fm before retrying relay %zu/%zu.",
-                      diff_failure_retreat_attempts_, diff_failure_retreat_max_attempts_,
+            ROS_ERROR("[safe_follower] UAV1 Diff flexible retreat %d on own executed history "
+                      "local=(%.2f,%.2f,%.2f), then reattach relay %zu/%zu.",
+                      diff_failure_retreat_attempts_,
                       candidate.x, candidate.y, candidate.z,
-                      diff_failure_retreat_distance_,
                       active_relay_index_ + 1, relay_waypoints_.size());
           } else {
             ROS_ERROR("[safe_follower] UAV1 Diff outside-map forward subgoal local=(%.2f,%.2f,%.2f) "
@@ -2437,15 +2703,24 @@ class LeaderSafePathFollower {
         setDiffWaitPositionHold(
             true, retreat_unavailable ? "no verified retreat point after planning failure"
                                       : "no verified forward point for outside-map goal");
-        publishState(retreat_unavailable ? "DIFF_WAIT_FAILURE_RETREAT"
-                                         : "DIFF_WAIT_OUTSIDE_MAP_RECOVERY",
+        publishState(retreat_unavailable ? "DIFF_RESELECT_WITHOUT_RETREAT"
+                                         : "DIFF_RETRY_FORWARD_HISTORY",
                      1.0, 0.2, 0.0);
         ROS_ERROR_THROTTLE(
-            1.0,
-            "[safe_follower] cannot find a verified-route %s subgoal; keep HOLD.",
-            retreat_unavailable ? "retreat" : "forward");
+            0.5,
+            "[safe_follower] no %s history candidate now; return to rolling selection, "
+            "never enter operator-only HOLD.",
+            retreat_unavailable ? "UAV1 retreat" : "UAV0 forward");
+        diff_recovery_requested_ = false;
+        diff_recovery_retreat_requested_ = false;
         return true;
       }
+    }
+    if (!terminal_relay && !diff_recovery_goal_valid_ &&
+        !diff_route_subgoal_valid_) {
+      setDiffWaitPositionHold(true, "nonterminal relay requires verified history candidate");
+      publishState("DIFF_RESELECT_HISTORY_CANDIDATE", 1.0, 0.3, 0.0);
+      return true;
     }
     const geometry_msgs::Point command_local = diff_recovery_goal_valid_
         ? diff_recovery_goal_local_
@@ -2481,6 +2756,26 @@ class LeaderSafePathFollower {
         diff_goal_published_ = false;
         ROS_ERROR("[safe_follower] UAV1 Diff dynamic HOLD id=%u; discard current trajectory.",
                   dynamic_id);
+      }
+      if (!terminal_relay && diff_route_subgoal_valid_) {
+        blacklistRouteCandidate(diff_route_subgoal_local_,
+                                diff_route_subgoal_progress_, now,
+                                "dynamic obstacle blocks current candidate");
+        ++diff_forward_candidate_failures_;
+        diff_route_subgoal_valid_ = false;
+        diff_route_subgoal_completes_relay_ = false;
+        diff_clipped_retry_count_ = 0;
+      } else if (diff_recovery_goal_valid_ && diff_recovery_goal_is_retreat_) {
+        const double retreat_key = -1000.0 - static_cast<double>(
+            diff_follower_retreat_target_index_ ==
+                    std::numeric_limits<std::size_t>::max()
+                ? 0
+                : diff_follower_retreat_target_index_);
+        blacklistRouteCandidate(diff_recovery_goal_local_, retreat_key, now,
+                                "dynamic obstacle blocks UAV1-history retreat");
+        diff_recovery_goal_valid_ = false;
+        diff_recovery_requested_ = true;
+        diff_recovery_retreat_requested_ = true;
       }
       publishState("DIFF_DYNAMIC_HOLD", 1.0, 0.2, 0.0);
       return true;
@@ -2531,7 +2826,9 @@ class LeaderSafePathFollower {
 
       const bool clipped_endpoint_reached = diff_accepted_goal_valid_ &&
                                             !accepted_matches_command;
-      if (diff_route_subgoal_valid_ || clipped_endpoint_reached) {
+      if ((diff_route_subgoal_valid_ &&
+           !diff_route_subgoal_completes_relay_) ||
+          clipped_endpoint_reached) {
         const bool route_subgoal_completed =
             diff_route_subgoal_valid_ && !clipped_endpoint_reached;
         ROS_WARN("[safe_follower] UAV1 Diff reached %s endpoint (%.2f,%.2f,%.2f); "
@@ -2539,14 +2836,30 @@ class LeaderSafePathFollower {
                  route_subgoal_completed ? "verified-route subgoal" : "clipped",
                  arrival_goal.x, arrival_goal.y, arrival_goal.z,
                  active_relay_index_ + 1, relay_waypoints_.size());
-        setDiffWaitPositionHold(
-            true, route_subgoal_completed ? "verified-route subgoal reached"
-                                          : "clipped endpoint reached; retry current subgoal");
+        setDiffWaitPositionHold(true,
+            route_subgoal_completed ? "verified-route subgoal reached"
+                                    : "clipped endpoint reached; choose flexible retry");
         if (route_subgoal_completed) {
           diff_route_subgoal_valid_ = false;
-          // 已经沿新选历史点取得真实进展，后续点的失败计数重新开始；避免两个
-          // 不同子点各失败一次就被累计成当前接力段永久HOLD。
+          diff_route_subgoal_completes_relay_ = false;
+          diff_forward_candidate_failures_ = 0;
+          diff_clipped_retry_count_ = 0;
+          diff_command_stale_retry_count_ = 0;
           diff_failure_retreat_attempts_ = 0;
+        } else {
+          ++diff_clipped_retry_count_;
+          if (!terminal_relay && diff_route_subgoal_valid_ &&
+              diff_clipped_retry_count_ >= diff_clipped_retry_limit_) {
+            blacklistRouteCandidate(diff_route_subgoal_local_,
+                                    diff_route_subgoal_progress_, now,
+                                    "Diff repeatedly clipped endpoint");
+            ++diff_forward_candidate_failures_;
+            diff_route_subgoal_valid_ = false;
+            diff_route_subgoal_completes_relay_ = false;
+            diff_clipped_retry_count_ = 0;
+            ROS_WARN("[safe_follower] clipped endpoint retry limit reached; "
+                     "switch to another UAV0-history candidate.");
+          }
         }
         relay_arrival_stamp_ = ros::Time(0);
         diff_endpoint_capture_stamp_ = ros::Time(0);
@@ -2588,7 +2901,11 @@ class LeaderSafePathFollower {
       diff_recovery_goal_valid_ = false;
       diff_recovery_goal_is_retreat_ = false;
       diff_route_subgoal_valid_ = false;
+      diff_route_subgoal_completes_relay_ = false;
       diff_accepted_goal_valid_ = false;
+      diff_forward_candidate_failures_ = 0;
+      diff_clipped_retry_count_ = 0;
+      diff_command_stale_retry_count_ = 0;
       diff_failure_retreat_attempts_ = 0;
       return true;
     }
@@ -2600,15 +2917,47 @@ class LeaderSafePathFollower {
         diff_command_seen_for_goal_ && !diff_command_stamp_.isZero() &&
         (now - diff_command_stamp_).toSec() >= diff_command_stale_timeout_;
     if (command_stale) {
+      bool reselect_after_stale = false;
       setDiffWaitPositionHold(true, "Diff PositionCommand stale before arrival");
       ROS_ERROR("[safe_follower] UAV1 Diff COMMAND STALE %.2fs at relay=%zu/%zu "
                 "error=%.2fm; reissue current goal instead of waiting forever.",
                 (now - diff_command_stamp_).toSec(), active_relay_index_ + 1,
                 relay_waypoints_.size(), horizontal_error);
+      ++diff_command_stale_retry_count_;
+      if (!terminal_relay && diff_route_subgoal_valid_ &&
+          diff_command_stale_retry_count_ >= diff_clipped_retry_limit_) {
+        blacklistRouteCandidate(diff_route_subgoal_local_,
+                                diff_route_subgoal_progress_, now,
+                                "Diff command repeatedly stale before arrival");
+        ++diff_forward_candidate_failures_;
+        diff_route_subgoal_valid_ = false;
+        diff_route_subgoal_completes_relay_ = false;
+        diff_command_stale_retry_count_ = 0;
+        reselect_after_stale = true;
+        ROS_WARN("[safe_follower] stale-command retry limit reached; "
+                 "switch to another UAV0-history candidate.");
+      } else if (diff_recovery_goal_valid_ && diff_recovery_goal_is_retreat_ &&
+                 diff_command_stale_retry_count_ >= diff_clipped_retry_limit_) {
+        const double retreat_key = -1000.0 - static_cast<double>(
+            diff_follower_retreat_target_index_ ==
+                    std::numeric_limits<std::size_t>::max()
+                ? 0
+                : diff_follower_retreat_target_index_);
+        blacklistRouteCandidate(diff_recovery_goal_local_, retreat_key, now,
+                                "UAV1-history retreat command repeatedly stale");
+        diff_recovery_goal_valid_ = false;
+        diff_recovery_requested_ = true;
+        diff_recovery_retreat_requested_ = true;
+        diff_command_stale_retry_count_ = 0;
+        reselect_after_stale = true;
+        ROS_WARN("[safe_follower] retreat command stale repeatedly; "
+                 "switch to another UAV1-history retreat point.");
+      }
       diff_goal_published_ = false;
       diff_plan_response_received_ = false;
       diff_accepted_goal_valid_ = false;
       diff_command_seen_for_goal_ = false;
+      if (reselect_after_stale) return true;
     }
 
     // 2026-07-28: 只有连Diff状态都没收到才超时重发；已生成轨迹后禁止1Hz重置规划器。
@@ -2654,9 +3003,9 @@ class LeaderSafePathFollower {
       return;
     }
     if (!follower_started_) return;
-    // 2026-07-28: FAST-LIO跳变故障锁存后不再生成任何跟随目标；控制器已通过独立话题切到MAVROS本地锁点。
+    // FAST-LIO异常期间不生成目标；连续可信样本恢复后回调会自动解除并请求新轨迹。
     if (follower_odom_fault_latched_) {
-      publishState("ODOM_FAULT_MAVROS_HOLD_RESTART_REQUIRED", 1.0, 0.0, 0.0);
+      publishState("ODOM_FAULT_WAIT_AUTOMATIC_RECOVERY", 1.0, 0.0, 0.0);
       return;
     }
     if (!have_follower_odom_ || !have_leader_odom_) {
@@ -2957,6 +3306,9 @@ class LeaderSafePathFollower {
   sensor_msgs::PointCloud2::ConstPtr follower_cloud_;
   std::vector<DynamicObstacleSample> retained_dynamic_obstacles_;
   std::deque<RoutePoint> route_;
+  // UAV1实际执行轨迹作为可逆安全栈：正常前进时追加，退让时沿栈向后取点并在到达后截断。
+  std::deque<RoutePoint> follower_executed_route_;
+  std::deque<BlockedRouteCandidate> blocked_route_candidates_;
   // 2026-07-21: 保存尚未判定为“真实回头”或“U形新分支”的负投影实飞折线，确认后原样接入而非直连。
   std::deque<RoutePoint> turn_candidate_route_;
   // 2026-07-16: relay_waypoints_ 是实际下发给后机的门点、滚动内部点和真实终点。
@@ -2994,7 +3346,7 @@ class LeaderSafePathFollower {
   bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 已验证路线短子目标恢复。
   bool diff_recovery_retreat_requested_{false}, diff_recovery_goal_is_retreat_{false};
   bool diff_command_seen_for_goal_{false};  // 2026-07-28: 当前Diff目标是否真正产生过PositionCommand。
-  bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
+  bool follower_odom_fault_latched_{false};  // 异常期间锁点，连续可信样本恢复后自动解除。
   bool have_confirmed_door_{false}, door_waypoint_released_{false};
   bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
   bool have_front_scan_anchor_{false};
@@ -3052,12 +3404,18 @@ class LeaderSafePathFollower {
   double diff_recovery_arrive_radius_{0.18};  // 2026-07-28: 短子目标切换半径。
   double diff_failure_retreat_distance_{0.40};  // 规划失败后沿已验证路线后退的距离。
   double diff_failure_retreat_arrive_radius_{0.10};
+  double diff_candidate_blacklist_duration_{4.0};
+  double diff_candidate_blacklist_radius_{0.08};
+  double follower_history_sample_spacing_{0.08};
+  double follower_history_max_length_{30.0};
+  double follower_history_length_{0.0};
   double diff_endpoint_capture_radius_{0.15}, diff_endpoint_capture_dwell_{0.45};
   double diff_accepted_goal_tolerance_{0.20};
   double diff_command_stale_timeout_{0.80};  // 2026-07-28: 与控制器0.60s轨迹超时错开0.20s。
   double follower_odom_jump_speed_{2.0}, follower_odom_jump_vertical_speed_{1.2};
   int follower_odom_jump_confirm_samples_{3};
   int follower_odom_jump_consecutive_samples_{0};
+  int follower_odom_recovery_good_samples_{0};
   double stuck_detection_timeout_{1.50}, stuck_min_progress_{0.06};
   double recovery_step_{0.35}, recovery_speed_{0.20}, recovery_attempt_timeout_{1.50};
   double recovery_success_distance_{0.12}, recovery_near_ignore_{0.06};
@@ -3081,7 +3439,8 @@ class LeaderSafePathFollower {
   int relay_endpoint_min_points_{2};
   int relay_point_occupied_min_points_{2};
   int relay_goal_clearance_min_points_{2};
-  int diff_failure_retreat_max_attempts_{2};
+  int diff_forward_failures_before_retreat_{3};
+  int diff_clipped_retry_limit_{2};
   double leader_route_progress_{0.0}, last_relay_selection_progress_{0.0};
   int max_internal_relay_points_{0}, internal_relay_count_{0};
   std::size_t active_relay_index_{0}, terminal_waypoint_index_{std::numeric_limits<std::size_t>::max()};
@@ -3102,6 +3461,13 @@ class LeaderSafePathFollower {
   geometry_msgs::Point diff_accepted_goal_local_;  // 2026-07-28: Diff对占据原目标修正后的真正落点。
   geometry_msgs::Point diff_route_subgoal_local_;  // UAV0已验证折线上的当前短步目标。
   bool diff_route_subgoal_valid_{false};
+  bool diff_route_subgoal_completes_relay_{false};
+  bool diff_allow_route_backtrack_attachment_{false};
+  double diff_route_subgoal_progress_{0.0};
+  int diff_forward_candidate_failures_{0};
+  int diff_clipped_retry_count_{0};
+  int diff_command_stale_retry_count_{0};
+  std::size_t diff_follower_retreat_target_index_{std::numeric_limits<std::size_t>::max()};
   int recovery_attempt_count_{0};
   int diff_planning_failure_events_{0};  // 2026-07-28: Diff连续失败诊断计数。
   int diff_failure_retreat_attempts_{0};

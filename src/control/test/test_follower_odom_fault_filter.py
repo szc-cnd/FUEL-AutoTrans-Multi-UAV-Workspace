@@ -49,18 +49,20 @@ def test_diff_planning_failure_reselects_route_point_after_retreat():
         "void timerCallback", maxsplit=1
     )[0]
 
-    assert 'diff_recovery_retreat_requested_ = status == "PLANNING_FAILED"' in status_callback
-    assert 'if (status == "PLANNING_FAILED") diff_route_subgoal_valid_ = false;' in status_callback
-    assert "getDiffFailureRetreatTarget" in execution
+    assert "blacklistRouteCandidate" in status_callback
+    assert "diff_forward_failures_before_retreat_" in status_callback
+    assert "getFollowerHistoryRetreatTarget" in execution
     assert '"failure retreat reached; select new route subgoal"' in execution
     assert "if (completed_retreat) return true;" in execution
-    assert "diff_failure_retreat_attempts_ >= diff_failure_retreat_max_attempts_" in execution
+    assert "DIFF_FAILURE_RETREAT_EXHAUSTED" not in execution
+    assert "operator recovery" not in execution
 
 
 def test_failure_retreat_reaches_full_distance_and_stops_before_replan():
     assert 'name="diff_failure_retreat_distance" value="0.40"' in LAUNCH
     assert 'name="diff_failure_retreat_arrive_radius" value="0.10"' in LAUNCH
-    assert 'name="diff_failure_retreat_max_attempts" value="2"' in LAUNCH
+    assert 'name="follower_history_sample_spacing" value="0.08"' in LAUNCH
+    assert 'name="follower_history_max_length" value="30.0"' in LAUNCH
     assert "recovery_error <= diff_failure_retreat_arrive_radius_" in SOURCE
     assert "follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_" in SOURCE
     assert "follower_vertical_speed_ <= relay_arrive_max_vertical_speed_" in SOURCE
@@ -70,9 +72,8 @@ def test_outside_map_uses_forward_recovery_instead_of_retreat():
     status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
         "bool getLaggedTarget", maxsplit=1
     )[0]
-    assert 'diff_recovery_retreat_requested_ = status == "PLANNING_FAILED"' in status_callback
     assert 'status == "GOAL_REJECTED_OUTSIDE_MAP"' in status_callback
-    assert 'diff_recovery_retreat_requested_ ? "retreat" : "forward"' in status_callback
+    assert '"select another UAV0-history candidate"' in status_callback
 
 
 def test_matching_delayed_success_is_not_misclassified_as_stale():
@@ -92,4 +93,37 @@ def test_successful_new_route_subgoal_resets_failure_budget():
         "if (route_subgoal_completed)", maxsplit=1
     )[1].split("relay_arrival_stamp_", maxsplit=1)[0]
     assert "diff_route_subgoal_valid_ = false;" in route_completion
-    assert "diff_failure_retreat_attempts_ = 0;" in route_completion
+    assert "diff_forward_candidate_failures_ = 0;" in route_completion
+
+
+def test_nonterminal_diff_goal_cannot_fall_back_to_distant_relay():
+    execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
+        "void timerCallback", maxsplit=1
+    )[0]
+    assert "selectForwardRouteCandidate" in execution
+    assert '"nonterminal relay requires verified history candidate"' in execution
+    assert "!terminal_relay && !diff_recovery_goal_valid_" in execution
+    selector = SOURCE.split("bool selectForwardRouteCandidate", maxsplit=1)[1].split(
+        "bool getFollowerHistoryRetreatTarget", maxsplit=1
+    )[0]
+    assert "plausible_progress_upper" in selector
+    assert "diff_allow_route_backtrack_attachment_" in selector
+
+
+def test_candidate_blacklist_and_clipped_retry_are_bounded():
+    assert 'name="diff_candidate_blacklist_duration" value="4.0"' in LAUNCH
+    assert 'name="diff_forward_failures_before_retreat" value="3"' in LAUNCH
+    assert 'name="diff_clipped_retry_limit" value="2"' in LAUNCH
+    assert "temporarily blacklist route candidate" in SOURCE
+    assert "clipped endpoint retry limit reached" in SOURCE
+    assert "stale-command retry limit reached" in SOURCE
+    assert "if (reselect_after_stale) return true;" in SOURCE
+
+
+def test_follower_odom_fault_recovers_without_restart():
+    callback = SOURCE.split("void followerOdomCallback", maxsplit=1)[1].split(
+        "void cloudCallback", maxsplit=1
+    )[0]
+    assert "follower_odom_recovery_good_samples_ >= 10" in callback
+    assert "follower_odom_fault_latched_ = false;" in callback
+    assert "request a fresh Diff trajectory" in callback
