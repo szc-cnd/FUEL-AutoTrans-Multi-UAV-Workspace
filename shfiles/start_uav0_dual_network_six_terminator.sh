@@ -15,8 +15,8 @@ UAV0_LAUNCHER="${SCRIPT_DIR}/start_uav0_six_terminator.sh"
 source "${NETWORK_SETUP}"
 configure_dual_uav_ros_network uav0
 
-# 当前七分屏运行纯FUEL；检测栈默认不会触发降落，控制器必须直连MAVROS。
-# 显式覆盖该变量，避免父终端遗留的搜索降落配置截断控制指令。
-export UAV0_AUTOTRANS_SETPOINT_TOPIC="/UAV0/mavros/setpoint_raw/attitude"
+# 双机检测栈会启动降落控制仲裁器。正常阶段由它透传 AutoTrans 姿态指令；
+# 精降触发后停止透传姿态指令，只向 PX4 转发精降 PositionTarget。
+export UAV0_AUTOTRANS_SETPOINT_TOPIC="/UAV0/control/attitude_setpoint"
 
 exec "${UAV0_LAUNCHER}" "$@"
