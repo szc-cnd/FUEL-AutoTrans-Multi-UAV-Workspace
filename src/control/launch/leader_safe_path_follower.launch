@@ -40,6 +40,9 @@
     <node if="$(arg enable_diff_rviz)" name="UAV1_diff_rviz"
           pkg="rviz" type="rviz"
           args="-d $(find diff_planner)/launch/include/uav1_lite.rviz" output="screen">
+        <!-- NoMachine/NX 会让 RViz 使用 llvmpipe 软件 OpenGL；七分屏多路图像并发上传时，
+             Mesa 多线程 swrast 在实机上发生过段错误。仅限制 RViz 的软件渲染线程，不减少检测画面。 -->
+        <env name="LP_NUM_THREADS" value="1"/>
         <remap from="/move_base_simple/goal" to="/UAV1/planning/goal"/>
         <remap from="/drone__diff_planner_node/goal_point"
                to="/drone_1_diff_planner_node/goal_point"/>
