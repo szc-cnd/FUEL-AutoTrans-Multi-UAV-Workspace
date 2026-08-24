@@ -18,7 +18,9 @@
 #include <plan_manage/plan_container.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -88,6 +90,11 @@ private:
   // 2026-07-28: 发布前在多次地图刷新间连续复核，阻断“发布即解锁、20ms后自判碰撞”的振荡。
   ros::Time pending_traj_safe_since_;
   ros::Time next_pending_traj_check_;
+  struct OdomReviewSample {
+    std::array<double, 3> position;
+    std::array<double, 3> velocity;
+  };
+  std::deque<OdomReviewSample> odom_review_window_;
   bool inflation_escape_active_{false};
   ros::Time inflation_escape_clear_since_;
   // 规划器生成下一条候选轨迹时会改写 local_data_。单独保存 traj_server 当前正在执行的
@@ -101,6 +108,7 @@ private:
   bool active_ground_ascent_{false};
   bool pending_vertical_detour_{false};
   bool pending_vertical_detour_reanchored_{false};
+  bool pending_initial_traj_reanchored_{false};
   bool active_vertical_detour_{false};
   ros::Time turn_alignment_since_;
   ros::Time turn_tracking_grace_since_;
@@ -112,6 +120,7 @@ private:
 
   /* helper functions */
   int callExplorationPlanner();
+  bool getReviewedOdometry(Vector3d& position, Vector3d& velocity) const;
   void updatePendingTrajectoryMessage(const ros::Time& start_time);
   void transitState(EXPL_STATE new_state, string pos_call);
   // 2026-07-13: 规划碰撞或失败时显式通知控制器刹停，禁止继续消费上一条轨迹。

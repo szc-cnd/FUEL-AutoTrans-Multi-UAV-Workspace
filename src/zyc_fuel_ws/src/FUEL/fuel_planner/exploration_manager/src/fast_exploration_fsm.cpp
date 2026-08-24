@@ -406,8 +406,17 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
       }
       if (fd_->static_state_) {
         // Plan from static state (hover)
-        fd_->start_pt_ = fd_->odom_pos_;
-        fd_->start_vel_ = fd_->odom_vel_;
+        Eigen::Vector3d reviewed_position;
+        Eigen::Vector3d reviewed_velocity;
+        if (getReviewedOdometry(reviewed_position, reviewed_velocity)) {
+          fd_->start_pt_ = reviewed_position;
+          fd_->start_vel_ = reviewed_velocity;
+        } else {
+          fd_->start_pt_ = fd_->odom_pos_;
+          fd_->start_vel_ = fd_->odom_vel_;
+        }
+        // 入口悬停后的首条轨迹以零速为边界，避免把单帧速度尖峰写进整条轨迹。
+        if (!active_traj_valid_) fd_->start_vel_.setZero();
         fd_->start_acc_.setZero();
 
         fd_->start_yaw_(0) = fd_->odom_yaw_;
@@ -431,6 +440,9 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         next_plan_retry_time_ = ros::Time(0);
         pending_traj_safe_since_ = ros::Time(0);
         next_pending_traj_check_ = ros::Time(0);
+        pending_initial_traj_reanchored_ = false;
+        // 丢弃规划前的旧窗口，发布审核只采用规划完成后到达的最新五帧里程计。
+        odom_review_window_.clear();
         transitState(PUB_TRAJ, "FSM");
       } else if (res == NO_FRONTIER) {
         transitState(FINISH, "FSM");
@@ -456,9 +468,16 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
 
     case PUB_TRAJ: {
       const ros::Time now = ros::Time::now();
+      Eigen::Vector3d reviewed_position;
+      Eigen::Vector3d reviewed_velocity;
+      if (!getReviewedOdometry(reviewed_position, reviewed_velocity)) {
+        ROS_WARN_THROTTLE(1.0,
+                          "[trajectory_release] waiting for five odometry frames.");
+        break;
+      }
       if (pending_vertical_detour_ && !pending_vertical_detour_reanchored_) {
         Eigen::Vector3d live_yaw(fd_->odom_yaw_, 0.0, 0.0);
-        if (!expl_manager_->reanchorVerticalDetourForRelease(fd_->odom_pos_,
+        if (!expl_manager_->reanchorVerticalDetourForRelease(reviewed_position,
                                                               live_yaw)) {
           ROS_ERROR("[vertical_detour] live-odom re-anchor failed before publish; retry plan.");
           pending_traj_safe_since_ = ros::Time(0);
@@ -474,7 +493,32 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
         next_pending_traj_check_ = ros::Time(0);
         ROS_ERROR("[vertical_detour] release candidate re-anchored to live odom "
                   "(%.2f,%.2f,%.2f).",
-                  fd_->odom_pos_.x(), fd_->odom_pos_.y(), fd_->odom_pos_.z());
+                  reviewed_position.x(), reviewed_position.y(), reviewed_position.z());
+      }
+      if (!active_traj_valid_ && !pending_vertical_detour_ &&
+          !pending_initial_traj_reanchored_) {
+        auto& local_data = planner_manager_->local_data_;
+        const Eigen::Vector3d trajectory_start =
+            local_data.position_traj_.evaluateDeBoorT(0.0);
+        const Eigen::Vector3d offset = reviewed_position - trajectory_start;
+        if (offset.norm() <= fp_->trajectory_release_max_start_error_) {
+          Eigen::MatrixXd control_points = local_data.position_traj_.getControlPoint();
+          control_points.rowwise() += offset.transpose();
+          const Eigen::VectorXd knots = local_data.position_traj_.getKnot();
+          const int degree = static_cast<int>(knots.size()) -
+                             static_cast<int>(control_points.rows()) - 1;
+          NonUniformBspline reanchored(control_points, degree,
+                                       local_data.position_traj_.getKnotSpan());
+          reanchored.setKnot(knots);
+          local_data.position_traj_ = reanchored;
+          local_data.velocity_traj_ = local_data.position_traj_.getDerivative();
+          local_data.acceleration_traj_ = local_data.velocity_traj_.getDerivative();
+          updatePendingTrajectoryMessage(now);
+          pending_initial_traj_reanchored_ = true;
+          ROS_WARN("[trajectory_release] initial trajectory re-anchored by "
+                   "(%.3f,%.3f,%.3f)m using reviewed odometry.",
+                   offset.x(), offset.y(), offset.z());
+        }
       }
       // 2026-07-28: 即便规划阶段复核过，发布前仍等待刷新地图上的连续安全证据；
       // 轨迹起点若已与真实机体分离，禁止把远参考点直接交给控制器。
@@ -495,9 +539,9 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
           release_reference_acceleration =
               active_traj_.acceleration_traj_.evaluateDeBoorT(active_time);
         }
-        const double start_error = (trajectory_start - fd_->odom_pos_).norm();
+        const double start_error = (trajectory_start - reviewed_position).norm();
         const double velocity_error =
-            (trajectory_start_velocity - fd_->odom_vel_).norm();
+            (trajectory_start_velocity - reviewed_velocity).norm();
         const double acceleration_error =
             (trajectory_start_acceleration - release_reference_acceleration).norm();
         // 原地转向在规划器内已经完成一次连续静止确认。这里保留位置、加速度、
@@ -512,20 +556,39 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
                   fp_->trajectory_release_max_start_error_,
                   fp_->trajectory_release_max_velocity_error_,
                   fp_->trajectory_release_max_acceleration_error_);
+        const bool position_continuous =
+            start_error <= fp_->trajectory_release_max_start_error_;
+        const bool velocity_continuous = pending_turn_in_place_ ||
+            velocity_error <= fp_->trajectory_release_max_velocity_error_;
+        const bool acceleration_continuous =
+            acceleration_error <= fp_->trajectory_release_max_acceleration_error_;
         const bool controlled_escape_start =
-            planner_manager_->isControlledEscapePosition(fd_->odom_pos_);
-        const bool starts_in_inflation = planner_manager_->isPositionInflated(fd_->odom_pos_);
-        const bool raw_start_safe = planner_manager_->isRawPositionSafe(fd_->odom_pos_) ||
+            planner_manager_->isControlledEscapePosition(reviewed_position);
+        const bool starts_in_inflation = planner_manager_->isPositionInflated(reviewed_position);
+        const bool raw_start_safe = planner_manager_->isRawPositionSafe(reviewed_position) ||
                                     controlled_escape_start;
         const bool clears_inflation =
             !controlled_escape_start ||
             planner_manager_->trajectoryClearsInflation(
                 0.80, 0.02, controlled_escape_start);
+        const bool trajectory_safe = planner_manager_->isTrajectorySafe(
+            0.03, controlled_escape_start);
         const bool release_safe = raw_start_safe && clears_inflation &&
-                                  release_state_continuous &&
-                                  planner_manager_->isTrajectorySafe(
-                                      0.03, controlled_escape_start);
+                                  release_state_continuous && trajectory_safe;
         if (!release_safe) {
+          // 首条轨迹的速度只要尚未连续稳定就继续悬停审核，不销毁已经通过位置和地图
+          // 检查的候选；这样单帧尖峰不会触发无休止的“规划-拒绝”循环。
+          if (!active_traj_valid_ && position_continuous && acceleration_continuous &&
+              !velocity_continuous && raw_start_safe && clears_inflation &&
+              trajectory_safe) {
+            pending_traj_safe_since_ = ros::Time(0);
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[trajectory_release] initial trajectory waits for reviewed odometry "
+                "to settle: velocity_error=%.3fm/s.",
+                velocity_error);
+            break;
+          }
           ROS_ERROR("[trajectory_release] reject before publish: position_error=%.3fm "
                     "velocity_error=%.3fm/s acceleration_error=%.3fm/s^2 continuous=%d "
                     "turn_policy=%d raw_safe=%d inflated=%d clears=%d.",
@@ -1009,6 +1072,14 @@ void FastExplorationFSM::odometryCallback(const nav_msgs::OdometryConstPtr& msg)
   fd_->odom_vel_(1) = msg->twist.twist.linear.y;
   fd_->odom_vel_(2) = msg->twist.twist.linear.z;
 
+  OdomReviewSample sample;
+  for (int axis = 0; axis < 3; ++axis) {
+    sample.position[axis] = fd_->odom_pos_(axis);
+    sample.velocity[axis] = fd_->odom_vel_(axis);
+  }
+  odom_review_window_.push_back(sample);
+  while (odom_review_window_.size() > 5) odom_review_window_.pop_front();
+
   fd_->odom_orient_.w() = msg->pose.pose.orientation.w;
   fd_->odom_orient_.x() = msg->pose.pose.orientation.x;
   fd_->odom_orient_.y() = msg->pose.pose.orientation.y;
@@ -1021,6 +1092,25 @@ void FastExplorationFSM::odometryCallback(const nav_msgs::OdometryConstPtr& msg)
   if (expl_manager_) expl_manager_->updateMissionOdometry(fd_->odom_pos_, fd_->odom_yaw_);
 
   fd_->have_odom_ = true;
+}
+
+bool FastExplorationFSM::getReviewedOdometry(
+    Vector3d& position, Vector3d& velocity) const {
+  if (odom_review_window_.size() < 5) return false;
+
+  for (int axis = 0; axis < 3; ++axis) {
+    std::array<double, 5> positions;
+    std::array<double, 5> velocities;
+    for (size_t i = 0; i < 5; ++i) {
+      positions[i] = odom_review_window_[i].position[axis];
+      velocities[i] = odom_review_window_[i].velocity[axis];
+    }
+    std::sort(positions.begin(), positions.end());
+    std::sort(velocities.begin(), velocities.end());
+    position(axis) = positions[2];
+    velocity(axis) = velocities[2];
+  }
+  return position.allFinite() && velocity.allFinite();
 }
 
 void FastExplorationFSM::transitState(EXPL_STATE new_state, string pos_call) {
