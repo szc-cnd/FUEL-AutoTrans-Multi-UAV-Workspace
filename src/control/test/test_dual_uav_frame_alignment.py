@@ -275,7 +275,7 @@ def test_leader_odometry_uses_latest_low_latency_sample_and_rejects_delay():
     assert params["leader_odom_max_transport_age"] == "0.50"
 
 
-def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
+def test_history_snapshot_recovers_only_connected_leader_route():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -285,42 +285,23 @@ def test_down_search_releases_uav1_to_front_anchor_after_measured_climb():
         item.attrib["name"]: item.attrib["value"]
         for item in follower.findall("param")
     }
-    assert params["fixed_follow_height"] == "0.60"
-    assert params["landing_search_state_topic"] == (
-        "/landing_diff_search_manager/state"
-    )
-    assert params["front_scan_anchor_topic"] == (
-        "/UAV0/landing/front_scan_anchor"
-    )
-    assert params["down_search_release_height"] == "1.80"
-    assert params["down_search_min_vertical_separation"] == "1.00"
+    assert params["leader_history_path_topic"] == "$(arg leader_history_path_topic)"
+    assert params["history_path_join_tolerance"] == "0.35"
 
     source = FOLLOWER.read_text(encoding="utf-8")
-    callback = source.split("void landingSearchStateCallback", 1)[1].split(
-        "void tryReleaseFrontSearchWaitWaypoint", 1
+    callback = source.split("void leaderHistoryPathCallback", 1)[1].split(
+        "void leaderTrajectoryCallback", 1
     )[0]
-    assert "FRONT_ARUCO_YAW_SCAN_COMPLETE_START_DOWN_SWEEP" in callback
-    assert "FRONT_ARUCO_HINT_DIFF_APPROACH" in callback
-    assert "TWO_ARUCOS_ASSIGNED_APPROACH_FAR_PLATFORM" not in callback
-
-    release = source.split("void tryReleaseFrontSearchWaitWaypoint", 1)[1].split(
-        "void publishRelayPath", 1
-    )[0]
-    assert "leader_world.z" in release
-    assert "down_search_release_height_" in release
-    assert "down_search_min_vertical_separation_" in release
-    assert 'relayWaypointSeparationReady("OUTSIDE_WAIT")' in release
-    assert "have_front_scan_anchor_" in release
-    assert 'appendRelayWaypoint(front_scan_anchor_, "OUTSIDE_WAIT")' in release
-    assert "exit_waypoint_released_ = true" in release
+    assert "anchor_distance > history_path_join_tolerance_" in callback
+    assert "gap > history_path_join_tolerance_" in callback
+    assert "appendAcceptedRoutePoint(&sample)" in callback
+    assert "\n    route_.clear" not in callback
 
     timer = source.split("void timerCallback", 1)[1].split(
         "void publishTarget", 1
     )[0]
-    assert timer.index("tryReleaseFrontSearchWaitWaypoint()") < timer.index(
-        "!outside_wait_waypoint_released_"
-    )
-    assert "DIFF_WAIT_FRONT_SEARCH_ANCHOR" in source
+    assert 'hold("leader odometry stale")' not in timer
+    assert "continue only along cached connected history" in timer
 
 
 def test_uav1_dynamic_obstacle_detection_is_disabled_by_default():
@@ -548,26 +529,41 @@ def test_fast_lio_imu_adapter_node_name_is_vehicle_specific():
     assert adapter.attrib["name"] == "$(arg vehicle_ns)_livox_imu_to_body"
 
 
-def test_uav1_only_leaves_front_anchor_for_platform_after_landing_release():
+def test_uav1_reaches_door_and_outside_hover_before_platform_release():
     source = FOLLOWER.read_text(encoding="utf-8")
     release_gate = source.split("void tryReleaseFinalExitWaypoint", 1)[1].split(
         "void finalExitPoseCallback", 1
     )[0]
-    assert "!release_uav1_" in release_gate
-
-    timer = source.split("void timerCallback", 1)[1].split(
-        "ros::Subscriber", 1
-    )[0]
-    wait = (
-        "if (leader_outside_exit_ && !release_uav1_ && "
-        "!outside_wait_waypoint_released_)"
-    )
-    assert wait in timer
-    assert "tryReleaseFrontSearchWaitWaypoint()" in timer
-    assert timer.index(wait) < timer.index("handleStuckRecovery(now)")
-    assert "DIFF_WAIT_FRONT_SEARCH_ANCHOR" in source
+    assert "!release_uav1_" not in release_gate
+    assert 'appendRelayWaypoint(confirmed_exit_, "EXIT")' in release_gate
+    assert 'appendRelayWaypoint(outside_wait, "OUTSIDE_WAIT")' in release_gate
+    assert "outside_door_distance_ * std::cos(confirmed_exit_.yaw)" in release_gate
+    assert "outside_door_distance_ * std::sin(confirmed_exit_.yaw)" in release_gate
 
     release = source.split("void releaseUav1Callback", 1)[1].split(
         "bool getRouteForwardDirection", 1
     )[0]
-    assert 'tryReleaseFinalExitWaypoint("UAV0 landing success release")' in release
+    assert "release_uav1_ = true" in release
+    assert "tryReleaseFinalExitWaypoint" not in release
+    assert "tryQueueFollowerTerminalTarget()" in release
+
+    terminal_gate = source.split("void tryQueueFollowerTerminalTarget", 1)[1].split(
+        "void queueFollowerTerminalTarget", 1
+    )[0]
+    assert "!release_uav1_ || !outside_wait_arrived_" in terminal_gate
+    assert "!have_assigned_follower_target_" in terminal_gate
+
+    execution = source.split("bool handleDiffPlannerExecution", 1)[1].split(
+        "void timerCallback", 1
+    )[0]
+    assert "outside_wait_relay" in execution
+    assert "history_relay = !terminal_relay && !outside_wait_relay" in execution
+    assert "active_relay_index_ != exit_waypoint_index_" in execution
+    assert "outside_wait_arrived_ = true" in execution
+    assert "DIFF_WAIT_RELEASE_OUTSIDE_DOOR" in source
+
+    selector = source.split("bool selectForwardRouteCandidate", 1)[1].split(
+        "bool getFollowerHistoryRetreatTarget", 1
+    )[0]
+    assert "allow_beyond_relay" in selector
+    assert "? route_.back().progress : relay_progress" in selector

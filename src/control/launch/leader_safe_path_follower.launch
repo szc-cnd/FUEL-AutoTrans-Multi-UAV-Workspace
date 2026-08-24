@@ -75,6 +75,7 @@
     <!-- 2026-07-16: 后机不运行第二套FUEL；执行门点、持续滚动内部接力点和真实终点。 -->
     <!-- 2026-07-27: 后机接力链路的全部双机话题前缀统一为 UAV0/UAV1。 -->
     <arg name="leader_odom_topic" default="/UAV0/fast_lio/Odom_high_freq"/>
+    <arg name="leader_history_path_topic" default="/UAV0/fast_lio/path"/>
     <arg name="follower_odom_topic" default="/UAV1/fast_lio/Odom_high_freq"/>
     <arg name="follower_cloud_topic" default="/UAV1/fast_lio/cloud_registered"/>
     <arg name="leader_trajectory_topic" default="/UAV0/planning/bspline"/>
@@ -90,6 +91,8 @@
           name="leader_safe_path_follower" output="screen">
         <!-- 2026-07-14: 1.2m 路径滞后和 0.75m 硬间距用于当前 1m 初始纵队的保守跟随验证。 -->
         <param name="leader_odom_topic" value="$(arg leader_odom_topic)"/>
+        <param name="leader_history_path_topic"
+               value="$(arg leader_history_path_topic)"/>
         <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
         <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
         <param name="leader_trajectory_topic" value="$(arg leader_trajectory_topic)"/>
@@ -138,6 +141,9 @@
         <param name="door_pose_topic" value="/UAV0/corridor_search/workspace_lock"/>
         <!-- 2026-07-28: 仅接收前机达到锁门里程后发布的最终出口；后机在前机出门后按入口式离散点执行。 -->
         <param name="final_exit_pose_topic" value="/UAV0/mission/final_exit"/>
+        <!-- 最终门心仍按历史轨迹到达；随后沿门朝外yaw直行0.5m，在通道外稳定悬停。 -->
+        <param name="outside_door_distance" value="0.50"/>
+        <param name="history_path_join_tolerance" value="0.35"/>
         <!-- 前视不足两码并切换下视后，等UAV0实测升高再让UAV1前往前视扫描锚点。 -->
         <param name="landing_search_state_topic" value="/landing_diff_search_manager/state"/>
         <param name="front_scan_anchor_topic" value="/UAV0/landing/front_scan_anchor"/>
