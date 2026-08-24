@@ -32,7 +32,7 @@ CLOUD_TOPIC="/UAV1/fast_lio/cloud_registered"
 DOWN_CAMERA_TOPIC="/UAV1/down_camera/image_raw"
 PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"
 VISION_POSE_TOPIC="/UAV1/mavros/vision_pose/pose"
-VISION_STABILIZE_SECONDS="${UAV1_SIX_VISION_STABILIZE_SECONDS:-8}"
+VISION_STABILIZE_SECONDS="${UAV1_SIX_VISION_STABILIZE_SECONDS:-4}"
 
 PANE=""
 SHOW_HELP=false
@@ -59,7 +59,7 @@ usage() {
   - 第 6 屏的 uav1_diff_autotrans.launch 默认 enable_planner=false，
     因此不会与第 5 屏重复启动 Diff-Planner。
   - 可用环境变量 UAV1_SIX_WAIT_TIMEOUT 修改前级等待超时，默认 180 秒。
-  - 可用 UAV1_SIX_VISION_STABILIZE_SECONDS 修改视觉融合等待，默认 8 秒。
+  - 可用 UAV1_SIX_VISION_STABILIZE_SECONDS 修改视觉融合等待，默认 4 秒。
 EOF
 }
 
