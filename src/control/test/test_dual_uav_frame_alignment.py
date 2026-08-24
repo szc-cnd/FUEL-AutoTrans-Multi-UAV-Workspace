@@ -17,10 +17,15 @@ RELAY_LAUNCH = (
 FAST_LIO_LAUNCH = ROOT.parent / "FAST_LIO/launch/mapping_mid360.launch"
 UAV1_DIFF_RVIZ = (
     ROOT.parent
-    / "Diff-Planner/src/diff_planner/plan_manage/launch/include/exp.rviz"
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz"
 )
 UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
+UAV1_SEVEN_LAYOUT = ROOT.parents[1] / "shfiles/terminator_uav1_six.conf"
 UAV1_SENSOR_STACK = ROOT.parents[1] / "shfiles/run_uav1_sensor_stack.sh"
+UAV1_DETECTION_LAUNCH = (
+    ROOT.parent
+    / "uav0_competition_bringup/launch/uav1_detection_stack.launch"
+)
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
@@ -412,6 +417,68 @@ def test_uav1_six_starts_down_camera_and_shows_combined_image_in_diff_rviz():
     )
     assert image["Enabled"] is True
     assert image["Value"] is True
+
+
+def test_uav1_compatibility_script_opens_seven_panes_with_detection_before_planner():
+    script = UAV1_SIX_SCRIPT.read_text(encoding="utf-8")
+    layout = UAV1_SEVEN_LAYOUT.read_text(encoding="utf-8")
+    assert "run_detection_pane()" in script
+    assert "uav1_detection_stack.launch" in script
+    assert 'enable_thermal:="${THERMAL}"' in script
+    assert layout.count("type = Terminal") == 7
+    pane_order = [
+        "mavros",
+        "mid360",
+        "fastlio",
+        "pose",
+        "detection",
+        "planner",
+        "controller",
+    ]
+    positions = [layout.index("--pane {}".format(pane)) for pane in pane_order]
+    assert positions == sorted(positions)
+
+
+def test_uav1_detection_stack_uses_isolated_topics_and_only_observes_front_aruco():
+    root = ET.parse(UAV1_DETECTION_LAUNCH).getroot()
+    args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
+    assert args["enable_thermal"] == "false"
+    assert args["odom_topic"] == "/UAV1/fast_lio/Odom_high_freq"
+    assert args["world_frame"] == "UAV1/camera_init"
+    assert args["camera_namespace"] == "UAV1/camera"
+    assert args["camera_tf_prefix"] == "UAV1_camera"
+
+    nodes = list(root.iter("node"))
+    by_type = {node.attrib["type"]: node for node in nodes}
+    for node_type in (
+        "color_tag_detector.py",
+        "qr_detector_node.py",
+        "front_aruco_hint_node",
+        "target_reporter_node.py",
+        "target_rviz_marker_node.py",
+    ):
+        assert node_type in by_type
+
+    front = by_type["front_aruco_hint_node"]
+    front_params = {
+        item.attrib["name"]: item.attrib["value"] for item in front.findall("param")
+    }
+    assert front_params["topics/debug_image"] == "/UAV1/landing/front/debug_image"
+    assert front_params["topics/hint_world"] == "/UAV1/detection/front_aruco_hint"
+    assert front_params["mission/require_stage_gate"] == "false"
+
+    marker = by_type["target_rviz_marker_node.py"]
+    marker_params = {
+        item.attrib["name"]: item.attrib["value"] for item in marker.findall("param")
+    }
+    assert marker_params["marker_topic"] == "/UAV1/target_reporting/markers"
+    assert marker_params["enable_object_cloud"] == "true"
+    assert marker_params["object_cloud_topic"] == (
+        "/UAV1/target_reporting/detected_object_cloud"
+    )
+    assert marker_params["object_box_topic"] == (
+        "/UAV1/target_reporting/detected_object_boxes"
+    )
 
 
 def test_uav1_down_camera_waits_for_busy_device_and_retries_without_killing_owner():

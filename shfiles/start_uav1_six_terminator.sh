@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# UAV1 传感器、规划器和 AutoTrans 的 Terminator 六分屏一键入口。
+# UAV1 传感器、检测、规划器和 AutoTrans 的 Terminator 七分屏一键入口。
+# 文件名保留 six 仅为兼容现有实飞命令和文档。
 # 不自动解锁、不切换 OFFBOARD、不发布目标点。
 
 set -o pipefail
@@ -22,6 +23,7 @@ TERMINATOR_PID_FILE="${UAV1_SIX_TERMINATOR_PID_FILE:-/tmp/uav1_six_terminator_${
 START_LOCK_FILE="${UAV1_SIX_START_LOCK_FILE:-/tmp/uav1_six_start.lock}"
 RUNTIME_CONFIG="${UAV1_SIX_RUNTIME_CONFIG:-/tmp/uav1_six_terminator_${RUN_ID}.conf}"
 WAIT_TIMEOUT="${UAV1_SIX_WAIT_TIMEOUT:-180}"
+THERMAL="${UAV1_SIX_THERMAL:-false}"
 
 MAVROS_STATE_TOPIC="/UAV1/mavros/state"
 LIDAR_TOPIC="/UAV1/livox/lidar"
@@ -39,7 +41,7 @@ SHOW_HELP=false
 STOP_REQUEST=false
 
 log() {
-  printf '[uav1_six] %s\n' "$*"
+  printf '[uav1_seven] %s\n' "$*"
 }
 
 usage() {
@@ -49,22 +51,28 @@ usage() {
   bash shfiles/start_uav1_six_terminator.sh stop
 
 作用：
-  打开一个 Terminator 六分屏窗口并依次等待、启动：
+  打开一个 Terminator 七分屏窗口并依次等待、启动：
   1 MAVROS、2 MID360、3 FAST-LIO、4 高频视觉位姿回传、
-  5 下视相机/航点接力管理器/UAV1 Diff/RViz、
-  6 AutoTrans 控制器/桥接/日志/自动 rosbag。
+  5 D435/颜色/二维码/前视ArUco/目标上报、
+  6 下视相机/航点接力管理器/UAV1 Diff/RViz、
+  7 AutoTrans 控制器/桥接/日志/自动 rosbag。
 
 说明：
   - 不自动解锁、不切换 OFFBOARD、不发送目标点。
-  - 第 6 屏的 uav1_diff_autotrans.launch 默认 enable_planner=false，
-    因此不会与第 5 屏重复启动 Diff-Planner。
+  - 第 7 屏的 uav1_diff_autotrans.launch 默认 enable_planner=false，
+    因此不会与第 6 屏重复启动 Diff-Planner。
+  - 第 5 屏默认不启动热成像；本机接入热成像设备后可加 --thermal。
   - 可用环境变量 UAV1_SIX_WAIT_TIMEOUT 修改前级等待超时，默认 180 秒。
   - 可用 UAV1_SIX_VISION_STABILIZE_SECONDS 修改视觉融合等待，默认 4 秒。
+
+选项：
+  --thermal                 第 5 屏同时启动热成像检测和 D435 融合
+  --no-thermal              关闭热成像（默认）
 EOF
 }
 
 keep_pane_open() {
-  printf '\n[uav1_six] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
+  printf '\n[uav1_seven] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
   if [[ -t 0 ]]; then
     exec "${SHELL:-/bin/bash}" -i
   fi
@@ -276,6 +284,23 @@ run_pose_pane() {
   keep_pane_open
 }
 
+run_detection_pane() {
+  local mission_id="uav1_onboard_test_$(date +%Y%m%d)"
+  pane_init 5 D435与目标检测
+  wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
+  printf '[启动] UAV1 D435、颜色、二维码、前视ArUco、目标上报和RViz标记\n'
+  printf '[参数] thermal=%s, odom=%s, mission_id=%s\n' \
+    "${THERMAL}" "${ODOM_TOPIC}" "${mission_id}"
+  printf '[隔离] 全部节点名、图像话题和D435 TF使用UAV1前缀，不覆盖UAV0。\n'
+  printf '[安全] 前视ArUco只发布隔离的检测结果和调试图，不介入UAV1降落控制。\n'
+  roslaunch uav0_competition_bringup uav1_detection_stack.launch \
+    enable_thermal:="${THERMAL}" \
+    odom_topic:="${ODOM_TOPIC}" \
+    target_reporting_mission_id:="${mission_id}"
+  printf '[退出] UAV1 检测分屏，返回码=%s\n' "$?"
+  keep_pane_open
+}
+
 run_planner_pane() {
   local down_camera_pid=""
 
@@ -287,7 +312,7 @@ run_planner_pane() {
     fi
   }
 
-  pane_init 5 双机航点接力与UAV1 Diff
+  pane_init 6 双机航点接力与UAV1 Diff
   verify_follower_binary_fresh || keep_pane_open
   wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
   wait_for_topic_message "${CLOUD_TOPIC}" || keep_pane_open
@@ -316,7 +341,7 @@ run_planner_pane() {
 }
 
 run_controller_pane() {
-  pane_init 6 AutoTrans控制器
+  pane_init 7 AutoTrans控制器
   wait_for_mavros_connected || keep_pane_open
   wait_for_topic_message "${HIGH_FREQ_ODOM_TOPIC}" || keep_pane_open
   # 等周期心跳而不是 planning/status；后者要等目标触发并成功出轨迹才会发布。
@@ -342,6 +367,7 @@ run_pane() {
     mid360) run_mid360_pane ;;
     fastlio) run_fastlio_pane ;;
     pose) run_pose_pane ;;
+    detection) run_detection_pane ;;
     planner) run_planner_pane ;;
     controller) run_controller_pane ;;
     *) log "未知分屏：${PANE}"; keep_pane_open ;;
@@ -352,11 +378,23 @@ while (($# > 0)); do
   case "$1" in
     --pane)
       if [[ $# -lt 2 ]]; then
-        log '--pane 需要指定 mavros/mid360/fastlio/pose/planner/controller'
+        log '--pane 需要指定 mavros/mid360/fastlio/pose/detection/planner/controller'
         exit 2
       fi
       PANE="$2"
       shift 2
+      ;;
+    --thermal)
+      THERMAL=true
+      shift
+      ;;
+    --no-thermal)
+      THERMAL=false
+      shift
+      ;;
+    --thermal=*)
+      THERMAL="${1#*=}"
+      shift
       ;;
     stop)
       STOP_REQUEST=true
@@ -378,6 +416,10 @@ if [[ "${SHOW_HELP}" == true ]]; then
   usage
   exit 0
 fi
+case "${THERMAL,,}" in
+  true|false) THERMAL="${THERMAL,,}" ;;
+  *) log "--thermal 只能是 true 或 false，当前值：${THERMAL}"; exit 2 ;;
+esac
 if [[ "${STOP_REQUEST}" == true ]]; then
   stop_terminator_window
   exit 0
@@ -404,7 +446,7 @@ if [[ ! -f "${MATCH_WS}/devel/setup.bash" ]]; then
   exit 1
 fi
 if terminator_window_running; then
-  log 'UAV1 六分屏窗口已经运行，跳过重复启动'
+  log 'UAV1 七分屏窗口已经运行，跳过重复启动'
   exit 0
 fi
 if ! prepare_graphical_terminal; then
@@ -414,21 +456,25 @@ fi
 if command -v flock >/dev/null 2>&1; then
   exec 9>"${START_LOCK_FILE}"
   if ! flock -n 9; then
-    log '另一个 UAV1 六分屏启动正在进行，跳过本次重复启动'
+    log '另一个 UAV1 七分屏启动正在进行，跳过本次重复启动'
     exit 0
   fi
 fi
 if terminator_window_running; then
-  log '检测到 UAV1 六分屏窗口正在启动，跳过重复启动'
+  log '检测到 UAV1 七分屏窗口正在启动，跳过重复启动'
   exit 0
 fi
+
+# 主入口的可选热成像参数通过环境传给 Terminator 子分屏。
+export UAV1_SIX_THERMAL="${THERMAL}"
 
 sed "s|__UAV1_SIX_SCRIPT__|${SCRIPT_PATH}|g" \
   "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
 
-log '打开 UAV1 Terminator 六分屏'
+log '打开 UAV1 Terminator 七分屏'
 log '上排：1 MAVROS | 2 MID360 | 3 FAST-LIO'
-log '下排：4 视觉位姿 | 5 Diff/RViz | 6 AutoTrans/日志/rosbag'
+log '下排：4 视觉位姿 | 5 检测/上报 | 6 Diff/RViz | 7 AutoTrans/日志/rosbag'
+log "检测参数：thermal=${THERMAL}, odom=${ODOM_TOPIC}"
 log "前级等待超时：${WAIT_TIMEOUT}s"
 log "PX4 外部视觉稳定等待：${VISION_STABILIZE_SECONDS}s"
 log "Terminator 启动日志：${TERMINATOR_LOG}"
