@@ -69,7 +69,7 @@ public:
   double turnInPlaceTrackingGraceTime() const {
     return turn_in_place_tracking_grace_time_;
   }
-  void completeTurnInPlace();
+  void completeTurnInPlace(const Vector3d& pos);
 
   // Benchmark method, classic frontier and rapid frontier
   int classicFrontier(const Vector3d& pos, const double& yaw);

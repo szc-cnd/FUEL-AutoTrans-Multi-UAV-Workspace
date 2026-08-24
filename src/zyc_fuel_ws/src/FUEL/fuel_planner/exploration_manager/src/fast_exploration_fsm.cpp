@@ -738,7 +738,7 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
           if ((now - turn_alignment_since_).toSec() <
               expl_manager_->turnInPlaceCompletionConfirmTime())
             return;
-          expl_manager_->completeTurnInPlace();
+          expl_manager_->completeTurnInPlace(fd_->odom_pos_);
           active_turn_in_place_ = false;
           turn_alignment_since_ = ros::Time(0);
           turn_tracking_grace_since_ = ros::Time(0);
