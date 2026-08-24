@@ -1,5 +1,6 @@
 #include <memory>
 #include <math.h>
+#include <cmath>
 #include <acado_optimal_control.hpp>
 #include <acado_code_generation.hpp>
 #include <acado_gnuplot.hpp>
@@ -15,7 +16,7 @@
  * State:
  *   x = [p_x,p_y,p_z, q_w,q_x,q_y,q_z, v_x,v_y,v_z]
  * Input:
- *   u = [T, w_x,w_y,w_z]
+ *   u = [T, w_x,w_y,w_z, s_vx,s_vy,s_vz]
  * OnlineData:
  *   [mass_q, f_q_x,f_q_y,f_q_z]
  *
@@ -49,7 +50,8 @@ int main(int argc, char **argv)
   DifferentialState q_w, q_x, q_y, q_z;
   DifferentialState v_x, v_y, v_z;
 
-  Control T, w_x, w_y, w_z;
+  // s_v* 是速度软约束的非负松弛量，单位 m/s；它们不进入飞行动力学。
+  Control T, w_x, w_y, w_z, s_vx, s_vy, s_vz;
   DifferentialEquation f;
   Function h, hN;
 
@@ -62,9 +64,20 @@ int main(int argc, char **argv)
 #endif
 
   double g_z = cfg_root["gravity"].As<double>(9.81);
-  // 代码生成阶段的世界系 ENU 速度边界，单位 m/s；运行时由 mpc.yaml 覆盖边界数值。
+  // 正常速度软约束及松弛量硬上限，单位 m/s；运行时由 mpc.yaml 覆盖边界数值。
   const double max_velocity_xy = cfg_root["max_velocity_xy"].As<double>(0.3);
   const double max_velocity_z = cfg_root["max_velocity_z"].As<double>(0.3);
+  const double max_velocity_slack_xy = cfg_root["max_velocity_slack_xy"].As<double>(1.5);
+  const double max_velocity_slack_z = cfg_root["max_velocity_slack_z"].As<double>(1.0);
+  if (!std::isfinite(max_velocity_xy) || !std::isfinite(max_velocity_z) ||
+      !std::isfinite(max_velocity_slack_xy) || !std::isfinite(max_velocity_slack_z) ||
+      max_velocity_xy <= 0.0 || max_velocity_z <= 0.0 ||
+      max_velocity_slack_xy <= 0.0 || max_velocity_slack_z <= 0.0)
+  {
+    std::cerr << RED << "velocity limits and slack limits must be finite and positive."
+              << RESET << std::endl;
+    return EXIT_FAILURE;
+  }
   double dt = cfg_root["step_T"].As<double>(0.05);
   int N = cfg_root["step_N"].As<int>(20);
 
@@ -106,7 +119,8 @@ int main(int argc, char **argv)
   h << p_x << p_y << p_z
     << q_w << q_x << q_y << q_z
     << v_x << v_y << v_z
-    << T << w_x << w_y << w_z;
+    << T << w_x << w_y << w_z
+    << s_vx << s_vy << s_vz;
 
   hN << p_x << p_y << p_z
      << q_w << q_x << q_y << q_z
@@ -123,6 +137,8 @@ int main(int argc, char **argv)
   rN(3) = 1.0;
 
   OCP ocp(0.0, dt * N, N);
+  // slack 不进入飞行动力学；显式采用代价函数中的完整输入维度，避免 ACADO 只按 f 推断出 4 维。
+  ocp.setNU(h.getNU());
 #if (!CODE_GEN)
   {
     Q(0, 0) = 100;
@@ -178,10 +194,17 @@ int main(int argc, char **argv)
   ocp.subjectTo(-w_max_xy <= w_y <= w_max_xy);
   ocp.subjectTo(-w_max_yaw <= w_z <= w_max_yaw);
   ocp.subjectTo(T_min <= T <= T_max);
-  // v_x/v_y/v_z 是 ENU 世界系线速度，单位 m/s；这是 NMPC 的硬速度约束。
-  ocp.subjectTo(-max_velocity_xy <= v_x <= max_velocity_xy);
-  ocp.subjectTo(-max_velocity_xy <= v_y <= max_velocity_xy);
-  ocp.subjectTo(-max_velocity_z <= v_z <= max_velocity_z);
+  // 正常速度上限允许付出高代价后短时越界，避免实测状态已经越界时 QP 立即不可行。
+  // slack 自身的上限构成更高一级的紧急硬边界。
+  ocp.subjectTo(0.0 <= s_vx <= max_velocity_slack_xy);
+  ocp.subjectTo(0.0 <= s_vy <= max_velocity_slack_xy);
+  ocp.subjectTo(0.0 <= s_vz <= max_velocity_slack_z);
+  ocp.subjectTo(v_x - s_vx <= max_velocity_xy);
+  ocp.subjectTo(-v_x - s_vx <= max_velocity_xy);
+  ocp.subjectTo(v_y - s_vy <= max_velocity_xy);
+  ocp.subjectTo(-v_y - s_vy <= max_velocity_xy);
+  ocp.subjectTo(v_z - s_vz <= max_velocity_z);
+  ocp.subjectTo(-v_z - s_vz <= max_velocity_z);
 
   ocp.setNOD(4);
 

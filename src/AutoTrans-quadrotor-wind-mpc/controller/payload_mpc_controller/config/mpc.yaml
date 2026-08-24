@@ -22,6 +22,9 @@ Q_dcable: 0.0
 R_thrust:    1.2  # Cost on thrust input            //default: 1
 R_pitchroll:  30 # Cost on pitch and roll rate
 R_yaw:        1.2      # Cost on yaw ratte
+# 速度越过正常上限时使用非负松弛量；高权重使越界只作为保持求解可行的短时退让。
+R_velocity_slack_xy: 5000.0
+R_velocity_slack_z: 5000.0
 
 # Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
 # cost_scaling = 0 means no scaling W_i = W.
@@ -33,10 +36,12 @@ input_cost_exponential: 0.5     # scaling for input costs
 max_bodyrate_xy:    1.5       # ~ pi [rad/s]
 # body_rate.z 是机体系偏航角速度命令，单位 rad/s。
 max_bodyrate_z:    1.0     # planned yaw rate 30 deg/s, with control margin [rad/s]
-# NMPC 世界系速度硬约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
-# 该约束直接进入 ACADO 优化器，超过上限的预测速度不会被求解器接受。
+# NMPC 世界系正常速度软约束；v_x/v_y/v_z 使用 ENU 世界系，单位 m/s。
 max_velocity_xy:    1.5
 max_velocity_z:     1.0
+# 松弛量硬上限形成正常模式下的紧急速度边界：|vx/vy| <= 3.0 m/s，|vz| <= 2.0 m/s。
+max_velocity_slack_xy: 1.5
+max_velocity_slack_z: 1.0
 # min/max_thrust 是 NMPC 内部物理总推力限幅，单位 N，不是 MAVROS 归一化 thrust。
 # 对实际起飞质量 1.817 kg、g=9.795、hover_percentage=0.54，29.5 N 标称约对应 normalized thrust 0.895。
 min_thrust:         1.0
@@ -186,7 +191,7 @@ safety:
     mpc_recovery_last_valid_max_bodyrate: 0.25
     # 连续求解失败时，基于最新可信状态完整重置 ACADO 工作区的周期，单位 s。
     mpc_recovery_full_reset_period: 0.20
-    # 重置时速度硬约束相对当前实际速度增加的余量，单位 m/s；速度回到正常范围后恢复原约束。
+    # 重置时临时提高速度软约束阈值的余量，单位 m/s；速度回到正常范围后恢复原阈值。
     mpc_recovery_velocity_margin_xy: 0.20
     mpc_recovery_velocity_margin_z: 0.15
     # 退出恢复前的三维位置误差、水平速度、垂直速度和机体倾角阈值。

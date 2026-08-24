@@ -41,7 +41,10 @@ namespace PayloadMPC
     kThrust = 0,
     kRateX = 1,
     kRateY = 2,
-    kRateZ = 3
+    kRateZ = 3,
+    kVelocitySlackX = 4,
+    kVelocitySlackY = 5,
+    kVelocitySlackZ = 6
   };
 
   struct TorquesAndThrust
@@ -57,7 +60,7 @@ namespace PayloadMPC
 
     static_assert(kStateSize == 10,
                   "MpcController: Wrong model size. Number of states does not match.");
-    static_assert(kInputSize == 4,
+    static_assert(kInputSize == 7,
                   "MpcController: Wrong model size. Number of inputs does not match.");
 
     MpcController(MpcParams &params);
