@@ -27,7 +27,7 @@
         <arg name="max_vel" value="$(arg max_vel)"/>
         <arg name="max_acc" value="$(arg max_acc)"/>
         <arg name="max_jer" value="8.0"/>
-        <arg name="planning_horizon" value="6.0"/>
+        <arg name="planning_horizon" value="8.0"/>
         <arg name="waypoint_switch_dist" value="0.12"/>
         <!-- 2026-07-28: 20m局部窗口覆盖当前U形通道，UAV1点云独立形成静态避障地图。 -->
         <arg name="local_map_size_x" value="20.0"/>

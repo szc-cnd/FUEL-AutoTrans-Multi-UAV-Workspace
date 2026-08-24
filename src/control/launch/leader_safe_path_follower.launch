@@ -123,8 +123,8 @@
         <param name="diff_clipped_retry_limit" value="2"/>
         <param name="follower_history_sample_spacing" value="0.08"/>
         <param name="follower_history_max_length" value="30.0"/>
-        <!-- 优先使用UAV0每段B-spline实际停稳终点；弯道前视最长1.5m，让Diff有空间完成A*绕障。 -->
-        <param name="diff_history_target_max_distance" value="1.50"/>
+        <!-- 优先使用UAV0每段B-spline实际停稳终点；允许搜索7m内的远端安全停稳点。 -->
+        <param name="diff_history_target_max_distance" value="7.00"/>
         <param name="leader_segment_endpoint_radius" value="0.20"/>
         <param name="leader_segment_endpoint_max_speed" value="0.12"/>
         <param name="leader_segment_endpoint_dwell" value="0.25"/>
