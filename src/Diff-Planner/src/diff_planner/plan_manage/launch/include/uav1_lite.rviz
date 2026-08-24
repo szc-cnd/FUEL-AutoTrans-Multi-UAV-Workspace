@@ -56,7 +56,7 @@ Visualization Manager:
       Class: rviz/Odometry
       Covariance:
         Value: false
-      Enabled: true
+      Enabled: false
       Keep: 10
       Name: UAV0 high-frequency odometry
       Position Tolerance: 0.01
@@ -73,7 +73,7 @@ Visualization Manager:
         Value: Axes
       Topic: /UAV0/fast_lio/Odom_high_freq
       Unreliable: false
-      Value: true
+      Value: false
     - Class: rviz/Group
       Displays:
         - Class: rviz/Group
@@ -224,7 +224,7 @@ Visualization Manager:
               Value: true
           Enabled: true
           Name: Simulation
-      Enabled: true
+      Enabled: false
       Name: UAV0 (leader)
     - Class: rviz/Group
       Displays:
@@ -393,7 +393,7 @@ Visualization Manager:
   Global Options:
     Background Color: 255; 255; 255
     Default Light: true
-    Fixed Frame: UAV0/camera_init
+    Fixed Frame: UAV1/camera_init
     Frame Rate: 30
   Name: root
   Tools:
