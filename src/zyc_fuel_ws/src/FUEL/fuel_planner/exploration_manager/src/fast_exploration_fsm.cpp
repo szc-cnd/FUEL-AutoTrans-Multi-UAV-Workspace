@@ -366,6 +366,19 @@ void FastExplorationFSM::FSMCallback(const ros::TimerEvent& e) {
     case PLAN_TRAJ: {
       // 2026-07-22: 失败冷却期间不发布replan、不重新选点也不刷新规划可视化。
       if (!next_plan_retry_time_.isZero() && ros::Time::now() < next_plan_retry_time_) return;
+      // 入口触发可能与耗时的frontier回调相邻执行。禁止首轮规划继续使用触发前的
+      // 门外里程计；等待五帧新状态后，下面现有的中值审核逻辑会直接采用它们。
+      if (initial_plan_waiting_for_fresh_odom_) {
+        if (odom_review_window_.size() < 5) {
+          ROS_WARN_THROTTLE(
+              0.5, "[initial_plan] waiting for five post-trigger odometry frames (%zu/5).",
+              odom_review_window_.size());
+          return;
+        }
+        initial_plan_waiting_for_fresh_odom_ = false;
+        ROS_WARN("[initial_plan] five post-trigger odometry frames ready; plan from reviewed "
+                 "live position.");
+      }
       // exploration_node 是单线程 spinner，规划函数运行期间安全定时器不能插入执行。
       // 因此每次开始一次可能耗时的重规划前，先同步复核 traj_server 正在执行的旧轨迹。
       if (active_traj_valid_ && !active_traj_braked_) {
@@ -961,6 +974,11 @@ void FastExplorationFSM::triggerCallback(const nav_msgs::PathConstPtr& msg) {
     }
     return;
   }
+  // corridor_search_manager发布的触发点已经位于入口内侧。清空门外历史样本并让
+  // PLAN_TRAJ等待触发后的五帧高频里程计，避免旧起点使门内A*路径看起来回穿入口。
+  odom_review_window_.clear();
+  initial_plan_waiting_for_fresh_odom_ = true;
+  fd_->static_state_ = true;
   transitState(PLAN_TRAJ, "triggerCallback");
 }
 

@@ -95,6 +95,8 @@ private:
     std::array<double, 3> velocity;
   };
   std::deque<OdomReviewSample> odom_review_window_;
+  // 入口交接后丢弃门外旧样本，首轮规划只使用交接后连续到达的五帧里程计。
+  bool initial_plan_waiting_for_fresh_odom_{false};
   bool inflation_escape_active_{false};
   ros::Time inflation_escape_clear_since_;
   // 规划器生成下一条候选轨迹时会改写 local_data_。单独保存 traj_server 当前正在执行的
