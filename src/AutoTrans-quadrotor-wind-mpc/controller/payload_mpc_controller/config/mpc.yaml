@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # Cost on Inputs
 R_thrust:    1.2  # Cost on thrust input            //default: 1
-R_pitchroll:  20   # Cost on pitch and roll rate
+R_pitchroll:  30 # Cost on pitch and roll rate
 R_yaw:        1.2      # Cost on yaw ratte
 
 # Exponential scaling: W_i = W * exp(-i/N * cost_scaling).
