@@ -212,7 +212,7 @@ bool FastExplorationManager::pathInsideWorkspaceLock(const vector<Vector3d>& pat
   return true;
 }
 
-void FastExplorationManager::applyMissionFrontierFilter() {
+void FastExplorationManager::applyMissionFrontierFilter(const Vector3d& pos) {
   const auto old_frontiers = ed_->frontiers_;
   const auto old_boxes = ed_->frontier_boxes_;
   const auto old_points = ed_->points_;
@@ -289,10 +289,51 @@ void FastExplorationManager::applyMissionFrontierFilter() {
     ed_->yaws_.swap(filtered_yaws);
     ed_->averages_.swap(filtered_averages);
   }
+
+  // 门平面只负责禁止回到入口外侧，不能证明门前历史地图中的横向 frontier
+  // 属于当前通道。保留累计占据地图，但在选点前复用现有 A* 和任务边界审核，
+  // 只让从入口内侧当前位置可达且不回穿入口的候选进入评分。
+  int rejected_disconnected = 0;
+  if (workspace_lock_active && task_search_manager_ && task_search_manager_->enabled() &&
+      planner_manager_ && planner_manager_->path_finder_) {
+    vector<vector<Vector3d>> connected_frontiers;
+    vector<pair<Vector3d, Vector3d>> connected_boxes;
+    vector<Vector3d> connected_points;
+    vector<double> connected_yaws;
+    vector<Vector3d> connected_averages;
+    for (size_t i = 0; i < ed_->points_.size(); ++i) {
+      Vector3d goal = ed_->points_[i];
+      goal.z() = task_search_manager_->projectSearchHeight(goal.z(), pos.z());
+      planner_manager_->path_finder_->reset();
+      const bool reachable =
+          planner_manager_->path_finder_->search(pos, goal) == Astar::REACH_END;
+      const vector<Vector3d> path =
+          reachable ? planner_manager_->path_finder_->getPath() : vector<Vector3d>{};
+      const bool path_allowed = reachable && !path.empty() &&
+          pathInsideWorkspaceLock(path) &&
+          task_search_manager_->isRecoveryPathAllowed(path, false);
+      if (!path_allowed) {
+        ++rejected_disconnected;
+        continue;
+      }
+      connected_frontiers.push_back(ed_->frontiers_[i]);
+      connected_boxes.push_back(ed_->frontier_boxes_[i]);
+      connected_points.push_back(ed_->points_[i]);
+      connected_yaws.push_back(ed_->yaws_[i]);
+      connected_averages.push_back(ed_->averages_[i]);
+    }
+    ed_->frontiers_.swap(connected_frontiers);
+    ed_->frontier_boxes_.swap(connected_boxes);
+    ed_->points_.swap(connected_points);
+    ed_->yaws_.swap(connected_yaws);
+    ed_->averages_.swap(connected_averages);
+  }
   ROS_WARN_THROTTLE(1.0,
                     "[workspace_lock] frontier kept=%zu rejected_workspace=%d rejected_takeoff=%d "
-                    "rejected_region=%d lock=%d received=%d static_region=%d.",
+                    "rejected_region=%d rejected_disconnected=%d lock=%d received=%d "
+                    "static_region=%d.",
                     ed_->points_.size(), rejected_workspace, rejected_takeoff, rejected_region,
+                    rejected_disconnected,
                     static_cast<int>(workspace_lock_active),
                     static_cast<int>(mission_workspace_lock_received_),
                     static_cast<int>(use_static_search_region));
@@ -2177,7 +2218,7 @@ int FastExplorationManager::planExploreMotion(
        ep_->mission_use_workspace_lock_);
   bool use_mission_forward_fallback = false;
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target) {
-    applyMissionFrontierFilter();
+    applyMissionFrontierFilter(pos);
   }
 
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target &&

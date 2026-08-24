@@ -254,7 +254,7 @@ private:
   bool pointInBox(const Vector3d& pt, const Vector3d& box_min, const Vector3d& box_max) const;
   void updateMissionRegionState(const Vector3d& pos);
   bool shouldUseMissionEntryTransit(const Vector3d& pos) const;
-  void applyMissionFrontierFilter();
+  void applyMissionFrontierFilter(const Vector3d& pos);
   // 2026-07-10: 门内锁约束工具，FUEL 第二阶段不能越过入口半平面回到起飞区。
   void workspaceLockCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   bool pointInsideWorkspaceLock(const Vector3d& pt) const;
