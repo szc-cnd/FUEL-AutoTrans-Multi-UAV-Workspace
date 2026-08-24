@@ -18,14 +18,23 @@ namespace PayloadMPC
                                                      q_gain_.Q_velocity, q_gain_.Q_velocity, q_gain_.Q_velocity)
                                                         .finished()
                                                         .asDiagonal();
-    Eigen::Matrix<real_t, kInputSize, kInputSize> R = (Eigen::Matrix<real_t, kInputSize, 1>() << r_gain_.R_thrust, r_gain_.R_pitchroll, r_gain_.R_pitchroll, r_gain_.R_yaw).finished().asDiagonal();
+    Eigen::Matrix<real_t, kInputSize, kInputSize> R =
+        (Eigen::Matrix<real_t, kInputSize, 1>()
+             << r_gain_.R_thrust, r_gain_.R_pitchroll, r_gain_.R_pitchroll,
+             r_gain_.R_yaw, r_gain_.R_velocity_slack_xy,
+             r_gain_.R_velocity_slack_xy, r_gain_.R_velocity_slack_z)
+            .finished()
+            .asDiagonal();
 
     Eigen::Matrix<real_t, kStateSize, 1> initial_state = (Eigen::Matrix<real_t, kStateSize, 1>() << 0.0, 0.0, 0.0,
                                                           1.0, 0.0, 0.0, 0.0,
                                                           0.0, 0.0, 0.0)
                                                              .finished();
     reference_states_ = initial_state.replicate(1,kSamples+1);
-    Eigen::Matrix<real_t, kInputSize, 1> initial_input = (Eigen::Matrix<real_t, kInputSize, 1>() << params_.dyn_params_.mass_q * params_.gravity_, 0, 0, 0).finished();
+    Eigen::Matrix<real_t, kInputSize, 1> initial_input =
+        (Eigen::Matrix<real_t, kInputSize, 1>()
+             << params_.dyn_params_.mass_q * params_.gravity_, 0, 0, 0, 0, 0, 0)
+            .finished();
 
     hover_input_ = initial_input.replicate(1, kSamples + 1);
     reference_inputs_ = hover_input_;
@@ -36,7 +45,8 @@ namespace PayloadMPC
     mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
         params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
-        params_.max_velocity_xy_, params_.max_velocity_z_);
+        params_.max_velocity_xy_, params_.max_velocity_z_,
+        params_.max_velocity_slack_xy_, params_.max_velocity_slack_z_);
 
     // first_traj_received_ = false;
     solve_from_scratch_ = false;
@@ -163,12 +173,15 @@ namespace PayloadMPC
             .asDiagonal();
     const Eigen::Matrix<real_t, kInputSize, kInputSize> R =
         (Eigen::Matrix<real_t, kInputSize, 1>()
-             << r_gain.R_thrust, r_gain.R_pitchroll, r_gain.R_pitchroll, r_gain.R_yaw)
+             << r_gain.R_thrust, r_gain.R_pitchroll, r_gain.R_pitchroll, r_gain.R_yaw,
+             r_gain.R_velocity_slack_xy, r_gain.R_velocity_slack_xy,
+             r_gain.R_velocity_slack_z)
             .finished()
             .asDiagonal();
     const Eigen::Matrix<real_t, kInputSize, 1> initial_input =
         (Eigen::Matrix<real_t, kInputSize, 1>()
-             << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0)
+             << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0)
             .finished();
 
     Eigen::Matrix<real_t, kStateSize, 1> reset_state = estimated_state;
@@ -206,7 +219,8 @@ namespace PayloadMPC
     const bool limits_ok = mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
         params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
-        recovery_velocity_xy, recovery_velocity_z);
+        recovery_velocity_xy, recovery_velocity_z,
+        params_.max_velocity_slack_xy_, params_.max_velocity_slack_z_);
     recovery_velocity_limits_relaxed_ = limits_ok &&
         (recovery_velocity_xy > params_.max_velocity_xy_ + 1.0e-6 ||
          recovery_velocity_z > params_.max_velocity_z_ + 1.0e-6);
@@ -241,14 +255,15 @@ namespace PayloadMPC
     const bool limits_ok = mpc_wrapper_.setLimits(
         params_.min_thrust_, params_.max_thrust_,
         params_.max_bodyrate_xy_, params_.max_bodyrate_z_,
-        params_.max_velocity_xy_, params_.max_velocity_z_);
+        params_.max_velocity_xy_, params_.max_velocity_z_,
+        params_.max_velocity_slack_xy_, params_.max_velocity_slack_z_);
     if (limits_ok)
     {
       recovery_velocity_limits_relaxed_ = false;
-      // 改回正常硬约束后，必须重新准备并在新约束下成功求解，旧解不能计入恢复次数。
+      // 改回正常软约束阈值后，必须重新准备并在新约束下成功求解，旧解不能计入恢复次数。
       last_mpc_solve_success_ = false;
       preparation_thread_ = std::thread(&MpcController::preparationThread, this);
-      ROS_INFO("[NMPC恢复] 实际速度已回到正常范围，恢复配置的速度硬约束。");
+      ROS_INFO("[NMPC恢复] 实际速度已回到正常范围，恢复配置的速度软约束阈值。");
     }
     return limits_ok;
   }
@@ -386,7 +401,7 @@ namespace PayloadMPC
       reference_states_.col(i) = reference_state;
 
       Eigen::Matrix<real_t, kInputSize, 1> reference_input;
-      reference_input << thr, omg.x(), omg.y(), omg.z();
+      reference_input << thr, omg.x(), omg.y(), omg.z(), 0.0, 0.0, 0.0;
       reference_inputs_.col(i) = reference_input;
       t += t_step;
     }

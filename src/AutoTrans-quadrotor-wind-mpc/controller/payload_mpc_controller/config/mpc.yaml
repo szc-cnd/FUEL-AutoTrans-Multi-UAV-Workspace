@@ -22,6 +22,9 @@ Q_dcable: 0.0
 R_thrust:    1.2  # 推力输入代价。
 R_pitchroll:  20.0   # 提高横滚/俯仰角速度动作代价。
 R_yaw:        1.2      # 偏航角速度输入代价。
+# 速度越过正常上限时使用非负松弛量；高权重使越界只作为保持求解可行的短时退让。
+R_velocity_slack_xy: 5000.0
+R_velocity_slack_z: 5000.0
 
 # 指数缩放：W_i = W * exp(-i/N * cost_scaling)。
 # cost_scaling = 0 表示不缩放，此时 W_i = W。
@@ -37,9 +40,12 @@ max_bodyrate_z:     0.5         # 连续轨迹偏航的最大角速度 [rad/s]
 # 对 1.817 kg、g=9.795、hover_percentage=0.54，29.5 N 标称约对应归一化推力 0.895。
 min_thrust:         1.0
 max_thrust:         29.5
-# NMPC 世界系速度硬约束，单位 m/s；x/y 使用同一上限，z 单独限制。
+# NMPC 世界系正常速度软约束，单位 m/s；x/y 分量使用同一上限，z 单独限制。
 max_velocity_xy: 1.5
 max_velocity_z: 1.0
+# 松弛量硬上限形成紧急速度边界：|vx/vy| <= 3.0 m/s，|vz| <= 2.0 m/s。
+max_velocity_slack_xy: 1.5
+max_velocity_slack_z: 1.0
 
 # 是否使用轨迹终点位置以改善末端跟踪性能。
 use_trajectory_ending_pos: true
@@ -177,7 +183,7 @@ safety:
     mpc_recovery_last_valid_max_bodyrate: 0.25
     # 连续求解失败时，基于最新可信状态完整重置 ACADO 工作区的周期，单位 s。
     mpc_recovery_full_reset_period: 0.20
-    # 重置时速度硬约束相对当前实际速度增加的余量，单位 m/s；速度回到正常范围后恢复原约束。
+    # 重置时临时提高速度软约束阈值的余量，单位 m/s；速度回到正常范围后恢复原阈值。
     mpc_recovery_velocity_margin_xy: 0.20
     mpc_recovery_velocity_margin_z: 0.15
     # 退出恢复前的三维位置误差、水平速度、垂直速度和机体倾角阈值。

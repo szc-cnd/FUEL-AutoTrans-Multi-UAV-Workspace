@@ -124,7 +124,8 @@ namespace PayloadMPC
   // Set the input limits.
   bool MpcWrapper::setLimits(real_t min_thrust, real_t max_thrust,
                              real_t max_rollpitchrate, real_t max_yawrate,
-                             real_t max_velocity_xy, real_t max_velocity_z)
+                             real_t max_velocity_xy, real_t max_velocity_z,
+                             real_t max_velocity_slack_xy, real_t max_velocity_slack_z)
   {
     if (min_thrust <= 0.0 || min_thrust > max_thrust)
     {
@@ -157,17 +158,24 @@ namespace PayloadMPC
       return false;
     }
 
+    if (!std::isfinite(max_velocity_slack_xy) || !std::isfinite(max_velocity_slack_z) ||
+        max_velocity_slack_xy <= 0.0 || max_velocity_slack_z <= 0.0)
+    {
+      ROS_ERROR("[NMPC] 最大速度软约束松弛量无效，单位必须为 m/s。");
+      return false;
+    }
+
     // Set input boundaries.
-    Eigen::Matrix<real_t, 4, 1> lower_bounds = Eigen::Matrix<real_t, 4, 1>::Zero();
-    Eigen::Matrix<real_t, 4, 1> upper_bounds = Eigen::Matrix<real_t, 4, 1>::Zero();
+    Eigen::Matrix<real_t, kInputSize, 1> lower_bounds =
+        Eigen::Matrix<real_t, kInputSize, 1>::Zero();
+    Eigen::Matrix<real_t, kInputSize, 1> upper_bounds =
+        Eigen::Matrix<real_t, kInputSize, 1>::Zero();
     lower_bounds << min_thrust,
-        -max_rollpitchrate, -max_rollpitchrate, -max_yawrate;
+        -max_rollpitchrate, -max_rollpitchrate, -max_yawrate,
+        0.0, 0.0, 0.0;
     upper_bounds << max_thrust,
-        max_rollpitchrate, max_rollpitchrate, max_yawrate;
-    Eigen::Matrix<real_t, 1, 1> lower_affine_bounds;
-    lower_affine_bounds << -1.1;
-    Eigen::Matrix<real_t, 1, 1> upper_affine_bounds;
-    upper_affine_bounds << -0.1;
+        max_rollpitchrate, max_rollpitchrate, max_yawrate,
+        max_velocity_slack_xy, max_velocity_slack_xy, max_velocity_slack_z;
 
     acado_lower_bounds_ =
         lower_bounds.replicate(1, kSamples);
@@ -175,11 +183,14 @@ namespace PayloadMPC
     acado_upper_bounds_ =
         upper_bounds.replicate(1, kSamples);
 
-    // v_x/v_y/v_z 是 ENU 世界系速度，单位 m/s；这是 ACADO 的硬约束。
-    Eigen::Matrix<real_t, kStateConstraintSize, 1> lower_velocity_bounds;
-    lower_velocity_bounds << -max_velocity_xy, -max_velocity_xy, -max_velocity_z;
-    Eigen::Matrix<real_t, kStateConstraintSize, 1> upper_velocity_bounds;
-    upper_velocity_bounds << max_velocity_xy, max_velocity_xy, max_velocity_z;
+    // 每轴用非负松弛量表达 |v| <= v_max + slack；松弛量本身有硬上限。
+    // 约束顺序必须与 codegen 模型中的 +vx/-vx/+vy/-vy/+vz/-vz 一致。
+    Eigen::Matrix<real_t, kVelocitySoftConstraintSize, 1> lower_velocity_bounds =
+        Eigen::Matrix<real_t, kVelocitySoftConstraintSize, 1>::Constant(-1.0e6);
+    Eigen::Matrix<real_t, kVelocitySoftConstraintSize, 1> upper_velocity_bounds;
+    upper_velocity_bounds << max_velocity_xy, max_velocity_xy,
+        max_velocity_xy, max_velocity_xy,
+        max_velocity_z, max_velocity_z;
     acado_lower_affine_bounds_ = lower_velocity_bounds.replicate(1, kSamples);
     acado_upper_affine_bounds_ = upper_velocity_bounds.replicate(1, kSamples);
     return true;

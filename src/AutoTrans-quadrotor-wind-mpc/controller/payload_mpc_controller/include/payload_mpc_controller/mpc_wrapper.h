@@ -28,8 +28,8 @@ namespace PayloadMPC
     static constexpr int kInputSize = ACADO_NU;           // number of inputs
     static constexpr int kCostSize = ACADO_NY - ACADO_NU; // number of state costs
     static constexpr int kOdSize = ACADO_NOD;             // number of online data
-    // ACADO 旧版生成器不导出 ACADO_NA 宏；每个预测节点有 v_x/v_y/v_z 三个仿射约束。
-    static constexpr int kStateConstraintSize = 3; // 世界系速度硬约束数量
+    // 每个速度分量各有正负两个软边界约束，松弛量本身作为有界控制变量。
+    static constexpr int kVelocitySoftConstraintSize = 6;
     // static constexpr real_t dt_{0.05};                    // time step
 
     // extern ACADOvariables acadoVariables;
@@ -55,7 +55,8 @@ namespace PayloadMPC
 
         bool setLimits(real_t min_thrust, real_t max_thrust,
                        real_t max_rollpitchrate, real_t max_yawrate,
-                       real_t max_velocity_xy, real_t max_velocity_z);
+                       real_t max_velocity_xy, real_t max_velocity_z,
+                       real_t max_velocity_slack_xy, real_t max_velocity_slack_z);
 
         bool setReferencePose(
             const Eigen::Ref<const Eigen::Matrix<real_t, kStateSize, 1>> reference_state);
@@ -104,16 +105,16 @@ namespace PayloadMPC
         Eigen::Map<Eigen::Matrix<real_t, kEndRefSize, kEndRefSize>>
             acado_W_end_{acadoVariables.WN};
 
-        Eigen::Map<Eigen::Matrix<real_t, 4, kSamples, Eigen::ColMajor>>
+        Eigen::Map<Eigen::Matrix<real_t, kInputSize, kSamples, Eigen::ColMajor>>
             acado_lower_bounds_{acadoVariables.lbValues};
 
-        Eigen::Map<Eigen::Matrix<real_t, 4, kSamples, Eigen::ColMajor>>
+        Eigen::Map<Eigen::Matrix<real_t, kInputSize, kSamples, Eigen::ColMajor>>
             acado_upper_bounds_{acadoVariables.ubValues};
 
-        Eigen::Map<Eigen::Matrix<real_t, kStateConstraintSize, kSamples, Eigen::ColMajor>>
+        Eigen::Map<Eigen::Matrix<real_t, kVelocitySoftConstraintSize, kSamples, Eigen::ColMajor>>
             acado_lower_affine_bounds_{acadoVariables.lbAValues};
 
-        Eigen::Map<Eigen::Matrix<real_t, kStateConstraintSize, kSamples, Eigen::ColMajor>>
+        Eigen::Map<Eigen::Matrix<real_t, kVelocitySoftConstraintSize, kSamples, Eigen::ColMajor>>
             acado_upper_affine_bounds_{acadoVariables.ubAValues};
 
         Eigen::Matrix<real_t, kRefSize, kRefSize> W_ = (Eigen::Matrix<real_t, kRefSize, kRefSize>::Identity());

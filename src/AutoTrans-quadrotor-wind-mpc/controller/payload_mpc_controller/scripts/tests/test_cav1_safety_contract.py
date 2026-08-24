@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for CAV1 controller safety and hard velocity limits."""
+"""Static checks for CAV1 controller safety and soft velocity limits."""
 
 from pathlib import Path
 
@@ -18,26 +18,49 @@ def test_velocity_limits_are_configured_and_forwarded():
     yaml = (CONFIG / "mpc.yaml").read_text(encoding="utf-8")
     assert "max_velocity_xy_" in params
     assert "max_velocity_z_" in params
+    assert "max_velocity_slack_xy_" in params
+    assert "max_velocity_slack_z_" in params
     assert "max_velocity_xy" in wrapper_h
     assert "max_velocity_z" in wrapper_h
     assert "params_.max_velocity_xy_" in controller
     assert "params_.max_velocity_z_" in controller
+    assert "params_.max_velocity_slack_xy_" in controller
+    assert "params_.max_velocity_slack_z_" in controller
     assert "max_velocity_xy: 1.5" in yaml
     assert "max_velocity_z: 1.0" in yaml
+    assert "max_velocity_slack_xy: 1.5" in yaml
+    assert "max_velocity_slack_z: 1.0" in yaml
+    assert "R_velocity_slack_xy: 5000.0" in yaml
+    assert "R_velocity_slack_z: 5000.0" in yaml
 
 
-def test_solver_exposes_three_affine_velocity_constraints_and_runtime_overrides_them():
+def test_solver_exposes_six_soft_velocity_constraints_and_runtime_overrides_them():
     header = (MODEL / "quadrotor_payload_mpc" / "acado_common.h").read_text(encoding="utf-8")
     assert "lbAValues" in header
     assert "ubAValues" in header
     solver = (MODEL / "quadrotor_payload_mpc" / "acado_solver.c").read_text(encoding="utf-8")
-    assert "acadoWorkspace.lbA[59]" in solver
-    assert "acadoWorkspace.ubA[59]" in solver
+    assert "acadoWorkspace.lbA[119]" in solver
+    assert "acadoWorkspace.ubA[119]" in solver
     wrapper = (SRC / "mpc_wrapper.cpp").read_text(encoding="utf-8")
-    assert "lower_velocity_bounds << -max_velocity_xy, -max_velocity_xy, -max_velocity_z" in wrapper
-    assert "upper_velocity_bounds << max_velocity_xy, max_velocity_xy, max_velocity_z" in wrapper
+    assert "kVelocitySoftConstraintSize = 6" in (INCLUDE / "mpc_wrapper.h").read_text(encoding="utf-8")
+    assert "Constant(-1.0e6)" in wrapper
+    assert "upper_velocity_bounds << max_velocity_xy, max_velocity_xy" in wrapper
     assert "acado_lower_affine_bounds_ = lower_velocity_bounds.replicate" in wrapper
     assert "acado_upper_affine_bounds_ = upper_velocity_bounds.replicate" in wrapper
+
+
+def test_normal_velocity_limit_uses_bounded_penalized_slack():
+    model = (MODEL / "quadrotor_payload_mpc_with_ext_force.cpp").read_text(encoding="utf-8")
+    controller = (SRC / "mpc_controller.cpp").read_text(encoding="utf-8")
+    header = (MODEL / "quadrotor_payload_mpc" / "acado_common.h").read_text(encoding="utf-8")
+    assert "Control T, w_x, w_y, w_z, s_vx, s_vy, s_vz;" in model
+    assert "0.0 <= s_vx <= max_velocity_slack_xy" in model
+    assert "v_x - s_vx <= max_velocity_xy" in model
+    assert "-v_x - s_vx <= max_velocity_xy" in model
+    assert "v_z - s_vz <= max_velocity_z" in model
+    assert "R_velocity_slack_xy" in controller
+    assert "R_velocity_slack_z" in controller
+    assert "#define ACADO_NU 7" in header
 
 
 def test_controller_has_safe_output_and_solver_failure_path():

@@ -1079,7 +1079,7 @@ namespace PayloadMPC
 			controller_.recoveryVelocityLimitsRelaxed() && velocity_ready_for_nominal)
 		{
 			if (!controller_.restoreNominalVelocityLimits())
-				ROS_ERROR_THROTTLE(5.0, "[NMPC恢复] 无法恢复配置的速度硬约束，继续留在恢复状态。");
+				ROS_ERROR_THROTTLE(5.0, "[NMPC恢复] 无法恢复配置的速度软约束阈值，继续留在恢复状态。");
 		}
 
 		const double deg_to_rad = M_PI / 180.0;
@@ -1622,7 +1622,7 @@ namespace PayloadMPC
 		}
 
 		const Eigen::Vector4d cached_input =
-			controller_.lastValidControlInput().cast<double>();
+			controller_.lastValidControlInput().head<4>().cast<double>();
 		return conservativeLastValidInput(
 			odom_data.v, force_attitude_odom_data.q, cached_input,
 			params_.safety_.mpc_recovery_exit_speed_xy,
@@ -1643,8 +1643,9 @@ namespace PayloadMPC
 		{
 			ROS_ERROR_THROTTLE(1.0,
 				"[NMPC恢复] 无法生成有限的拉平姿态目标，退回零角速度和悬停推力。");
-			Eigen::Matrix<real_t, kInputSize, 1> hover_input;
-			hover_input << params_.dyn_params_.mass_q * params_.gravity_, 0.0, 0.0, 0.0;
+			Eigen::Matrix<real_t, kInputSize, 1> hover_input =
+				Eigen::Matrix<real_t, kInputSize, 1>::Zero();
+			hover_input(kThrust) = params_.dyn_params_.mass_q * params_.gravity_;
 			publish_bodyrate_ctrl(hover_input, stamp);
 			return;
 		}

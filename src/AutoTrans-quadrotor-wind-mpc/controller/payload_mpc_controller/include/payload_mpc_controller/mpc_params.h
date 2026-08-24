@@ -31,6 +31,8 @@ namespace PayloadMPC
 			real_t R_thrust;
 			real_t R_pitchroll;
 			real_t R_yaw;
+			real_t R_velocity_slack_xy;
+			real_t R_velocity_slack_z;
 		};
 
 		struct ForceEstimator
@@ -160,7 +162,7 @@ namespace PayloadMPC
 			double mpc_recovery_last_valid_max_bodyrate{0.25};
 			// 连续失败时重新初始化完整 ACADO 工作区的周期，单位 s。
 			double mpc_recovery_full_reset_period{0.20};
-			// 重置时临时放宽速度硬约束，避免当前速度已越界导致恢复问题不可行，单位 m/s。
+			// 重置时临时提高速度软约束阈值，避免恢复阶段为超限速度支付过高代价，单位 m/s。
 			double mpc_recovery_velocity_margin_xy{0.20};
 			double mpc_recovery_velocity_margin_z{0.15};
 			// 退出恢复模式前必须满足的实际状态阈值。
@@ -229,9 +231,11 @@ namespace PayloadMPC
 		real_t max_thrust_;
 		real_t max_bodyrate_xy_;
 		real_t max_bodyrate_z_;
-		// NMPC 世界系速度硬约束，单位 m/s；x/y 与 z 分开配置。
+		// NMPC 世界系正常速度软约束及松弛量硬上限，单位 m/s。
 		real_t max_velocity_xy_;
 		real_t max_velocity_z_;
+		real_t max_velocity_slack_xy_;
+		real_t max_velocity_slack_z_;
 
 		real_t state_cost_exponential_;
 		real_t input_cost_exponential_;
@@ -266,6 +270,8 @@ namespace PayloadMPC
 			max_bodyrate_xy_ = 0.0;
 			max_velocity_xy_ = 0.0;
 			max_velocity_z_ = 0.0;
+			max_velocity_slack_xy_ = 0.0;
+			max_velocity_slack_z_ = 0.0;
 			enable_rc_hover_adjust_ = false;
 		}
 
@@ -289,6 +295,15 @@ namespace PayloadMPC
 			read_essential_param(nh, "R_thrust", r_gain_.R_thrust);
 			read_essential_param(nh, "R_pitchroll", r_gain_.R_pitchroll);
 			read_essential_param(nh, "R_yaw", r_gain_.R_yaw);
+			read_essential_param(nh, "R_velocity_slack_xy", r_gain_.R_velocity_slack_xy);
+			read_essential_param(nh, "R_velocity_slack_z", r_gain_.R_velocity_slack_z);
+			if (!std::isfinite(r_gain_.R_velocity_slack_xy) ||
+				!std::isfinite(r_gain_.R_velocity_slack_z) ||
+				r_gain_.R_velocity_slack_xy <= 0.0 || r_gain_.R_velocity_slack_z <= 0.0)
+			{
+				ROS_ERROR("[MPCCTRL] R_velocity_slack_xy/z 必须为正的有限值。");
+				ROS_BREAK();
+			}
 
 			read_essential_param(nh, "min_thrust", min_thrust_);
 			read_essential_param(nh, "max_thrust", max_thrust_);
@@ -296,10 +311,15 @@ namespace PayloadMPC
 			read_essential_param(nh, "max_bodyrate_z", max_bodyrate_z_);
 			read_essential_param(nh, "max_velocity_xy", max_velocity_xy_);
 			read_essential_param(nh, "max_velocity_z", max_velocity_z_);
+			read_essential_param(nh, "max_velocity_slack_xy", max_velocity_slack_xy_);
+			read_essential_param(nh, "max_velocity_slack_z", max_velocity_slack_z_);
 			if (!std::isfinite(max_velocity_xy_) || !std::isfinite(max_velocity_z_) ||
-				max_velocity_xy_ <= 0.0 || max_velocity_z_ <= 0.0)
+				!std::isfinite(max_velocity_slack_xy_) ||
+				!std::isfinite(max_velocity_slack_z_) ||
+				max_velocity_xy_ <= 0.0 || max_velocity_z_ <= 0.0 ||
+				max_velocity_slack_xy_ <= 0.0 || max_velocity_slack_z_ <= 0.0)
 			{
-				ROS_ERROR("[MPCCTRL] max_velocity_xy/max_velocity_z 必须为正的有限值，单位 m/s。");
+				ROS_ERROR("[MPCCTRL] 速度上限及松弛量上限必须为正的有限值，单位 m/s。");
 				ROS_BREAK();
 			}
 
