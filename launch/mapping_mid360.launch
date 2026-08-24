@@ -1,0 +1,135 @@
+<launch>
+
+  <!-- ===============================
+       Livox MID-360 启动文件
+       用于 Fast-LIO 建图 / 定位
+       =============================== -->
+
+  <!-- 实机默认使用系统时间；仿真/rosbag 需要时由上层 launch 覆盖。 -->
+  <param name="use_sim_time" value="false" />
+
+  <!-- 是否启动 RViz。 -->
+  <arg name="rviz" default="false" />
+  <arg name="vehicle_ns" default="UAV0" />
+  <arg name="rviz_goal_topic" default="/$(arg vehicle_ns)/move_base_simple/goal" />
+  <arg name="lidar_topic" default="/$(arg vehicle_ns)/livox/lidar" />
+  <arg name="raw_imu_topic" default="/$(arg vehicle_ns)/livox/imu" />
+  <arg name="imu_topic" default="/$(arg vehicle_ns)/livox/imu_body" />
+  <!-- CAV0 的 MID360 驱动配置使用 +15° pitch；IMU 同步旋转一次到机体系。 -->
+  <arg name="imu_install_pitch_deg" default="15.0" />
+  <arg name="imu_mps2_topic" default="/$(arg vehicle_ns)/livox/imu_mps2" />
+  <arg name="odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odometry" />
+  <arg name="high_freq_odom_topic" default="/$(arg vehicle_ns)/fast_lio/Odom_high_freq" />
+  <arg name="cloud_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered" />
+  <arg name="cloud_body_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_registered_body" />
+  <arg name="cloud_effected_topic" default="/$(arg vehicle_ns)/fast_lio/cloud_effected" />
+  <arg name="laser_map_topic" default="/$(arg vehicle_ns)/fast_lio/Laser_map" />
+  <arg name="path_topic" default="/$(arg vehicle_ns)/fast_lio/path" />
+  <arg name="world_frame" default="$(arg vehicle_ns)/camera_init" />
+  <arg name="body_frame" default="$(arg vehicle_ns)/body" />
+
+  <node pkg="fast_lio" type="livox_imu_to_body.py"
+        name="$(arg vehicle_ns)_livox_imu_to_body"
+        output="screen" required="true">
+    <param name="input_topic" value="$(arg raw_imu_topic)" />
+    <param name="output_topic" value="$(arg imu_topic)" />
+    <param name="output_frame_id" value="$(arg body_frame)" />
+    <param name="pitch_deg" value="$(arg imu_install_pitch_deg)" />
+  </node>
+
+  <!-- ===============================
+       加载 MID-360 雷达配置文件
+       包含雷达模型、IMU-LiDAR 外参等
+       =============================== -->
+  <!-- 2026-07-14: 参数和 laserMapping 节点整体放入车辆命名空间，允许双 FAST-LIO 同时运行且互不覆盖参数。 -->
+  <group ns="$(arg vehicle_ns)">
+    <rosparam command="load" file="$(find fast_lio)/config/mid360.yaml" />
+    <!-- 2026-07-13: 覆盖共享 YAML 中的单机话题，确保本 launch 的输入、输出和 TF 都由参数决定。 -->
+    <param name="common/lid_topic" value="$(arg lidar_topic)" />
+    <param name="common/imu_topic" value="$(arg imu_topic)" />
+    <param name="publish/imu_mps2_topic" value="$(arg imu_mps2_topic)" />
+    <param name="publish/odometry_topic" value="$(arg odom_topic)" />
+    <param name="publish/high_freq_odom_topic" value="$(arg high_freq_odom_topic)" />
+    <param name="publish/cloud_registered_topic" value="$(arg cloud_topic)" />
+    <param name="publish/cloud_registered_body_topic" value="$(arg cloud_body_topic)" />
+    <param name="publish/cloud_effected_topic" value="$(arg cloud_effected_topic)" />
+    <param name="publish/laser_map_topic" value="$(arg laser_map_topic)" />
+    <param name="publish/path_topic" value="$(arg path_topic)" />
+    <!-- 后机重连时需要累计 Path 补齐高频里程计通信中断期间的历史路段。 -->
+    <param name="publish/path_en" type="bool" value="true" />
+    <param name="publish/world_frame" value="$(arg world_frame)" />
+    <param name="publish/body_frame" value="$(arg body_frame)" />
+
+  <!-- ===============================
+       Fast-LIO 核心参数配置
+       =============================== -->
+
+  <!-- 是否开启特征提取
+       0：关闭（直接使用原始点云，MID-360 常用）
+       1：开启（类似 LOAM 的边/面特征） -->
+    <param name="feature_extract_enable" type="bool" value="0"/>
+
+  <!-- 点云滤波参数
+       每隔 point_filter_num 个点取 1 个
+       值越大，点云越稀疏，计算越快 -->
+    <param name="point_filter_num" type="int" value="1"/>
+
+  <!-- 单帧点云的最大迭代优化次数
+       影响位姿估计精度和实时性 -->
+    <param name="max_iteration" type="int" value="3" />
+
+  <!-- 面特征体素滤波尺寸（单位：米）
+       用于降采样当前帧点云 -->
+    <param name="filter_size_surf" type="double" value="0.2" />
+
+  <!-- 地图体素滤波尺寸（单位：米）
+       用于历史地图降采样 -->
+    <param name="filter_size_map" type="double" value="0.2" />
+
+  <!-- 地图立方体边长（单位：米）
+       Fast-LIO 维护的局部地图尺寸 -->
+    <param name="cube_side_length" type="double" value="1000" />
+
+  <!-- 是否记录运行时位姿日志
+       0：关闭（推荐，减少 IO）
+       1：开启（调试 / 轨迹分析用） -->
+    <param name="runtime_pos_log_enable" type="bool" value="0" />
+
+  <!-- ===============================
+       Fast-LIO 主节点
+       =============================== -->
+
+  <!-- 激光雷达建图与定位节点
+       订阅：
+         - LiDAR 点云
+         - IMU 数据
+       发布：
+         - 里程计
+         - 地图
+         - TF -->
+    <node pkg="fast_lio"
+          type="fastlio_mapping"
+          name="laserMapping"
+          output="screen" />
+  </group>
+
+  <!-- ===============================
+       RViz 可视化（当前注释掉）
+       =============================== -->
+  
+  <group if="$(arg rviz)">
+    <node pkg="rviz"
+          type="rviz"
+          name="rviz"
+          args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz -f $(arg world_frame)">
+      <remap from="/cloud_registered" to="$(arg cloud_topic)" />
+      <remap from="/cloud_effected" to="$(arg cloud_effected_topic)" />
+      <remap from="/Laser_map" to="$(arg laser_map_topic)" />
+      <remap from="/Odometry" to="$(arg odom_topic)" />
+      <remap from="/path" to="$(arg path_topic)" />
+      <remap from="/move_base_simple/goal" to="$(arg rviz_goal_topic)" />
+    </node>
+  </group>
+ 
+
+</launch>

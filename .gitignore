@@ -1,0 +1,6 @@
+.git.corrupt-backup-*/
+build/
+devel/
+*.pyc
+__pycache__/
+
