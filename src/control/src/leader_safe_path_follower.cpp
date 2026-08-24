@@ -571,12 +571,36 @@ class LeaderSafePathFollower {
     // 2026-07-15: workspace_lock 的朝向由起飞区指向作业区；保存一次后不允许后续重复消息拖动门点。
     confirmed_door_.position = followerCruisePointToWorld(msg->pose.position);
     confirmed_door_.yaw = yawFromQuaternion(msg->pose.orientation);
+    // 门中心是明确任务点，不继承前机进门时可能偏低的实飞高度筛选结果。
+    confirmed_door_.normal_cruise_height = true;
     have_confirmed_door_ = true;
     ROS_ERROR("[safe_follower] confirmed DOOR received at (%.2f, %.2f, %.2f), yaw=%.1fdeg; "
               "follower remains parked until leader is %.2fm inside.",
               confirmed_door_.position.x, confirmed_door_.position.y,
               confirmed_door_.position.z, confirmed_door_.yaw * 180.0 / M_PI,
               relay_release_distance_);
+  }
+
+  bool tryReleaseDoorWaypointFromLeaderPosition(
+      const geometry_msgs::Point& leader_world) {
+    if (!have_confirmed_door_ || door_waypoint_released_ ||
+        terminal_mode_active_)
+      return false;
+    const double inside_progress =
+        std::cos(confirmed_door_.yaw) *
+            (leader_world.x - confirmed_door_.position.x) +
+        std::sin(confirmed_door_.yaw) *
+            (leader_world.y - confirmed_door_.position.y);
+    if (inside_progress < door_release_inside_distance_) return false;
+    if (!relayWaypointSeparationReady("DOOR")) return false;
+
+    // 门的放行只依赖前机真实越过门心；历史路线的反向/断点保护仍只约束普通接力点。
+    confirmed_door_.progress = nearestRouteProgress(confirmed_door_.position);
+    appendRelayWaypoint(confirmed_door_, "DOOR");
+    door_waypoint_released_ = true;
+    setFollowerDetectionEnable(true, "door waypoint released");
+    last_relay_selection_progress_ = confirmed_door_.progress;
+    return true;
   }
 
   // 2026-07-28: 复用后文已有的nearestRouteProgress确定出口在前机实飞折线上的顺序；
@@ -596,6 +620,7 @@ class LeaderSafePathFollower {
     outside_wait.position.x += outside_door_distance_ * std::cos(confirmed_exit_.yaw);
     outside_wait.position.y += outside_door_distance_ * std::sin(confirmed_exit_.yaw);
     outside_wait.position = followerCruisePointToWorld(outside_wait.position);
+    outside_wait.normal_cruise_height = true;
     outside_wait.progress = confirmed_exit_.progress + outside_door_distance_;
     outside_wait_waypoint_index_ = relay_waypoints_.size();
     appendRelayWaypoint(outside_wait, "OUTSIDE_WAIT");
@@ -612,6 +637,8 @@ class LeaderSafePathFollower {
     if (have_final_exit_) return;
     confirmed_exit_.position = followerCruisePointToWorld(msg->pose.position);
     confirmed_exit_.yaw = yawFromQuaternion(msg->pose.orientation);
+    // 出口门心与入口一致，始终作为后机0.6m巡航高度的明确任务点。
+    confirmed_exit_.normal_cruise_height = true;
     have_final_exit_ = true;
     ROS_ERROR("[safe_follower] FINAL EXIT received center=(%.2f, %.2f, %.2f) "
               "yaw=%.1fdeg; append it to the normal history route, then hover %.2fm outside.",
@@ -1140,10 +1167,16 @@ class LeaderSafePathFollower {
       ROS_WARN("[safe_follower] UAV0 height %.2fm > %.2fm; leader route recording enabled.",
                msg->pose.pose.position.z, leader_start_height_);
     }
-    if (!leader_started_ || msg->pose.pose.position.z < min_record_height_) return;
+    if (!leader_started_) return;
+
+    const geometry_msgs::Point leader_world =
+        leaderToWorld(msg->pose.pose.position);
+    const bool door_released_from_position =
+        tryReleaseDoorWaypointFromLeaderPosition(leader_world);
+    if (msg->pose.pose.position.z < min_record_height_) return;
 
     RoutePoint point;
-    point.position = leaderToWorld(msg->pose.pose.position);
+    point.position = leader_world;
     point.normal_cruise_height =
         isNormalLeaderRouteHeight(msg->pose.pose.position.z);
     // 2026-07-24: 安全路线的几何进度只取前机XY，z统一为后机自己的巡航高度。
@@ -1278,21 +1311,8 @@ class LeaderSafePathFollower {
     publishRoute(msg->header.stamp);
 
     if (!have_confirmed_door_ || terminal_mode_active_) return;
-    const double inside_progress =
-        std::cos(confirmed_door_.yaw) * (point.position.x - confirmed_door_.position.x) +
-        std::sin(confirmed_door_.yaw) * (point.position.y - confirmed_door_.position.y);
-
-    if (!door_waypoint_released_) {
-      if (inside_progress < door_release_inside_distance_) return;
-      if (!relayWaypointSeparationReady("DOOR")) return;
-      confirmed_door_.progress = std::max(0.0, point.progress - inside_progress);
-      appendRelayWaypoint(confirmed_door_, "DOOR");
-      door_waypoint_released_ = true;
-      // 2026-07-27: 与“发布入门目标后开始检测”一致；门外预扫描不会写入UAV1背景。
-      setFollowerDetectionEnable(true, "door waypoint released");
-      last_relay_selection_progress_ = confirmed_door_.progress;
-      return;
-    }
+    if (door_released_from_position) return;
+    if (!door_waypoint_released_) return;
 
     // 2026-07-28: 最终出口门心已排队后不再生成门外内部点；稠密实飞路线仍继续记录供终点接力使用。
     if (exit_waypoint_released_) return;
