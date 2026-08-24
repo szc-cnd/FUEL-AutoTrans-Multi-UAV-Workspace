@@ -511,7 +511,7 @@ void TaskSearchManager::updateRobotPose(const Eigen::Vector3d& pos, double yaw) 
     latest_robot_pose_valid_ = true;
     ++latest_robot_pose_sequence_;
   }
-  if (hybrid_constraints_enabled_ && segment_direction_.norm() > 1e-3) {
+  if (segment_direction_.norm() > 1e-3) {
     const double progress =
         (pos.head<2>() - segment_origin_).dot(segment_direction_.normalized());
     if (!transition_active_)
@@ -1296,6 +1296,23 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
+  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。累计地图若在
+  // 障碍后方仍有已知FREE，保持原通道方向并交给A*绕障，不能把走过的旧路当成新弯道。
+  for (double distance = forward_free_length + 2.0 * probe_step;
+       distance <= recovery_turn_probe_length_ + 1e-6; distance += probe_step) {
+    Eigen::Vector3d probe = origin;
+    probe.head<2>() += distance * travel;
+    if (sdf_map_->isInMap(probe) &&
+        sdf_map_->getOccupancy(probe) == SDFMap::FREE) {
+      ROS_WARN_THROTTLE(
+          0.5,
+          "[task_search] keep corridor yaw: occupied center is a local obstacle; "
+          "accumulated map remains FREE %.2fm ahead.",
+          distance);
+      return false;
+    }
+  }
+
   // 不从无人机当前位置横向打射线，而把虚拟观察点提前放到前方墙前。这样地图刚形成明显
   // L形/弧形轮廓时就能看到侧向通道，无需先横移进入新通道1m以上。
   Eigen::Vector3d contour_origin = origin;
@@ -1310,9 +1327,9 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       const Eigen::Vector2d direction(
           std::cos(signed_angle) * travel.x() - std::sin(signed_angle) * travel.y(),
           std::sin(signed_angle) * travel.x() + std::cos(signed_angle) * travel.y());
-      if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
-          !task_search::insideForwardHalfPlane(direction,
-                                               corridor_dir_.head<2>()))
+      // 新通道不能落到当前已确认通道的后方。这里必须比较当前travel，不能比较初始
+      // 入口方向；否则北向通道中的东南旧路仍会被误当成合法新分支。
+      if (!task_search::insideForwardHalfPlane(direction, travel))
         continue;
       const double free_length = knownFreeLength(contour_origin, direction);
       if (free_length <= 1e-6) continue;
@@ -1373,10 +1390,12 @@ void TaskSearchManager::commitCorridorTurn(
     transition_incoming_direction_ = incoming;
     transition_outgoing_direction_ = outgoing;
     transition_old_high_water_ = segment_high_water_;
-    segment_origin_ = anchor;
-    segment_direction_ = outgoing;
-    segment_high_water_ = 0.0;
   }
+  // Native FUEL同样按已确认的通道段记录前进进度。它不使用混合模式的历史门，
+  // 但必须防止恢复轨迹沿当前段长距离倒退。
+  segment_origin_ = anchor;
+  segment_direction_ = outgoing;
+  segment_high_water_ = 0.0;
   stable_progress_direction_ = outgoing;
   stable_progress_direction_valid_ = true;
   // A confirmed turn starts a new FUEL segment. Keep the yaw reference tied to
@@ -1571,11 +1590,17 @@ bool TaskSearchManager::isTaskMotionAllowed(const Eigen::Vector3d& candidate) co
   if (!isMissionBoundaryMotionAllowed(candidate)) return false;
   if (!global_no_return_ || !corridor_frame_received_) return true;
   if (!hybrid_constraints_enabled_) {
-    return !latest_turn_anchor_valid_ ||
-           task_search::passesLatestTurnNoReturn(
-               candidate.head<2>(), latest_turn_anchor_,
-               latest_turn_incoming_direction_, stableProgressDirection(),
-               recovery_turn_no_return_margin_);
+    if (latest_turn_anchor_valid_ &&
+        !task_search::passesLatestTurnNoReturn(
+            candidate.head<2>(), latest_turn_anchor_,
+            latest_turn_incoming_direction_, stableProgressDirection(),
+            recovery_turn_no_return_margin_))
+      return false;
+    const Eigen::Vector2d direction = segment_direction_.norm() > 1e-3
+                                          ? segment_direction_.normalized()
+                                          : stableProgressDirection();
+    const double progress = (candidate.head<2>() - segment_origin_).dot(direction);
+    return progress >= segment_high_water_ - 0.25 - 1e-6;
   }
   if (transition_active_ &&
       (candidate.head<2>() - transition_anchor_).norm() <= 0.80 + 1e-6)
