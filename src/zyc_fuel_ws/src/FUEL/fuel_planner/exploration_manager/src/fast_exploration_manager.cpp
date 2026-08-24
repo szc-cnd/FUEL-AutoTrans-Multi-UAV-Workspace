@@ -2097,19 +2097,8 @@ int FastExplorationManager::planExploreMotion(
                                     std::sin(turn_in_place_final_yaw_), 0.0);
     return buildTurnInPlacePlan(pos, vel, yaw, locked_direction) ? SUCCEED : FAIL;
   }
-  // 先处理地图确认转弯。真实转弯一旦成立，转弯前锁存的低空目标立即失效，
-  // 不能继续把无人机拉回旧通道。
-  Vector3d early_turn_direction;
-  if (mission_entered_search_region_ && task_search_manager_ &&
-      task_search_manager_->mappedCorridorDirection(
-          yaw[0], early_turn_direction)) {
-    cancelActiveLowProbe("mapped corridor turn confirmed");
-    if (turn_in_place_enabled_ &&
-        buildTurnInPlacePlan(pos, vel, yaw, early_turn_direction))
-      return SUCCEED;
-    if (turn_in_place_enabled_ && task_search_manager_->turnYawAlignmentPending())
-      return FAIL;
-  }
+  // 先生成并验证本轮平移目标，再在轨迹发布前检查是否为真实弯道。局部左右绕障
+  // 必须先拥有解释权，不能在A*尚未选路时被独立占据射线提前改写通道方向。
   // 低空探测状态具有XY所有权。状态结束或被显式取消前，膨胀层历史逃逸不得
   // 沿旧航迹横移，从而避免原地上升目标被带到数米之外仍继续生效。
   const bool low_probe_was_active =

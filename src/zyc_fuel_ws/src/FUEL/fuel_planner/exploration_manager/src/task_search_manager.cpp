@@ -1270,6 +1270,28 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
                                        : visited_positions_.back();
   const Eigen::Vector2d travel = travel_direction.head<2>().normalized();
   const double probe_step = std::max(0.05, recovery_turn_probe_step_);
+  const double min_angle = recovery_turn_min_angle_deg_ * M_PI / 180.0;
+
+  // 本轮已经选出的安全目标仍沿旧通道前进或斜前绕障时，局部占据只能交给A*，
+  // 不能再由独立的占据射线把同一片右/左侧通路解释成新通道。真正弯道的目标方向
+  // 会达到现有turn_min_angle_deg，届时才允许下面的转弯识别接管。
+  if (active_goal_valid_) {
+    const Eigen::Vector2d goal_motion =
+        active_goal_.head<2>() - visited_positions_.back().head<2>();
+    if (goal_motion.norm() > 1e-3) {
+      const double alignment = std::max(
+          -1.0, std::min(1.0, goal_motion.normalized().dot(travel)));
+      const double goal_angle = std::acos(alignment);
+      if (goal_angle + 1e-6 < min_angle) {
+        ROS_WARN_THROTTLE(
+            0.5,
+            "[task_search] keep corridor yaw: active safe goal is %.1fdeg from "
+            "the current corridor, so the occupied split remains local avoidance.",
+            goal_angle * 180.0 / M_PI);
+        return false;
+      }
+    }
+  }
   auto knownFreeLength = [&](const Eigen::Vector3d& ray_origin,
                              const Eigen::Vector2d& direction) {
     double free_length = 0.0;
@@ -1319,7 +1341,6 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   contour_origin.head<2>() += std::max(0.0, forward_free_length - 0.20) * travel;
   double best_score = -std::numeric_limits<double>::infinity();
   Eigen::Vector2d best_direction = travel;
-  const double min_angle = recovery_turn_min_angle_deg_ * M_PI / 180.0;
   const double max_angle = recovery_turn_max_angle_deg_ * M_PI / 180.0;
   for (double angle = min_angle; angle <= max_angle + 1e-6; angle += M_PI / 12.0) {
     for (double sign : {-1.0, 1.0}) {
