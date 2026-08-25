@@ -921,6 +921,26 @@ bool FastExplorationManager::hasCurrentHeightForwardObstacle(
   return false;
 }
 
+bool FastExplorationManager::hasSuspendedForwardObstacle(
+    const Vector3d& pos, const Vector3d& forward) const {
+  if (!sdf_map_ || forward.head<2>().norm() < 1e-3) return false;
+  const Vector3d travel(forward.head<2>().normalized().x(),
+                        forward.head<2>().normalized().y(), 0.0);
+  const double step = std::max(0.05, sdf_map_->getResolution());
+  const double max_distance = std::max(vertical_detour_forward_check_distance_,
+                                       wide_side_bypass_max_lookahead_);
+  for (double ahead = std::max(step, wide_side_bypass_min_lookahead_);
+       ahead <= max_distance + 1e-6; ahead += step) {
+    // 只有悬空障碍真正压在当前通道中心线，才抢先下穿；偏在左右的悬空体
+    // 仍交给水平通道选择，避免在宽敞通道中无谓下降。
+    const Vector3d center_probe = pos + ahead * travel;
+    if (cameraOccupancyColumn(center_probe, pos.z()) &&
+        !hasLowVerticalSupport(center_probe, pos.z()))
+      return true;
+  }
+  return false;
+}
+
 bool FastExplorationManager::hasLowVerticalSupport(
     const Vector3d& point, double current_height) const {
   if (!sdf_map_) return false;
@@ -1041,8 +1061,11 @@ bool FastExplorationManager::buildWideSideBypass(
         "[wide_side_bypass] current-height obstacle has no continuous low support; "
         "classify as suspended/undetermined and leave it to low-height probing.");
   }
-  if (!split.valid || std::max(split.left_width, split.right_width) <
-                          wide_side_bypass_min_lane_width_)
+  const double widest_lane = std::max(split.left_width, split.right_width);
+  // 立柱前即使还没有完整的0.25m侧向通道，也先允许一个0.20m的安全拉出，
+  // 给足迹和下一帧深度图留出观察位置；只有小于0.20m才交给上下绕障。
+  const bool narrow_pullout = split.valid && widest_lane >= 0.20;
+  if (!split.valid || (!narrow_pullout && widest_lane < wide_side_bypass_min_lane_width_))
     return false;
 
   const bool choose_right = split.right_width > split.left_width;
@@ -1085,7 +1108,8 @@ bool FastExplorationManager::buildWideSideBypass(
       0.10, 0.0};
   const double max_shift = std::min(wide_side_bypass_max_lateral_step_,
                                     std::fabs(lane_center));
-  for (double shift = max_shift; shift >= 0.15 - 1e-6; shift -= 0.05) {
+  const double minimum_shift = narrow_pullout ? 0.20 : 0.15;
+  for (double shift = max_shift; shift >= minimum_shift - 1e-6; shift -= 0.05) {
     const double lateral_offset = side_sign * shift;
     for (const double forward_step : forward_steps) {
       Vector3d candidate = pos + forward_step * travel + lateral_offset * lateral;
@@ -1170,6 +1194,27 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   // 竖直障碍物把通道切成左右两路时，先直接去占据地图中净宽更大的一侧。
   // 该场景不参与普通frontier总分，也不等待上下绕行接管。
   bool split_obstacle_detected = false;
+  // 先处理“悬空障碍+下方已知短通道”：固定XY下降到0.20m，低位确认通过后再前进。
+  // 这一步必须在水平侧绕之前，避免把本应从下面走的悬空障碍误判成侧绕。
+  const bool suspended_forward_obstacle =
+      hasSuspendedForwardObstacle(pos, recovery_forward);
+  if (suspended_forward_obstacle &&
+      pos.z() > vertical_detour_low_height_ + vertical_detour_height_tolerance_) {
+    Vector3d low_start = pos;
+    low_start.z() = vertical_detour_low_height_;
+    if (isLowProbeCorridorSafe(low_start, recovery_forward,
+                               vertical_detour_forward_check_distance_) &&
+        buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw)) {
+      ROS_WARN("[vertical_detour] suspended obstacle with known-low corridor; "
+               "prioritize centered underpass before horizontal recovery.");
+      return true;
+    }
+    ROS_WARN_THROTTLE(
+        0.5,
+        "[vertical_detour] suspended obstacle seen but low corridor is not confirmed; "
+        "keep horizontal/updated-map fallback.");
+  }
+
   if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
                           split_obstacle_detected))
     return true;

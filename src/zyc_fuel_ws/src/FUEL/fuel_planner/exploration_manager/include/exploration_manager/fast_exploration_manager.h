@@ -270,6 +270,8 @@ private:
   bool occupiedNearHeight(const Vector3d& point, double height) const;
   bool hasCurrentHeightForwardObstacle(const Vector3d& pos,
                                        const Vector3d& forward) const;
+  bool hasSuspendedForwardObstacle(const Vector3d& pos,
+                                   const Vector3d& forward) const;
   bool hasLowVerticalSupport(const Vector3d& point,
                              double current_height) const;
   bool planInflationHistoryEscape(const Vector3d& pos, const Vector3d& vel,
