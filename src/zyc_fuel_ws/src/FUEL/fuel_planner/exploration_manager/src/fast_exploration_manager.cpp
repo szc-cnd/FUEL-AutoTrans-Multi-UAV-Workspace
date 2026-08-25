@@ -1211,6 +1211,11 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   const Vector3d recovery_forward = task_search_manager_
                                         ? task_search_manager_->recoveryForwardDirection(cur_yaw)
                                         : Vector3d(std::cos(cur_yaw), std::sin(cur_yaw), 0.0);
+  // 累计地图已经显示下方短通道可通行时，先固定 XY/yaw 降到探测高度；
+  // 到低位后仍由现有确认阶段复查前方，确认安全才放行，不能直接穿越。
+  if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
+                                  true))
+    return true;
   // 竖直障碍物把通道切成左右两路时，先直接去占据地图中净宽更大的一侧。
   // 该场景不参与普通frontier总分，也不等待上下绕行接管。
   bool split_obstacle_detected = false;
@@ -1484,11 +1489,7 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
         "skip vertical detour and retry from the updated map.");
     return false;
   }
-  // 没有水平分流证据、也没有任何安全侧向候选时，才把已确认的低位
-  // 通道交给原来的上下绕行逻辑。
-  if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
-                                  true))
-    return true;
+  // 未被累计地图预先确认的上下绕行仍保持最后尝试，避免盲目下降抢占水平恢复。
   if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw))
     return true;
 
