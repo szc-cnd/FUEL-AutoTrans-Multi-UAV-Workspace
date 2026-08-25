@@ -115,7 +115,7 @@
         <param name="use_diff_planner" value="true"/>
         <!-- 前机每段实际停稳终点按FIFO缓存；后机一次只把队首原坐标交给Diff，
              到达后删除。失败只重试同一点，不生成候选、裁短或退让目标。 -->
-        <param name="simple_segment_endpoint_following" value="true"/>
+        <param name="simple_segment_endpoint_following" value="false"/>
         <param name="simple_diff_retry_delay" value="0.20"/>
         <param name="diff_goal_topic" value="/UAV1/planning/goal"/>
         <!-- 2026-07-28: 仅在3秒内连规划状态都未收到时重发，禁止飞行中1Hz覆盖Diff轨迹。 -->
@@ -170,13 +170,13 @@
         <param name="leader_task_status_topic" value="/UAV0/mission/task_status"/>
         <!-- 后机在入门目标释放后独立开启LDOP。 -->
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
-        <param name="follow_distance" value="0.70"/>
+        <param name="follow_distance" value="1.00"/>
         <param name="release_path_length" value="0.70"/>
         <!-- Diff持续间距保护：0.70m内刹停；前机继续后退压到0.50m内时，UAV1主动后退。 -->
         <param name="enable_diff_separation_safety" value="true"/>
-        <param name="min_separation" value="0.70"/>
+        <param name="min_separation" value="1.00"/>
         <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到0.70m后，才向UAV1释放普通航点。 -->
-        <param name="waypoint_release_min_separation" value="0.70"/>
+        <param name="waypoint_release_min_separation" value="1.00"/>
         <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
         <param name="fixed_follow_height" value="0.60"/>
         <param name="follow_height_min" value="0.60"/>
