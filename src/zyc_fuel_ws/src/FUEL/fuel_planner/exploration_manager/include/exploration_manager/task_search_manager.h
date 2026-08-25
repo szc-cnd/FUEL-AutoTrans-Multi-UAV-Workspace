@@ -43,6 +43,10 @@ public:
   // 已建立分段后，机头偏离实际通道轴线时只校正yaw，不重复建立分段或禁回门。
   bool corridorYawCorrectionDirection(double cur_yaw,
                                       Eigen::Vector3d& direction) const;
+  // 通道尚未完成转弯锁存时，若累计地图确认的延伸方向与本次轨迹方向一致，
+  // 允许机头跟随轨迹，避免沿新通道平移数米仍保持入口航向。
+  bool corridorMotionDirectionMatches(const Eigen::Vector2d& motion,
+                                      Eigen::Vector3d& corridor_direction) const;
   bool turnYawAlignmentPending() const { return turn_yaw_follow_latch_.active(); }
   void completeTurnYawAlignment() { turn_yaw_follow_latch_.clear(); }
   bool isRecoveryDirectionBackward(const Eigen::Vector3d& direction,

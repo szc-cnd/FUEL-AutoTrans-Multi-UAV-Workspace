@@ -735,6 +735,40 @@ bool TaskSearchManager::corridorYawCorrectionDirection(
   return true;
 }
 
+bool TaskSearchManager::corridorMotionDirectionMatches(
+    const Eigen::Vector2d& motion, Eigen::Vector3d& corridor_direction) const {
+  if (motion.norm() < 1e-3 || !corridor_frame_received_) return false;
+  const Eigen::Vector2d observed = motion.normalized();
+  const double tolerance =
+      std::max(3.0, std::min(30.0, recovery_turn_yaw_release_angle_deg_)) *
+      M_PI / 180.0;
+  const auto aligned = [&](const Eigen::Vector2d& direction) {
+    return direction.norm() > 1e-3 &&
+           std::acos(std::max(-1.0, std::min(1.0,
+                                               direction.normalized().dot(observed)))) <=
+               tolerance;
+  };
+
+  const Eigen::Vector2d stable = stableProgressDirection();
+  if (aligned(stable)) {
+    corridor_direction = Eigen::Vector3d(stable.x(), stable.y(), 0.0);
+    return true;
+  }
+
+  // stableProgressDirection 仍指向旧段时，复用累计地图的无副作用拐弯探测；
+  // 只有确认旧轴终止且新分支延伸方向与轨迹一致，才开放 yaw 跟随。
+  Eigen::Vector3d mapped_direction;
+  double forward_free_length = 0.0;
+  double turn_free_length = 0.0;
+  if (!inferOccupancyTurnDirection(
+          Eigen::Vector3d(stable.x(), stable.y(), 0.0), mapped_direction,
+          forward_free_length, turn_free_length) ||
+      !aligned(mapped_direction.head<2>()))
+    return false;
+  corridor_direction = mapped_direction;
+  return true;
+}
+
 // 2026-07-23: 机体系点云仅按仰角保留近水平射线，再用最新XY/yaw放入1.5秒局部平面；
 // 不使用点的世界z，因此FAST-LIO高度整体上飘不会把真实墙体移出检测层。
 void TaskSearchManager::bodyCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {

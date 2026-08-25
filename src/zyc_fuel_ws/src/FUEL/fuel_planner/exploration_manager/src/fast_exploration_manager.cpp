@@ -2939,6 +2939,12 @@ int FastExplorationManager::planExploreMotion(
   const bool corridor_yaw_correction =
       !mapped_turn_detected && corridor_yaw_lock_scope && task_search_manager_ &&
       task_search_manager_->corridorYawCorrectionDirection(yaw[0], mapped_direction);
+  Eigen::Vector3d motion_corridor_direction;
+  const bool corridor_motion_yaw_exempt =
+      !mapped_turn_detected && !corridor_yaw_correction && corridor_yaw_lock_scope &&
+      task_search_manager_ && motion_delta.norm() > 0.15 &&
+      task_search_manager_->corridorMotionDirectionMatches(
+          motion_delta.head<2>(), motion_corridor_direction);
   if (mapped_turn_detected || corridor_yaw_correction) {
     // 地图墙体轮廓独立于本次轨迹方向触发：yaw只朝向双墙确认的新通道轴线，
     // 不能跟随局部A*绕柱切线，否则一次普通侧绕也会带着机头误转。
@@ -2961,6 +2967,20 @@ int FastExplorationManager::planExploreMotion(
       // 转弯已经锁存但仍在刹停/静止确认时，禁止回落到刚生成的普通平移轨迹。
       return FAIL;
     }
+  } else if (corridor_motion_yaw_exempt) {
+    // 地图确认的通道延伸方向与本次轨迹一致：允许沿轨迹微调机头，
+    // 但不提交新的转弯段，也不触发原地转向。
+    next_yaw = std::atan2(motion_delta.y(), motion_delta.x());
+    look_forward_along_trajectory = false;
+    camera_head_sweep_active = false;
+    camera_continuous_rotation_active = false;
+    ROS_INFO_THROTTLE(
+        0.5,
+        "[corridor_yaw_lock] allow trajectory yaw=%.1fdeg; channel extension "
+        "matches motion (map_dir=%.1fdeg).",
+        next_yaw * 180.0 / M_PI,
+        std::atan2(motion_corridor_direction.y(), motion_corridor_direction.x()) *
+            180.0 / M_PI);
   } else if (task_search::holdYawInCorridor(
                  corridor_yaw_lock_scope, mapped_turn_detected)) {
     // 通道内除累计地图确认的真实拐弯外，任何位置运动都不能改变机头方向。
