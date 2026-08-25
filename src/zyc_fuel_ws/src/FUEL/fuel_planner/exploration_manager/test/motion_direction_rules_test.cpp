@@ -31,6 +31,31 @@ int main() {
       Eigen::Vector2d(0.0, 1.0), Eigen::Vector2d(1.0, 0.0)));
   assert(!fast_planner::task_search::insideForwardHalfPlane(
       Eigen::Vector2d(-0.01, 1.0), Eigen::Vector2d(1.0, 0.0)));
+
+  // 单个或零散FREE栅格不能证明能穿过障碍；必须存在完整自由窗口组成的连续旁路。
+  std::array<std::array<bool, 3>, 3> isolated_free{};
+  isolated_free[1][0] = true;
+  assert(!fast_planner::task_search::hasNineGridObstacleBypass(isolated_free));
+
+  // 正左侧三个足迹窗口连通，属于可由A*处理的半幅局部障碍。
+  std::array<std::array<bool, 3>, 3> left_bypass{};
+  left_bypass[0][0] = true;
+  left_bypass[1][0] = true;
+  left_bypass[2][0] = true;
+  assert(fast_planner::task_search::hasNineGridObstacleBypass(left_bypass));
+
+  // 左上/右下等斜向窗口同样属于九宫格旁路，不能被正左右射线遗漏。
+  std::array<std::array<bool, 3>, 3> diagonal_bypass{};
+  diagonal_bypass[0][1] = true;
+  diagonal_bypass[1][0] = true;
+  diagonal_bypass[2][1] = true;
+  assert(fast_planner::task_search::hasNineGridObstacleBypass(diagonal_bypass));
+
+  // 障碍前后虽然各有空间，但障碍所在一排没有足迹窗口，仍然不可穿过。
+  std::array<std::array<bool, 3>, 3> blocked_plane{};
+  blocked_plane[0][1] = true;
+  blocked_plane[2][1] = true;
+  assert(!fast_planner::task_search::hasNineGridObstacleBypass(blocked_plane));
   // A* 搜索阶段允许纯横移和向前斜移，但不能先向旧通道退一步再绕障。
   assert(fast_planner::directional_progress::isAllowed(
       Eigen::Vector3d(3.2, 0.3, 0.5), Eigen::Vector3d(3.2, 1.1, 0.5),

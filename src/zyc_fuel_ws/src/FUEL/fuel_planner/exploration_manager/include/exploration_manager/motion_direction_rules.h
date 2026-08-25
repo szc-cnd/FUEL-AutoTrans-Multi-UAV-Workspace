@@ -2,6 +2,7 @@
 
 #include <Eigen/Eigen>
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace fast_planner {
@@ -86,6 +87,40 @@ inline bool insideForwardHalfPlane(const Eigen::Vector2d& direction,
                                    const Eigen::Vector2d& mission_inside_direction) {
   if (direction.norm() < 1e-6 || mission_inside_direction.norm() < 1e-6) return true;
   return direction.normalized().dot(mission_inside_direction.normalized()) >= -1e-6;
+}
+
+// 障碍物所在水平面按九宫格检查。每格表示能完整容纳无人机水平足迹的自由窗口；
+// 只有历史自由窗口能从障碍前一排经八邻域连到障碍后一排，才说明确实存在穿过
+// 该障碍段的局部旁路。八邻域允许左上、右下等斜向绕行，不局限于正左/正右。
+inline bool hasNineGridObstacleBypass(
+    const std::array<std::array<bool, 3>, 3>& free_windows) {
+  std::array<std::array<bool, 3>, 3> reachable{};
+  for (int lateral = 0; lateral < 3; ++lateral)
+    reachable[0][lateral] = free_windows[0][lateral];
+
+  for (int iteration = 0; iteration < 9; ++iteration) {
+    auto next = reachable;
+    for (int forward = 0; forward < 3; ++forward) {
+      for (int lateral = 0; lateral < 3; ++lateral) {
+        if (!free_windows[forward][lateral] || reachable[forward][lateral])
+          continue;
+        for (int df = -1; df <= 1; ++df) {
+          for (int dl = -1; dl <= 1; ++dl) {
+            if (df == 0 && dl == 0) continue;
+            const int neighbor_forward = forward + df;
+            const int neighbor_lateral = lateral + dl;
+            if (neighbor_forward < 0 || neighbor_forward >= 3 ||
+                neighbor_lateral < 0 || neighbor_lateral >= 3)
+              continue;
+            if (reachable[neighbor_forward][neighbor_lateral])
+              next[forward][lateral] = true;
+          }
+        }
+      }
+    }
+    reachable = next;
+  }
+  return reachable[2][0] || reachable[2][1] || reachable[2][2];
 }
 
 inline bool passesLatestTurnNoReturn(const Eigen::Vector2d& candidate,

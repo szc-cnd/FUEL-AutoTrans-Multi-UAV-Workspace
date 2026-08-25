@@ -1272,26 +1272,6 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   const double probe_step = std::max(0.05, recovery_turn_probe_step_);
   const double min_angle = recovery_turn_min_angle_deg_ * M_PI / 180.0;
 
-  // 本轮已经选出的安全目标仍沿旧通道前进或斜前绕障时，局部占据只能交给A*，
-  // 不能再由独立的占据射线把同一片右/左侧通路解释成新通道。真正弯道的目标方向
-  // 会达到现有turn_min_angle_deg，届时才允许下面的转弯识别接管。
-  if (active_goal_valid_) {
-    const Eigen::Vector2d goal_motion =
-        active_goal_.head<2>() - visited_positions_.back().head<2>();
-    if (goal_motion.norm() > 1e-3) {
-      const double alignment = std::max(
-          -1.0, std::min(1.0, goal_motion.normalized().dot(travel)));
-      const double goal_angle = std::acos(alignment);
-      if (goal_angle + 1e-6 < min_angle) {
-        ROS_WARN_THROTTLE(
-            0.5,
-            "[task_search] keep corridor yaw: active safe goal is %.1fdeg from "
-            "the current corridor, so the occupied split remains local avoidance.",
-            goal_angle * 180.0 / M_PI);
-        return false;
-      }
-    }
-  }
   auto knownFreeLength = [&](const Eigen::Vector3d& ray_origin,
                              const Eigen::Vector2d& direction) {
     double free_length = 0.0;
@@ -1318,28 +1298,74 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
-  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。必须查累计
-  // 地图中的整个旧通道横截面：历史上只要任一侧在障碍后仍被扫成FREE，就保持旧
-  // 通道方向并交给A*绕障。只有横截面各侧都没有前向延续，才把它解释成真实拐弯。
+  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。以该障碍
+  // 所在水平面为九宫格中心，在累计占据图中检查完整的0.5m×0.5m足迹窗口。
+  // 只有窗口从障碍前一排经八邻域连到后一排，才说明左、右或斜向确有一台无人机
+  // 能穿过的旁路；单个FREE栅格和转角侧面的零碎空间都不能再否决真实转弯。
   const Eigen::Vector2d lateral(-travel.y(), travel.x());
-  constexpr double kForwardCorridorHalfWidth = 0.60;
-  for (double distance = forward_free_length + 2.0 * probe_step;
-       distance <= recovery_turn_probe_length_ + 1e-6; distance += probe_step) {
-    for (double lateral_offset = -kForwardCorridorHalfWidth;
-         lateral_offset <= kForwardCorridorHalfWidth + 1e-6;
-         lateral_offset += probe_step) {
-      Eigen::Vector3d probe = origin;
-      probe.head<2>() += distance * travel + lateral_offset * lateral;
-      if (sdf_map_->isInMap(probe) &&
-          sdf_map_->getOccupancy(probe) == SDFMap::FREE) {
-        ROS_WARN_THROTTLE(
-            0.5,
-            "[task_search] keep corridor yaw: accumulated map has historical "
-            "forward continuation %.2fm ahead at lateral %.2fm; use A* local avoidance.",
-            distance, lateral_offset);
-        return false;
+  constexpr double kBypassWindowSize = 0.50;
+  const double map_resolution = std::max(0.01, sdf_map_->getResolution());
+  auto knownFreeWindow = [&](const Eigen::Vector3d& center) {
+    const double half = 0.5 * kBypassWindowSize;
+    for (double forward_offset = -half;
+         forward_offset <= half + 1e-6;
+         forward_offset += map_resolution) {
+      for (double lateral_offset = -half;
+           lateral_offset <= half + 1e-6;
+           lateral_offset += map_resolution) {
+        Eigen::Vector3d sample = center;
+        sample.head<2>() +=
+            forward_offset * travel + lateral_offset * lateral;
+        if (!sdf_map_->isInMap(sample) ||
+            sdf_map_->getOccupancy(sample) != SDFMap::FREE)
+          return false;
       }
     }
+    return true;
+  };
+
+  std::array<std::array<bool, 3>, 3> free_windows{};
+  for (int forward_index = 0; forward_index < 3; ++forward_index) {
+    for (int lateral_index = 0; lateral_index < 3; ++lateral_index) {
+      Eigen::Vector3d center = forward_end;
+      center.head<2>() +=
+          (forward_index - 1) * kBypassWindowSize * travel +
+          (lateral_index - 1) * kBypassWindowSize * lateral;
+      free_windows[forward_index][lateral_index] = knownFreeWindow(center);
+    }
+  }
+  const bool has_bypass =
+      task_search::hasNineGridObstacleBypass(free_windows);
+  Eigen::Vector3d robot_pos;
+  {
+    std::lock_guard<std::mutex> lock(body_cloud_mutex_);
+    robot_pos = latest_robot_pos_;
+  }
+  const double goal_x = active_goal_valid_
+                            ? active_goal_.x()
+                            : std::numeric_limits<double>::quiet_NaN();
+  const double goal_y = active_goal_valid_
+                            ? active_goal_.y()
+                            : std::numeric_limits<double>::quiet_NaN();
+  ROS_WARN_THROTTLE(
+      0.5,
+      "[task_search] obstacle-plane audit robot=(%.2f,%.2f) origin=(%.2f,%.2f) "
+      "obstacle=(%.2f,%.2f) active_goal=(%.2f,%.2f) "
+      "grid=[%d%d%d/%d%d%d/%d%d%d] decision=%s.",
+      robot_pos.x(), robot_pos.y(), origin.x(), origin.y(),
+      forward_end.x(), forward_end.y(), goal_x, goal_y,
+        static_cast<int>(free_windows[0][0]),
+        static_cast<int>(free_windows[0][1]),
+        static_cast<int>(free_windows[0][2]),
+        static_cast<int>(free_windows[1][0]),
+        static_cast<int>(free_windows[1][1]),
+        static_cast<int>(free_windows[1][2]),
+      static_cast<int>(free_windows[2][0]),
+      static_cast<int>(free_windows[2][1]),
+      static_cast<int>(free_windows[2][2]),
+      has_bypass ? "LOCAL_BYPASS" : "TEST_MAPPED_TURN");
+  if (has_bypass) {
+    return false;
   }
 
   // 不从无人机当前位置横向打射线，而把虚拟观察点提前放到前方墙前。这样地图刚形成明显
