@@ -1914,25 +1914,20 @@ class LeaderSafePathFollower {
         std::hypot(desired_local.x - current_local.x,
                    desired_local.y - current_local.y);
     const double vertical_error = std::fabs(desired_local.z - current_local.z);
-    const bool strict_arrival = horizontal_error <= relay_arrive_radius_ &&
+    // 普通FIFO航点与run_swarm的逐点切换一致：进入到达邻域即可消费，
+    // 不要求悬停到零速或精确压中坐标。最终降落点仍保留严格停稳判定。
+    const bool waypoint_arrival = !terminal_relay &&
+        horizontal_error <= relay_arrive_radius_ &&
+        vertical_error <= relay_arrive_z_tolerance_;
+    const bool terminal_arrival = terminal_relay &&
+        horizontal_error <= relay_arrive_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_ &&
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
-    const bool endpoint_capture = !terminal_relay &&
-        horizontal_error <= diff_endpoint_capture_radius_ &&
-        vertical_error <= relay_arrive_z_tolerance_;
-    if (endpoint_capture && diff_endpoint_capture_stamp_.isZero()) {
-      diff_endpoint_capture_stamp_ = now;
-      setDiffWaitPositionHold(true, "captured FIFO endpoint");
-    }
-    if (!endpoint_capture) diff_endpoint_capture_stamp_ = ros::Time(0);
-    const bool capture_complete = endpoint_capture &&
-        (now - diff_endpoint_capture_stamp_).toSec() >= diff_endpoint_capture_dwell_;
-    if (strict_arrival || capture_complete) {
-      if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
-      const double dwell = capture_complete ? 0.0 : relay_arrive_dwell_;
-      if ((now - relay_arrival_stamp_).toSec() < dwell) return true;
+    if (waypoint_arrival || terminal_arrival) {
       if (terminal_relay) {
+        if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
+        if ((now - relay_arrival_stamp_).toSec() < relay_arrive_dwell_) return true;
         if (!follower_landing_requested_) {
           std_msgs::Bool request;
           request.data = true;
@@ -1956,7 +1951,6 @@ class LeaderSafePathFollower {
       setDiffWaitPositionHold(true, "FIFO endpoint arrived");
       consumeSimpleRelayFront();
       relay_arrival_stamp_ = ros::Time(0);
-      diff_endpoint_capture_stamp_ = ros::Time(0);
       diff_goal_published_ = false;
       diff_plan_response_received_ = false;
       diff_accepted_goal_valid_ = false;

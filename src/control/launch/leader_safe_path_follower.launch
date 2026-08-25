@@ -213,6 +213,7 @@
         <param name="door_release_inside_distance" value="0.70"/>
         <param name="relay_release_distance" value="0.70"/>
         <param name="relay_waypoint_spacing" value="2.50"/>
+        <!-- 动态run_swarm语义：普通FIFO点进入25cm邻域就切换下一个，不要求零误差或停稳。 -->
         <param name="relay_arrive_radius" value="0.25"/>
         <param name="relay_arrive_z_tolerance" value="0.20"/>
         <!-- 较大圆柱净空仅用于最终降落点；普通接力点只检查精确落点小体素。 -->
@@ -242,7 +243,7 @@
         <param name="diff_accepted_goal_tolerance" value="0.20"/>
         <!-- 2026-07-28: PositionCommand停止0.8s且尚未到点时重发当前Diff目标。 -->
         <param name="diff_command_stale_timeout" value="0.80"/>
-        <!-- 2026-07-16: 0表示不限制内部接力点数量，避免长赛道在固定5点耗尽后永久等待。 -->
+        <!-- 0表示不限制动态FIFO数量；前机可持续追加成百上千个停稳终点，直到出口入队。 -->
         <param name="max_internal_relay_points" value="0"/>
         <!-- 2026-07-16: 仿真Mid360点云稀疏，8点门限会漏掉真实墙面；恢复3点并扩大到0.28m包络。 -->
         <param name="obstacle_check_enabled" value="true"/>

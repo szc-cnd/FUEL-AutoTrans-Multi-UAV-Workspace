@@ -188,6 +188,22 @@ def test_simple_mode_gives_diff_only_the_fifo_front_and_consumes_on_arrival():
     assert "blacklistRouteCandidate" not in execution
     assert "consumeSimpleRelayFront();" in execution
     assert "relay_waypoints_.erase" in consume
+    assert "const bool waypoint_arrival = !terminal_relay" in execution
+    ordinary_arrival = execution.split(
+        "const bool waypoint_arrival", maxsplit=1
+    )[1].split("const bool terminal_arrival", maxsplit=1)[0]
+    assert "horizontal_error <= relay_arrive_radius_" in ordinary_arrival
+    assert "follower_horizontal_speed_" not in ordinary_arrival
+    assert "diff_endpoint_capture_radius_" not in ordinary_arrival
+
+
+def test_simple_mode_has_unbounded_dynamic_waypoint_queue():
+    assert 'name="max_internal_relay_points" value="0"' in LAUNCH
+    endpoint_confirmation = SOURCE.split(
+        "void confirmPendingLeaderSegmentEndpoint", maxsplit=1
+    )[1].split("void leaderOdomCallback", maxsplit=1)[0]
+    assert 'appendRelayWaypoint(confirmed, "SEGMENT_ENDPOINT")' in endpoint_confirmation
+    assert "max_internal_relay_points_" not in endpoint_confirmation
 
 
 def test_simple_mode_retries_same_endpoint_without_wrapper_recovery():
