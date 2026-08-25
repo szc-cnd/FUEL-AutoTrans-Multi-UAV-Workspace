@@ -228,9 +228,12 @@ void FastExplorationManager::preselectInitialFrontier(const Vector3d& pos, doubl
 
     const Vector3d relative = ed_->points_[i] - mission_workspace_origin_;
     const double progress = relative.dot(mission_workspace_dir_);
+    if (!task_search::initialEntryProgressAllowed(
+            progress, initial_entry_target_distance_))
+      continue;
     const double side_offset = std::fabs(relative.dot(lateral));
     const double clearance = std::max(0.0, sdf_map_->getDistance(ed_->points_[i]));
-    // 1.5m 是首点软偏好而非硬门槛；同等深度下优先通道中心和更空旷的观察位。
+    // 入口首点必须位于门后限定范围内；范围内仍优先更深、居中且空旷的观察位。
     const double score = std::fabs(progress - initial_entry_target_distance_) +
                          0.5 * side_offset - std::min(0.60, clearance);
     if (score < best_score) {
@@ -2085,6 +2088,7 @@ void FastExplorationManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/door_back_margin", ep_->mission_door_back_margin_, 0.25);
   nh.param("mission/task_search/initial_entry_target_distance",
            initial_entry_target_distance_, 1.50);
+  initial_entry_target_distance_ = std::max(0.0, initial_entry_target_distance_);
   nh.param("mission/forward_progress_weight", ep_->mission_forward_progress_weight_, 1.8);
   nh.param("mission/forward_min_gain", ep_->mission_forward_min_gain_, 0.25);
   nh.param("mission/forward_fallback_step", ep_->mission_forward_fallback_step_, 0.45);

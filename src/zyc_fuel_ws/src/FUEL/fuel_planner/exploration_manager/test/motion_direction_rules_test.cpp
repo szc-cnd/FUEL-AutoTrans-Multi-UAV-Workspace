@@ -25,6 +25,15 @@ int main() {
                        1.0, 5.0, 5.0) + 5.0) < 1e-9);
   assert(std::fabs(fast_planner::task_search::viewpointDirectionScoreAdjustment(
                        -1.0, 5.0, 5.0) - 5.0) < 1e-9);
+  // 常规frontier按当前位置限制水平距离，高度差不应侵占通道内的距离预算。
+  assert(fast_planner::task_search::candidateWithinHorizontalRange(
+      Eigen::Vector3d(0.0, 0.0, 0.6), Eigen::Vector3d(1.2, 0.0, 1.9), 1.2));
+  assert(!fast_planner::task_search::candidateWithinHorizontalRange(
+      Eigen::Vector3d(0.0, 0.0, 0.6), Eigen::Vector3d(1.201, 0.0, 0.6), 1.2));
+  // 1.5m只限定门后首点：门前或超过门后范围的点都不能进入预选。
+  assert(fast_planner::task_search::initialEntryProgressAllowed(1.5, 1.5));
+  assert(!fast_planner::task_search::initialEntryProgressAllowed(1.501, 1.5));
+  assert(!fast_planner::task_search::initialEntryProgressAllowed(-0.001, 1.5));
   assert(fast_planner::task_search::insideForwardHalfPlane(
       Eigen::Vector2d(1.0, 0.0), Eigen::Vector2d(1.0, 0.0)));
   assert(fast_planner::task_search::insideForwardHalfPlane(

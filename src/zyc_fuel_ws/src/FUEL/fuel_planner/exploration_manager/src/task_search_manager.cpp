@@ -29,6 +29,8 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/visit_spacing", visit_spacing_, 0.35);
   nh.param("mission/task_search/revisit_radius", revisit_radius_, 0.65);
   nh.param("mission/task_search/repeat_goal_radius", repeat_goal_radius_, 0.45);
+  nh.param("mission/task_search/max_candidate_distance", max_candidate_distance_, 1.20);
+  max_candidate_distance_ = std::max(0.10, max_candidate_distance_);
   nh.param("mission/task_search/max_goal_repeats", max_goal_repeats_, 2);
   nh.param("mission/task_search/max_history_size", max_history_size_, 120);
   nh.param("mission/task_search/cruise_height", cruise_height_, 0.75);
@@ -1052,6 +1054,7 @@ int TaskSearchManager::selectSearchCandidate(
   int best_non_backward_idx = -1;
   int rejected_revisit = 0;
   int rejected_failed = 0;
+  int rejected_distance = 0;
   int rejected_door_return = 0;
   int rejected_exit_regression = 0;
   double best_score = std::numeric_limits<double>::infinity();
@@ -1087,6 +1090,8 @@ int TaskSearchManager::selectSearchCandidate(
               .dot(exit_outward_direction_.normalized()) >= -0.05;
   if (active_goal_valid_ && !active_goal_is_backward && !active_goal_is_exit_regression &&
       !active_goal_crosses_locked_exit &&
+      task_search::candidateWithinHorizontalRange(
+          cur_pos, active_goal_, max_candidate_distance_) &&
       (ros::Time::now() - active_goal_stamp_).toSec() < min_goal_hold_time_ &&
       (cur_pos.head<2>() - active_goal_.head<2>()).norm() > 0.35 &&
       !goalTemporarilyBlocked(active_goal_)) {
@@ -1108,6 +1113,11 @@ int TaskSearchManager::selectSearchCandidate(
 
   for (size_t i = 0; i < points.size(); ++i) {
     const Eigen::Vector3d& point = points[i];
+    if (!task_search::candidateWithinHorizontalRange(
+            cur_pos, point, max_candidate_distance_)) {
+      ++rejected_distance;
+      continue;
+    }
     if (goalTemporarilyBlocked(point)) {
       ++rejected_failed;
       continue;
@@ -1241,11 +1251,13 @@ int TaskSearchManager::selectSearchCandidate(
   }
 
   ROS_WARN("[task_search] candidates=%zu selected=%d rejected_revisit=%d rejected_failed=%d "
+           "rejected_distance=%d max_distance=%.2f "
            "rejected_door=%d rejected_exit_regression=%d exit_guard=%d "
            "current_exit_distance=%.2f entry_forward=%d forward_candidate=%d score=%.2f "
            "clearance=%.2f reward=%.2f.",
-           points.size(), best_idx, rejected_revisit, rejected_failed, rejected_door_return,
-           rejected_exit_regression, static_cast<int>(final_exit_guard),
+           points.size(), best_idx, rejected_revisit, rejected_failed, rejected_distance,
+           max_candidate_distance_, rejected_door_return, rejected_exit_regression,
+           static_cast<int>(final_exit_guard),
            current_distance_to_exit, static_cast<int>(entry_forward_phase),
            best_non_backward_idx, best_score, best_clearance,
            best_clearance_reward);

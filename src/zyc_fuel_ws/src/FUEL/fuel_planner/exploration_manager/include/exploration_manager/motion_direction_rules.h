@@ -83,6 +83,17 @@ inline double viewpointDirectionScoreAdjustment(double forward_alignment,
          backward_penalty * std::max(0.0, -forward_alignment);
 }
 
+inline bool candidateWithinHorizontalRange(const Eigen::Vector3d& current,
+                                           const Eigen::Vector3d& candidate,
+                                           double max_distance) {
+  return (candidate - current).head<2>().norm() <=
+         std::max(0.0, max_distance) + 1e-9;
+}
+
+inline bool initialEntryProgressAllowed(double progress, double max_progress) {
+  return progress >= -1e-9 && progress <= std::max(0.0, max_progress) + 1e-9;
+}
+
 inline bool insideForwardHalfPlane(const Eigen::Vector2d& direction,
                                    const Eigen::Vector2d& mission_inside_direction) {
   if (direction.norm() < 1e-6 || mission_inside_direction.norm() < 1e-6) return true;
