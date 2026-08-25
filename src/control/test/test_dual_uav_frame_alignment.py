@@ -74,7 +74,7 @@ def test_leader_height_does_not_filter_follower_xy_targets():
     assert "useFollowerCruiseHeight(worldToFollower(candidate.position))" in selection
 
 
-def test_relay_waypoints_release_after_one_meter_clearance():
+def test_relay_waypoints_release_after_xy_clearance():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -84,9 +84,9 @@ def test_relay_waypoints_release_after_one_meter_clearance():
         item.attrib["name"]: item.attrib["value"]
         for item in follower.findall("param")
     }
-    assert params["follow_distance"] == "1.00"
+    assert params["follow_distance"] == "1.50"
     assert params["release_path_length"] == "0.70"
-    assert params["waypoint_release_min_separation"] == "1.00"
+    assert params["waypoint_release_min_separation"] == "1.50"
     assert params["door_release_inside_distance"] == "0.70"
     assert params["relay_release_distance"] == "0.70"
 
@@ -98,6 +98,9 @@ def test_relay_waypoints_release_after_one_meter_clearance():
     assert "have_follower_odom_" in gate
     assert "followerToWorld" in gate
     assert "waypoint_release_min_separation_" in gate
+    assert "std::hypot(leader_world.x - follower_world.x" in gate
+    assert "leader_world.z" not in gate
+    assert "follower_world.z" not in gate
     assert 'relayWaypointSeparationReady("DOOR")' in source
     assert 'relayWaypointSeparationReady("INTERNAL")' in source
     assert 'relayWaypointSeparationReady("EXIT")' in source
@@ -114,11 +117,18 @@ def test_diff_execution_continuously_holds_and_retreats_for_uav_spacing():
         for item in follower.findall("param")
     }
     assert params["enable_diff_separation_safety"] == "true"
-    assert params["min_separation"] == "1.00"
-    assert params["separation_recovery_distance"] == "0.90"
-    assert params["separation_release_distance"] == "1.20"
+    assert params["min_separation"] == "1.50"
+    assert params["separation_recovery_distance"] == "1.30"
+    assert params["separation_release_distance"] == "1.60"
 
     source = FOLLOWER.read_text(encoding="utf-8")
+    fifo_spacing = source.split(
+        "// 只按XY水平间距锁点", 1
+    )[1].split("const double horizontal_error", 1)[0]
+    assert "std::hypot(leader_world.x - follower_world.x" in fifo_spacing
+    assert "leader_world.z" not in fifo_spacing
+    assert "follower_world.z" not in fifo_spacing
+
     safety = source.split("bool handleDiffSeparationSafety", 1)[1].split(
         "bool handleDiffPlannerExecution", 1
     )[0]

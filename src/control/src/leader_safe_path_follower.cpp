@@ -212,12 +212,12 @@ class LeaderSafePathFollower {
     follower_alignment_cos_ = std::cos(follower_alignment_yaw_);
     follower_alignment_sin_ = std::sin(follower_alignment_yaw_);
     // 双机普通接力只共享XY路线；后机名义高度与两机起飞悬停高度统一为0.60m。
-    pnh_.param("follow_distance", follow_distance_, 0.70);
+    pnh_.param("follow_distance", follow_distance_, 1.50);
     pnh_.param("release_path_length", release_path_length_, 0.70);
-    pnh_.param("min_separation", min_separation_, 0.70);
-    // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证0.7m净距。
+    pnh_.param("min_separation", min_separation_, 1.50);
+    // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证水平净距。
     pnh_.param("waypoint_release_min_separation",
-               waypoint_release_min_separation_, 0.70);
+               waypoint_release_min_separation_, 1.50);
     pnh_.param("fixed_follow_height", fixed_follow_height_, 0.60);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
@@ -227,7 +227,7 @@ class LeaderSafePathFollower {
                down_search_min_vertical_separation_, 1.00);
     pnh_.param("continuous_follow_before_exit", continuous_follow_before_exit_, true);
     pnh_.param("continuous_follow_speed", continuous_follow_speed_, 0.42);
-    // Diff离散轨迹仍需持续检查双机水平间距：0.70m内先锁点，0.50m内主动退让。
+    // Diff离散轨迹仍需持续检查双机水平间距；该距离只计算XY，不计入高度差。
     pnh_.param("enable_diff_separation_safety", enable_diff_separation_safety_, true);
     pnh_.param<std::string>("leader_task_status_topic", leader_task_status_topic_,
                             "/mission/task_status");
@@ -236,8 +236,8 @@ class LeaderSafePathFollower {
                             follower_detection_enable_topic_,
                             "/UAV1/corridor_search/dynamic_detection_enable");
     // 前机反向时：先在min_separation锁点，继续压缩到recovery阈值后退让，恢复到release阈值再重规划。
-    pnh_.param("separation_recovery_distance", separation_recovery_distance_, 0.50);
-    pnh_.param("separation_release_distance", separation_release_distance_, 0.70);
+    pnh_.param("separation_recovery_distance", separation_recovery_distance_, 1.30);
+    pnh_.param("separation_release_distance", separation_release_distance_, 1.60);
     pnh_.param("emergency_retreat_step", emergency_retreat_step_, 0.35);
     pnh_.param("emergency_retreat_speed", emergency_retreat_speed_, 0.30);
     if (!std::isfinite(min_separation_) || !std::isfinite(separation_recovery_distance_) ||
@@ -1881,7 +1881,7 @@ class LeaderSafePathFollower {
         : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
-    // 只保留最基本的双机间距锁点，不发布任何退让坐标。前机重新拉开后仍重试同一队首。
+    // 只按XY水平间距锁点，不发布任何退让坐标；前机重新拉开后仍重试同一队首。
     if (!terminal_relay && enable_diff_separation_safety_ && leaderOdomFresh(now)) {
       const geometry_msgs::Point leader_world =
           leaderToWorld(leader_odom_.pose.pose.position);
@@ -4032,14 +4032,14 @@ class LeaderSafePathFollower {
   double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
   double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.3}, follower_start_height_{0.3};
-  // 默认0.70m路径间隔、0.70m航点发布门槛和持续警戒间隔；0.50m内主动退让。
-  double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.70};
-  double waypoint_release_min_separation_{0.70};
+  // 默认0.70m缓存路径间隔；双机XY间距1.50m内锁点，1.30m内触发退让。
+  double follow_distance_{1.50}, release_path_length_{0.70}, min_separation_{1.50};
+  double waypoint_release_min_separation_{1.50};
   double fixed_follow_height_{0.60}, follow_height_min_{0.60}, follow_height_max_{0.70};
   double down_search_release_height_{1.80};
   double down_search_min_vertical_separation_{1.00};
   double continuous_follow_speed_{0.42};
-  double separation_recovery_distance_{0.50}, separation_release_distance_{0.70};
+  double separation_recovery_distance_{1.30}, separation_release_distance_{1.60};
   double emergency_retreat_step_{0.35}, emergency_retreat_speed_{0.30};
   // 2026-07-16: 无launch覆盖时也保持后机在前机终点路线后方约0.5m的独立落点。
   double terminal_landing_spacing_{0.50}, terminal_approach_height_{0.60};
