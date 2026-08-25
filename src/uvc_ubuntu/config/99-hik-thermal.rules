@@ -1,0 +1,2 @@
+# Allow members of plugdev to open the HIK thermal camera through libusb.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bdf", ATTR{idProduct}=="0102", MODE="0660", GROUP="plugdev", TAG+="uaccess"

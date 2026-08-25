@@ -423,7 +423,7 @@ def test_uav1_compatibility_script_opens_seven_panes_with_detection_before_plann
 def test_uav1_detection_stack_uses_isolated_topics_and_only_observes_front_aruco():
     root = ET.parse(UAV1_DETECTION_LAUNCH).getroot()
     args = {item.attrib["name"]: item.attrib["default"] for item in root.findall("arg")}
-    assert args["enable_thermal"] == "false"
+    assert args["enable_thermal"] == "true"
     assert args["odom_topic"] == "/UAV1/fast_lio/Odom_high_freq"
     assert args["world_frame"] == "UAV1/camera_init"
     assert args["camera_namespace"] == "UAV1/camera"

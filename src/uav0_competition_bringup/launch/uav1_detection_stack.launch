@@ -8,7 +8,7 @@
   <arg name="enable_color_tag" default="true" />
   <arg name="enable_qr" default="true" />
   <arg name="enable_front_aruco" default="true" />
-  <arg name="enable_thermal" default="false" />
+  <arg name="enable_thermal" default="true" />
   <arg name="enable_thermal_d435_fusion" default="true" />
   <arg name="enable_target_reporting" default="true" />
   <arg name="target_reporting_mission_id" default="" />
@@ -111,7 +111,7 @@
     <param name="mission/require_stage_gate" value="false" />
   </node>
 
-  <!-- 当前 UAV1 未连接热成像设备；仅在七分屏入口显式开启 thermal 选项时启动。 -->
+  <!-- UAV1 默认启动热成像检测；无设备的维护场景可由入口显式关闭。 -->
   <node if="$(arg enable_thermal)" pkg="uvc_ubuntu"
         type="thermal_ros_node.py" name="uav1_thermal_detector" output="screen">
     <rosparam command="load" file="$(find uvc_ubuntu)/config/thermal_detector.yaml" />

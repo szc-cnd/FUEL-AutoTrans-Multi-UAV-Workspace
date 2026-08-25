@@ -23,7 +23,7 @@ TERMINATOR_PID_FILE="${UAV1_SIX_TERMINATOR_PID_FILE:-/tmp/uav1_six_terminator_${
 START_LOCK_FILE="${UAV1_SIX_START_LOCK_FILE:-/tmp/uav1_six_start.lock}"
 RUNTIME_CONFIG="${UAV1_SIX_RUNTIME_CONFIG:-/tmp/uav1_six_terminator_${RUN_ID}.conf}"
 WAIT_TIMEOUT="${UAV1_SIX_WAIT_TIMEOUT:-180}"
-THERMAL="${UAV1_SIX_THERMAL:-false}"
+THERMAL="${UAV1_SIX_THERMAL:-true}"
 
 MAVROS_STATE_TOPIC="/UAV1/mavros/state"
 LIDAR_TOPIC="/UAV1/livox/lidar"
@@ -61,13 +61,13 @@ usage() {
   - 不自动解锁、不切换 OFFBOARD、不发送目标点。
   - 第 7 屏的 uav1_diff_autotrans.launch 默认 enable_planner=false，
     因此不会与第 6 屏重复启动 Diff-Planner。
-  - 第 5 屏默认不启动热成像；本机接入热成像设备后可加 --thermal。
+  - 第 5 屏默认启动热成像检测和 D435 融合；未接设备时可加 --no-thermal。
   - 可用环境变量 UAV1_SIX_WAIT_TIMEOUT 修改前级等待超时，默认 180 秒。
   - 可用 UAV1_SIX_VISION_STABILIZE_SECONDS 修改视觉融合等待，默认 4 秒。
 
 选项：
   --thermal                 第 5 屏同时启动热成像检测和 D435 融合
-  --no-thermal              关闭热成像（默认）
+  --no-thermal              关闭热成像
 EOF
 }
 
