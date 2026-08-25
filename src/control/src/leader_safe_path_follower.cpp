@@ -373,15 +373,14 @@ class LeaderSafePathFollower {
     return local;
   }
 
-  // Relay points are recorded in the leader/mission frame.  The follower's
-  // physical target must remain at its frame origin offset from that point
-  // (x=-1.20m in the indoor mission), otherwise it is commanded onto the
-  // leader's exact position and the separation gate has to catch it late.
-  geometry_msgs::Point followerTargetWorld(const geometry_msgs::Point& leader_point) const {
+  // Relay points are recorded in the leader/mission frame.  Keep the follower
+  // one metre behind the leader along the route heading; worldToFollower()
+  // then adds the follower-frame x offset (+1.20m for x=-1.20m alignment).
+  geometry_msgs::Point followerTargetWorld(const geometry_msgs::Point& leader_point,
+                                           double leader_yaw) const {
     geometry_msgs::Point target = leader_point;
-    target.x += follower_alignment_x_;
-    target.y += follower_alignment_y_;
-    target.z += follower_alignment_z_;
+    target.x -= follow_distance_ * std::cos(leader_yaw);
+    target.y -= follow_distance_ * std::sin(leader_yaw);
     return target;
   }
 
@@ -1758,7 +1757,8 @@ class LeaderSafePathFollower {
       hold("continuous leader route unavailable");
       return true;
     }
-    tracking_world.position = followerTargetWorld(tracking_world.position);
+    tracking_world.position =
+        followerTargetWorld(tracking_world.position, tracking_world.yaw);
     geometry_msgs::Point target_local =
         useFollowerCruiseHeight(worldToFollower(tracking_world.position));
     target_local = limitTargetStep(follower_odom_.pose.pose.position, target_local);
@@ -1906,7 +1906,8 @@ class LeaderSafePathFollower {
                                 active_relay_index_ == terminal_waypoint_index_;
     RoutePoint follower_target_world = desired_world;
     if (!terminal_relay) {
-      follower_target_world.position = followerTargetWorld(desired_world.position);
+      follower_target_world.position =
+          followerTargetWorld(desired_world.position, desired_world.yaw);
     }
     const geometry_msgs::Point desired_local =
         terminal_relay ? worldToFollower(follower_target_world.position)
@@ -2158,7 +2159,8 @@ class LeaderSafePathFollower {
                                 active_relay_index_ == terminal_waypoint_index_;
     RoutePoint follower_target_world = desired_world;
     if (!terminal_relay) {
-      follower_target_world.position = followerTargetWorld(desired_world.position);
+      follower_target_world.position =
+          followerTargetWorld(desired_world.position, desired_world.yaw);
     }
     // 2026-07-24: 普通门点/接力点执行时再次强制XY-only高度；最终降落点保留0.60m专用值。
     const geometry_msgs::Point desired_local =
