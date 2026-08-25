@@ -56,6 +56,8 @@
   <exec_depend>tf</exec_depend>
   <exec_depend>tf2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- UAV1 RViz 单独限频，避免高频里程计加重远程软件渲染负担。 -->
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
   <exec_depend>ldop</exec_depend>
 

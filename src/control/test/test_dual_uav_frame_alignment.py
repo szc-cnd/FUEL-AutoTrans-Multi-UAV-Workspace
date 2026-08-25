@@ -352,6 +352,17 @@ def test_collaboration_launch_owns_unique_uav1_visualization():
     assert "publish_world_to_follower_tf" in relay_args
     assert "enable_rviz" in relay_args
 
+    throttle = next(
+        node for node in root.findall("node")
+        if node.attrib.get("name") == "uav1_visualization_odom_throttle"
+    )
+    assert throttle.attrib["pkg"] == "topic_tools"
+    assert throttle.attrib["type"] == "throttle"
+    assert throttle.attrib["args"] == (
+        "messages /UAV1/fast_lio/Odom_high_freq 30.0 "
+        "/UAV1/visualization/odom_30hz"
+    )
+
     visualizer = next(
         node for node in root.findall("node")
         if node.attrib.get("name") == "uav1_local_odom_visualization"
@@ -360,7 +371,7 @@ def test_collaboration_launch_owns_unique_uav1_visualization():
         item.attrib["from"]: item.attrib["to"]
         for item in visualizer.findall("remap")
     }
-    assert remaps["~odom"] == "/UAV1/fast_lio/Odom_high_freq"
+    assert remaps["~odom"] == "/UAV1/visualization/odom_30hz"
     assert remaps["~path"] == "/drone_1_odom_visualization/path"
     assert remaps["~robot"] == "/drone_1_odom_visualization/robot"
 
@@ -369,6 +380,13 @@ def test_collaboration_launch_owns_unique_uav1_visualization():
         if node.attrib.get("type") == "rviz"
     )
     assert rviz_node.attrib["name"] == "UAV1_diff_rviz"
+    rviz_env = {
+        item.attrib["name"]: item.attrib["value"]
+        for item in rviz_node.findall("env")
+    }
+    assert rviz_env["GALLIUM_DRIVER"] == "softpipe"
+    assert rviz_env["LP_NUM_THREADS"] == "1"
+    assert rviz_env["MESA_GLTHREAD"] == "false"
 
 
 def test_uav1_six_starts_down_camera_and_shows_combined_image_in_diff_rviz():
@@ -474,7 +492,7 @@ def test_uav1_down_camera_waits_for_busy_device_and_retries_without_killing_owne
     assert 'kill ' not in landing
 
 
-def test_uav1_diff_rviz_shows_high_frequency_odometry_and_moving_drone_mesh():
+def test_uav1_diff_rviz_shows_throttled_odometry_and_moving_drone_mesh():
     rviz = yaml.safe_load(UAV1_DIFF_RVIZ.read_text(encoding="utf-8"))
 
     def dictionaries(value):
@@ -490,7 +508,7 @@ def test_uav1_diff_rviz_shows_high_frequency_odometry_and_moving_drone_mesh():
     odometry = next(
         item for item in displays
         if item.get("Class") == "rviz/Odometry"
-        and item.get("Topic") == "/UAV1/fast_lio/Odom_high_freq"
+        and item.get("Topic") == "/UAV1/visualization/odom_30hz"
     )
     assert odometry["Enabled"] is True
     assert odometry["Value"] is True

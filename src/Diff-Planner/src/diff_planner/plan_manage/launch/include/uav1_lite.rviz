@@ -457,7 +457,7 @@ Visualization Manager:
                 Value: false
               Enabled: true
               Keep: 10
-              Name: UAV1 high-frequency odometry
+              Name: UAV1 visualization odometry
               Position Tolerance: 0.009999999776482582
               Queue Size: 10
               Shape:
@@ -470,7 +470,7 @@ Visualization Manager:
                 Shaft Length: 0.5
                 Shaft Radius: 0.02500000037252903
                 Value: Axes
-              Topic: /UAV1/fast_lio/Odom_high_freq
+              Topic: /UAV1/visualization/odom_30hz
               Unreliable: false
               Value: true
             - Class: rviz/Marker
