@@ -1432,6 +1432,11 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       // 入口方向；否则北向通道中的东南旧路仍会被误当成合法新分支。
       if (!task_search::insideForwardHalfPlane(direction, travel))
         continue;
+      // 已经拐过一次后，不能把新通道的侧向分支重新解释成初始入口方向的反向
+      // 回头。这个约束独立于当前travel，否则 +Y 通道会错误放行 -X。
+      if (corridor_frame_received_ && corridor_dir_.head<2>().norm() > 1e-3 &&
+          direction.dot(corridor_dir_.head<2>().normalized()) < -0.05)
+        continue;
       const double free_length = knownFreeLength(contour_origin, direction);
       if (free_length <= 1e-6) continue;
       const double score = free_length - 0.05 * std::fabs(angle);
@@ -1448,7 +1453,7 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       0.5,
       "[task_search] OCCUPANCY TURN selected yaw=%.1fdeg old_free=%.2fm "
       "branch_free=%.2fm contour_probe=(%.2f,%.2f); old direction stopped and "
-      "the single free branch was selected.",
+      "the free branch was selected.",
       std::atan2(best_direction.y(), best_direction.x()) * 180.0 / M_PI,
       forward_free_length, turn_free_length, contour_origin.x(), contour_origin.y());
   return true;

@@ -2198,7 +2198,7 @@ int FastExplorationManager::planExploreMotion(
   if (!use_vertical_detour_target && !use_forced_entry_target && !use_stage3_target &&
       task_search_manager_) {
     frontier_finder_->clearFrontierHistory();
-    task_search_manager_->clearActiveGoal();
+    // 保留活动目标的短时保持；只有到达或实际失败时才清除，避免每次重规划都抖动选点。
   }
 
   double frontier_time = 0.0;
