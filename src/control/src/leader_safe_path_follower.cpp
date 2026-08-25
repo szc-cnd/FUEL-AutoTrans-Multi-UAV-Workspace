@@ -3040,7 +3040,7 @@ class LeaderSafePathFollower {
 
     if (!diff_separation_hold_active_) {
       diff_separation_hold_active_ = true;
-      separation_recovery_active_ = separation <= separation_recovery_distance_;
+      separation_recovery_active_ = separation <= separation_recovery_distance_ && relay_route_paused_;
       separation_recovery_goal_valid_ = false;
       setDiffWaitPositionHold(true, "UAV0-UAV1 separation safety");
       // safety_hold在控制器侧立即丢弃旧轨迹；后续必须等新退让/原航点轨迹确认后才能解锁。
@@ -3070,7 +3070,7 @@ class LeaderSafePathFollower {
       return false;
     }
 
-    if (!separation_recovery_active_ &&
+    if (!separation_recovery_active_ && relay_route_paused_ &&
         separation <= separation_recovery_distance_) {
       separation_recovery_active_ = true;
       separation_recovery_goal_valid_ = false;
