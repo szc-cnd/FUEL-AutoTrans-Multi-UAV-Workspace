@@ -183,8 +183,8 @@
         <param name="follow_height_max" value="0.70"/>
         <!-- 前机偏离0.6m超过0.1m通常正在上下避障；保留XY路线，但不选该点作为后机规划终点。 -->
         <param name="leader_route_height_tolerance" value="0.10"/>
-        <param name="separation_recovery_distance" value="0.50"/>
-        <param name="separation_release_distance" value="0.70"/>
+        <param name="separation_recovery_distance" value="0.90"/>
+        <param name="separation_release_distance" value="1.20"/>
         <param name="emergency_retreat_step" value="0.35"/>
         <param name="emergency_retreat_speed" value="0.30"/>
         <!-- 2026-07-16: 后机落点取前机安全轨迹末端后方约0.5m；终点模式关闭两机距离条件。 -->
