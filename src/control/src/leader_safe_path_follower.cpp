@@ -36,9 +36,6 @@ struct RoutePoint {
   double yaw{0.0};
   // 2026-07-15: 记录前机从起飞后的累计路程，用于“离开候选点1m后再释放”的离散接力逻辑。
   double progress{0.0};
-  // 前机明显偏离名义巡航高度时通常正在上下避障；保留该点用于路线连续性，
-  // 但不允许后机把它选成新的规划终点。
-  bool normal_cruise_height{true};
 };
 
 struct DynamicObstacleSample {
@@ -224,13 +221,6 @@ class LeaderSafePathFollower {
     pnh_.param("fixed_follow_height", fixed_follow_height_, 0.60);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
-    pnh_.param("leader_route_height_tolerance",
-               leader_route_height_tolerance_, 0.10);
-    if (!std::isfinite(leader_route_height_tolerance_) ||
-        leader_route_height_tolerance_ < 0.0) {
-      throw std::runtime_error(
-          "leader_safe_path_follower: invalid leader route height tolerance");
-    }
     // 前视不足两码后，必须等UAV0真实升高并形成垂直分层，才允许UAV1前往前视锚点等待。
     pnh_.param("down_search_release_height", down_search_release_height_, 1.80);
     pnh_.param("down_search_min_vertical_separation",
@@ -561,12 +551,6 @@ class LeaderSafePathFollower {
     return followerToWorld(local);
   }
 
-  bool isNormalLeaderRouteHeight(double leader_height) const {
-    return std::isfinite(leader_height) &&
-           std::fabs(leader_height - fixed_follow_height_) <=
-               leader_route_height_tolerance_ + 1.0e-6;
-  }
-
   bool leaderOdomFresh(const ros::Time& now) const {
     return have_leader_odom_ && !leader_odom_stamp_.isZero() &&
            (now - leader_odom_stamp_).toSec() <= odom_timeout_;
@@ -577,8 +561,6 @@ class LeaderSafePathFollower {
     // 2026-07-15: workspace_lock 的朝向由起飞区指向作业区；保存一次后不允许后续重复消息拖动门点。
     confirmed_door_.position = followerCruisePointToWorld(msg->pose.position);
     confirmed_door_.yaw = yawFromQuaternion(msg->pose.orientation);
-    // 门中心是明确任务点，不继承前机进门时可能偏低的实飞高度筛选结果。
-    confirmed_door_.normal_cruise_height = true;
     have_confirmed_door_ = true;
     ROS_ERROR("[safe_follower] confirmed DOOR received at (%.2f, %.2f, %.2f), yaw=%.1fdeg; "
               "follower remains parked until leader is %.2fm inside.",
@@ -626,7 +608,6 @@ class LeaderSafePathFollower {
     outside_wait.position.x += outside_door_distance_ * std::cos(confirmed_exit_.yaw);
     outside_wait.position.y += outside_door_distance_ * std::sin(confirmed_exit_.yaw);
     outside_wait.position = followerCruisePointToWorld(outside_wait.position);
-    outside_wait.normal_cruise_height = true;
     outside_wait.progress = confirmed_exit_.progress + outside_door_distance_;
     outside_wait_waypoint_index_ = relay_waypoints_.size();
     appendRelayWaypoint(outside_wait, "OUTSIDE_WAIT");
@@ -643,8 +624,6 @@ class LeaderSafePathFollower {
     if (have_final_exit_) return;
     confirmed_exit_.position = followerCruisePointToWorld(msg->pose.position);
     confirmed_exit_.yaw = yawFromQuaternion(msg->pose.orientation);
-    // 出口门心与入口一致，始终作为后机0.6m巡航高度的明确任务点。
-    confirmed_exit_.normal_cruise_height = true;
     have_final_exit_ = true;
     ROS_ERROR("[safe_follower] FINAL EXIT received center=(%.2f, %.2f, %.2f) "
               "yaw=%.1fdeg; append it to the normal history route, then hover %.2fm outside.",
@@ -942,7 +921,6 @@ class LeaderSafePathFollower {
       RoutePoint sample;
       sample.position = followerCruisePointToWorld(leaderToWorld(local));
       sample.yaw = yawFromQuaternion(pose.pose.orientation);
-      sample.normal_cruise_height = isNormalLeaderRouteHeight(local.z);
       samples.push_back(sample);
     }
     if (samples.empty()) return;
@@ -1195,8 +1173,6 @@ class LeaderSafePathFollower {
 
     RoutePoint point;
     point.position = leader_world;
-    point.normal_cruise_height =
-        isNormalLeaderRouteHeight(msg->pose.pose.position.z);
     // 2026-07-24: 安全路线的几何进度只取前机XY，z统一为后机自己的巡航高度。
     point.position = followerCruisePointToWorld(point.position);
     point.yaw = yawFromQuaternion(msg->pose.pose.orientation);
@@ -2220,14 +2196,6 @@ class LeaderSafePathFollower {
                                      route_[i].position, ratio);
       target->yaw = route_[i].yaw;
       target->progress = progress;
-      if (ratio <= 1.0e-6)
-        target->normal_cruise_height = route_[i - 1].normal_cruise_height;
-      else if (ratio >= 1.0 - 1.0e-6)
-        target->normal_cruise_height = route_[i].normal_cruise_height;
-      else
-        target->normal_cruise_height =
-            route_[i - 1].normal_cruise_height &&
-            route_[i].normal_cruise_height;
       return true;
     }
     *target = route_.back();
@@ -2288,15 +2256,6 @@ class LeaderSafePathFollower {
 
     auto accept_candidate = [&](const RoutePoint& candidate,
                                 const char* source) -> bool {
-      if (!candidate.normal_cruise_height) {
-        ROS_WARN_THROTTLE(
-            0.5,
-            "[safe_follower] skip UAV0-history %s at progress %.2f: "
-            "leader was outside nominal %.2f+/-%.2fm height band.",
-            source, candidate.progress, fixed_follow_height_,
-            leader_route_height_tolerance_);
-        return false;
-      }
       const geometry_msgs::Point candidate_local =
           useFollowerCruiseHeight(worldToFollower(candidate.position));
       if (routeCandidateBlocked(candidate_local, candidate.progress, now)) return false;
@@ -2329,10 +2288,6 @@ class LeaderSafePathFollower {
       }
       RoutePoint route_match;
       if (!routePointAtProgress(endpoint->progress, &route_match)) continue;
-      if (!route_match.normal_cruise_height ||
-          !endpoint->normal_cruise_height) {
-        continue;
-      }
       const double route_match_error = std::hypot(
           route_match.position.x - endpoint->position.x,
           route_match.position.y - endpoint->position.y);
@@ -4087,7 +4042,6 @@ class LeaderSafePathFollower {
   double follow_distance_{0.70}, release_path_length_{0.70}, min_separation_{0.70};
   double waypoint_release_min_separation_{0.70};
   double fixed_follow_height_{0.60}, follow_height_min_{0.60}, follow_height_max_{0.70};
-  double leader_route_height_tolerance_{0.10};
   double down_search_release_height_{1.80};
   double down_search_min_vertical_separation_{1.00};
   double continuous_follow_speed_{0.42};

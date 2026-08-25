@@ -60,6 +60,20 @@ def test_waypoint_conversion_uses_rigid_transform_and_inverse():
     assert "StaticTransformBroadcaster" in publisher
 
 
+def test_leader_height_does_not_filter_follower_xy_targets():
+    launch = LAUNCH.read_text(encoding="utf-8")
+    source = FOLLOWER.read_text(encoding="utf-8")
+
+    assert "leader_route_height_tolerance" not in launch
+    assert "normal_cruise_height" not in source
+    assert "leader was outside nominal" not in source
+
+    selection = source.split("auto accept_candidate", 1)[1].split(
+        "// UAV0确实到达并停稳的B-spline段终点优先", 1
+    )[0]
+    assert "useFollowerCruiseHeight(worldToFollower(candidate.position))" in selection
+
+
 def test_relay_waypoints_release_after_seven_tenths_meter_clearance():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
