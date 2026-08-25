@@ -373,6 +373,18 @@ class LeaderSafePathFollower {
     return local;
   }
 
+  // Relay points are recorded in the leader/mission frame.  The follower's
+  // physical target must remain at its frame origin offset from that point
+  // (x=-1.20m in the indoor mission), otherwise it is commanded onto the
+  // leader's exact position and the separation gate has to catch it late.
+  geometry_msgs::Point followerTargetWorld(const geometry_msgs::Point& leader_point) const {
+    geometry_msgs::Point target = leader_point;
+    target.x += follower_alignment_x_;
+    target.y += follower_alignment_y_;
+    target.z += follower_alignment_z_;
+    return target;
+  }
+
   double worldYawToFollower(double world_yaw) const {
     return std::atan2(std::sin(world_yaw - follower_alignment_yaw_),
                       std::cos(world_yaw - follower_alignment_yaw_));
@@ -1746,6 +1758,7 @@ class LeaderSafePathFollower {
       hold("continuous leader route unavailable");
       return true;
     }
+    tracking_world.position = followerTargetWorld(tracking_world.position);
     geometry_msgs::Point target_local =
         useFollowerCruiseHeight(worldToFollower(tracking_world.position));
     target_local = limitTargetStep(follower_odom_.pose.pose.position, target_local);
@@ -1891,9 +1904,13 @@ class LeaderSafePathFollower {
     const RoutePoint& desired_world = relay_waypoints_[active_relay_index_];
     const bool terminal_relay = terminal_mode_active_ &&
                                 active_relay_index_ == terminal_waypoint_index_;
+    RoutePoint follower_target_world = desired_world;
+    if (!terminal_relay) {
+      follower_target_world.position = followerTargetWorld(desired_world.position);
+    }
     const geometry_msgs::Point desired_local =
-        terminal_relay ? worldToFollower(desired_world.position)
-                       : useFollowerCruiseHeight(worldToFollower(desired_world.position));
+        terminal_relay ? worldToFollower(follower_target_world.position)
+                       : useFollowerCruiseHeight(worldToFollower(follower_target_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
     // 2026-07-28: 原接力点连续失败后，从前机已经实飞的稠密路线取短前视点；
@@ -1913,7 +1930,8 @@ class LeaderSafePathFollower {
     }
     if (diff_recovery_requested_ && !terminal_relay) {
       RoutePoint recovery_world;
-      if (getRelayRouteTarget(followerToWorld(current_local), desired_world, &recovery_world)) {
+      if (getRelayRouteTarget(followerToWorld(current_local), follower_target_world,
+                              &recovery_world)) {
         const geometry_msgs::Point candidate =
             useFollowerCruiseHeight(worldToFollower(recovery_world.position));
         if (distance3d(current_local, candidate) > diff_recovery_arrive_radius_) {
@@ -2138,17 +2156,21 @@ class LeaderSafePathFollower {
     const RoutePoint& desired_world = relay_waypoints_[active_relay_index_];
     const bool terminal_relay = terminal_mode_active_ &&
                                 active_relay_index_ == terminal_waypoint_index_;
+    RoutePoint follower_target_world = desired_world;
+    if (!terminal_relay) {
+      follower_target_world.position = followerTargetWorld(desired_world.position);
+    }
     // 2026-07-24: 普通门点/接力点执行时再次强制XY-only高度；最终降落点保留0.60m专用值。
     const geometry_msgs::Point desired_local =
         terminal_relay
-            ? worldToFollower(desired_world.position)
-            : useFollowerCruiseHeight(worldToFollower(desired_world.position));
+            ? worldToFollower(follower_target_world.position)
+            : useFollowerCruiseHeight(worldToFollower(follower_target_world.position));
     RoutePoint tracking_world = desired_world;
     // 2026-07-16: 第一个门点保持直接进门；进入作业区后的接力点沿前机实飞轨迹逐段跟踪，
     // 解决离散点跨越转角后，后机把墙后的目标当成直线目标持续怼墙的问题。
     if (active_relay_index_ > 0 &&
         !getRelayRouteTarget(followerToWorld(follower_odom_.pose.pose.position),
-                             desired_world, &tracking_world)) {
+                             follower_target_world, &tracking_world)) {
       hold("leader route unavailable for relay segment");
       return;
     }
