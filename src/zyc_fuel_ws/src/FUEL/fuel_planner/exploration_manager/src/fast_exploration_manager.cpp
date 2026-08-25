@@ -2723,7 +2723,12 @@ int FastExplorationManager::planExploreMotion(
   // 2026-07-22: FUEL远端frontier只决定前进方向；沿A*路径截取短安全段作为本轮路线点，
   // 避免刚穿门就发布跨越数米未知/窄区的整条轨迹，并让新点云在每段之间更新地图。
   const double route_horizon = std::max(0.20, ep_->mission_max_route_segment_length_);
-  if (Astar::pathLength(ed_->path_next_goal_) > route_horizon) {
+  // 只有原始前沿点本身在前方超过该距离时才截断；近前沿即使因绕障导致A*路径变长，
+  // 也必须保留其完整路径，不能把“路径长”误当成“前沿点远”。
+  const bool far_frontier_goal =
+      !use_forced_entry_target && !use_stage3_target &&
+      (next_pos - pos).norm() > route_horizon + 1e-6;
+  if (far_frontier_goal && Astar::pathLength(ed_->path_next_goal_) > route_horizon) {
     vector<Vector3d> local_segment{ed_->path_next_goal_.front()};
     double accumulated = 0.0;
     for (size_t i = 1; i < ed_->path_next_goal_.size(); ++i) {
