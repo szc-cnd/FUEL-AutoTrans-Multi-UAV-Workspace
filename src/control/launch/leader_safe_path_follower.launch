@@ -48,7 +48,7 @@
 
     <node pkg="exploration_control" type="leader_safe_path_follower"
           name="leader_safe_path_follower" output="screen">
-        <!-- 2026-07-14: 1.2m 路径滞后和 0.75m 硬间距用于当前 1m 初始纵队的保守跟随验证。 -->
+        <!-- 2026-08-25: 前后机实时安全距离统一为1.00m；前机未后退时后机锁当前位置。 -->
         <param name="leader_odom_topic" value="$(arg leader_odom_topic)"/>
         <param name="follower_odom_topic" value="$(arg follower_odom_topic)"/>
         <param name="follower_cloud_topic" value="$(arg follower_cloud_topic)"/>
@@ -99,7 +99,7 @@
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
         <param name="follow_distance" value="1.00"/>
         <param name="release_path_length" value="1.00"/>
-        <param name="min_separation" value="0.50"/>
+        <param name="min_separation" value="1.00"/>
         <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到1m后，才向UAV1释放普通航点。 -->
         <param name="waypoint_release_min_separation" value="1.00"/>
         <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
