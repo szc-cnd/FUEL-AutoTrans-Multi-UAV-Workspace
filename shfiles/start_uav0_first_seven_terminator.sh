@@ -23,6 +23,9 @@ START_LOCK_FILE="${UAV0_FIRST_SEVEN_START_LOCK_FILE:-/tmp/uav0_first_seven_start
 RUNTIME_CONFIG="${UAV0_FIRST_SEVEN_RUNTIME_CONFIG:-/tmp/uav0_first_seven_terminator_${RUN_ID}.conf}"
 
 THERMAL="${UAV0_FIRST_SEVEN_THERMAL:-true}"
+ENABLE_COLOR_TAG="${UAV0_FIRST_SEVEN_ENABLE_COLOR_TAG:-true}"
+ENABLE_QR="${UAV0_FIRST_SEVEN_ENABLE_QR:-true}"
+ENABLE_TARGET_REPORTING="${UAV0_FIRST_SEVEN_ENABLE_TARGET_REPORTING:-true}"
 ODOM_TOPIC="${UAV0_FIRST_SEVEN_ODOM_TOPIC:-/UAV0/fast_lio/Odom_high_freq}"
 PANE=""
 SHOW_HELP=false
@@ -259,12 +262,15 @@ run_detection_pane() {
   wait_for_topic "${ODOM_TOPIC}" 180 || keep_pane_open
   local mission_id="onboard_test_$(date +%Y%m%d)" down_camera
   down_camera="$(find_down_camera)" || keep_pane_open
-  printf '[启动] UAV0 D435/检测/TF/远程上报/精确降落\n'
-  printf '[参数] thermal=%s, odom=%s, mission_id=%s, down_camera=%s\n' \
-    "${THERMAL}" "${ODOM_TOPIC}" "${mission_id}" "${down_camera}"
+  printf '[启动] UAV0 D435/降落板搜索/下视确认/精确降落\n'
+  printf '[参数] color_tag=%s, qr=%s, thermal=%s, target_reporting=%s, odom=%s, down_camera=%s\n' \
+    "${ENABLE_COLOR_TAG}" "${ENABLE_QR}" "${THERMAL}" \
+    "${ENABLE_TARGET_REPORTING}" "${ODOM_TOPIC}" "${down_camera}"
   printf '[安全] 降落节点只监听 /UAV0/need_to_land，不会在启动时自动触发。\n'
   rosrun uav0_competition_bringup start_uav0_detection_landing_stack.sh \
     enable_realsense:=true \
+    enable_color_tag:="${ENABLE_COLOR_TAG}" \
+    enable_qr:="${ENABLE_QR}" \
     enable_thermal:="${THERMAL}" \
     enable_thermal_d435_fusion:="${THERMAL}" \
     realsense_color_width:=1280 \
@@ -274,7 +280,7 @@ run_detection_pane() {
     realsense_enable_pointcloud:=true \
     enable_camera_body_tf:=true \
     enable_camera_body_odom_tf:=false \
-    enable_target_reporting:=true \
+    enable_target_reporting:="${ENABLE_TARGET_REPORTING}" \
     target_reporting_mission_id:="${mission_id}" \
     enable_down_camera:=true \
     enable_precision_landing:=true \
