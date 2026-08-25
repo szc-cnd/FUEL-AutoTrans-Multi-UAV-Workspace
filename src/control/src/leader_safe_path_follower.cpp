@@ -1798,7 +1798,7 @@ class LeaderSafePathFollower {
   // intentionally before both continuous and Diff execution paths, including
   // stale-command retries.
   bool handleCloseLeaderSafety(const ros::Time& now) {
-    if (terminal_mode_active_ || !have_leader_odom_ || !have_follower_odom_) return false;
+    if (!have_leader_odom_ || !have_follower_odom_) return false;
 
     const geometry_msgs::Point leader_world =
         leaderToWorld(leader_odom_.pose.pose.position);
