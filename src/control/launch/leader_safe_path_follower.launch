@@ -98,6 +98,7 @@
         <!-- 后机在入门目标释放后独立开启LDOP。 -->
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
         <param name="follow_distance" value="1.00"/>
+        <param name="diff_max_planning_failures" value="3"/>
         <param name="release_path_length" value="1.00"/>
         <param name="min_separation" value="1.00"/>
         <!-- UAV0 只在两机对齐坐标系下的实时水平距离达到1m后，才向UAV1释放普通航点。 -->

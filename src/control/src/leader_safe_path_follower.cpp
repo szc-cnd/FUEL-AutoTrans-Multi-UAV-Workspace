@@ -89,6 +89,7 @@ class LeaderSafePathFollower {
                             "/UAV1/planning/traj_started");
     // 2026-07-28: Diff若因瞬时占据把目标改到当前位置，周期重发原接力点，不能一次发送后永久锁死。
     pnh_.param("diff_goal_retry_period", diff_goal_retry_period_, 1.0);
+    pnh_.param("diff_max_planning_failures", diff_max_planning_failures_, 3);
     // 2026-07-28: 订阅UAV1 Diff明确规划状态；失败后沿前机实飞路线短步恢复。
     pnh_.param<std::string>("diff_status_topic", diff_status_topic_,
                             "/drone_1_planning/status");
@@ -1135,12 +1136,38 @@ class LeaderSafePathFollower {
       // 2026-07-28: 原轨迹规划失败后立刻丢弃残余速度并锁点，恢复子目标被接受前不允许漂移。
       setDiffWaitPositionHold(true, status);
       ++diff_planning_failure_events_;
+      const std::size_t failed_index = diff_goal_index_;
+      if (failed_index != std::numeric_limits<std::size_t>::max()) {
+        if (diff_failure_goal_index_ != failed_index) {
+          diff_failure_goal_index_ = failed_index;
+          diff_failure_count_ = 0;
+        }
+        ++diff_failure_count_;
+      }
       diff_recovery_requested_ = true;
       diff_goal_published_ = false;
       diff_accepted_goal_valid_ = false;
       ROS_ERROR_THROTTLE(0.5,
                          "[safe_follower] UAV1 Diff status=%s; request verified-route subgoal.",
                          status.c_str());
+      if (failed_index < relay_waypoints_.size() &&
+          failed_index == active_relay_index_ &&
+          !terminal_mode_active_ &&
+          diff_failure_count_ >= diff_max_planning_failures_) {
+        ROS_ERROR("[safe_follower] QUARANTINE relay waypoint %zu/%zu after %d Diff failures; "
+                  "advance FIFO instead of retrying the same goal.",
+                  failed_index + 1, relay_waypoints_.size(), diff_failure_count_);
+        diff_quarantined_indices_.push_back(failed_index);
+        ++active_relay_index_;
+        diff_failure_goal_index_ = std::numeric_limits<std::size_t>::max();
+        diff_failure_count_ = 0;
+        diff_goal_published_ = false;
+        diff_plan_response_received_ = false;
+        diff_recovery_requested_ = false;
+        diff_recovery_goal_valid_ = false;
+        diff_accepted_goal_valid_ = false;
+        setDiffWaitPositionHold(true, "Diff goal quarantined after repeated planning failure");
+      }
     } else if (status == "TRAJECTORY_PUBLISHED") {
       // 2026-07-28: 只有Diff确认新轨迹已发布才解除等待锁点，避免“先解锁、后规划”空窗。
       setDiffWaitPositionHold(false, "new Diff trajectory published");
@@ -2465,6 +2492,9 @@ class LeaderSafePathFollower {
   bool diff_plan_response_received_{false}, diff_accepted_goal_valid_{false}; // 2026-07-28: Diff应答与实际落点。
   bool diff_recovery_requested_{false}, diff_recovery_goal_valid_{false}; // 2026-07-28: 已验证路线短子目标恢复。
   bool diff_command_seen_for_goal_{false};  // 2026-07-28: 当前Diff目标是否真正产生过PositionCommand。
+  std::size_t diff_failure_goal_index_{std::numeric_limits<std::size_t>::max()};
+  int diff_failure_count_{0}, diff_max_planning_failures_{3};
+  std::vector<std::size_t> diff_quarantined_indices_;
   bool follower_odom_fault_latched_{false};  // 2026-07-28: 不可信LIO只允许通过重启重新初始化。
   bool have_confirmed_door_{false}, door_waypoint_released_{false};
   bool have_final_exit_{false}, exit_waypoint_released_{false};  // 2026-07-28: 最终出口接收/排队锁存。
