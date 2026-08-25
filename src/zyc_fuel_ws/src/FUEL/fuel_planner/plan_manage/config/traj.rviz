@@ -87,42 +87,6 @@ Visualization Manager:
           Value: true
         - Class: rviz/Image
           Enabled: true
-          Image Topic: /UAV0/color_tag_detector/debug_image
-          Max Value: 1
-          Median window: 5
-          Min Value: 0
-          Name: color_detection_image
-          Normalize Range: true
-          Queue Size: 2
-          Transport Hint: raw
-          Unreliable: false
-          Value: true
-        - Class: rviz/Image
-          Enabled: true
-          Image Topic: /UAV0/vision/qr_debug_image
-          Max Value: 1
-          Median window: 5
-          Min Value: 0
-          Name: qr_detection_image
-          Normalize Range: true
-          Queue Size: 2
-          Transport Hint: raw
-          Unreliable: false
-          Value: true
-        - Class: rviz/Image
-          Enabled: true
-          Image Topic: /UAV0/thermal/debug_image
-          Max Value: 1
-          Median window: 5
-          Min Value: 0
-          Name: thermal_detection_image
-          Normalize Range: true
-          Queue Size: 2
-          Transport Hint: raw
-          Unreliable: false
-          Value: true
-        - Class: rviz/Image
-          Enabled: true
           Image Topic: /UAV0/landing/front/debug_image
           Max Value: 1
           Median window: 5
@@ -976,18 +940,6 @@ Visualization Manager:
       Topic: /vins_estimator/camera_pose
       Unreliable: false
       Value: false
-    - Class: rviz/Image
-      Enabled: true
-      Image Topic: /UAV0/thermal/d435_debug_image
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: thermal_d435_mapping
-      Normalize Range: true
-      Queue Size: 2
-      Transport Hint: raw
-      Unreliable: false
-      Value: true
     - Class: rviz/Marker
       Enabled: false
       Marker Topic: /firefly/visualization_marker
