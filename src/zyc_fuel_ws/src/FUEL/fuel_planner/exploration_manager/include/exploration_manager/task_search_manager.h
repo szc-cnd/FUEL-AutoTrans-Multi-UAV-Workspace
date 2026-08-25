@@ -319,8 +319,6 @@ private:
   double visit_spacing_{0.35};
   double revisit_radius_{0.65};
   double repeat_goal_radius_{0.45};
-  // 常规搜索只接收当前位置附近的frontier；入口首点使用独立的门后范围。
-  double max_candidate_distance_{1.20};
   int max_goal_repeats_{2};
   int max_history_size_{120};
   double cruise_height_{0.75};

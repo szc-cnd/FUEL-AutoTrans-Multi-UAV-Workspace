@@ -75,7 +75,7 @@ void FastExplorationFSM::init(ros::NodeHandle& nh) {
   /* Ros sub, pub and timer */
   exec_timer_ = nh.createTimer(ros::Duration(0.01), &FastExplorationFSM::FSMCallback, this);
   safety_timer_ = nh.createTimer(ros::Duration(0.05), &FastExplorationFSM::safetyCallback, this);
-  frontier_timer_ = nh.createTimer(ros::Duration(0.5), &FastExplorationFSM::frontierCallback, this);
+  // frontier只在入口触发后的planExploreMotion中生成，等待入口期间不预计算候选。
 
   trigger_sub_ =
       nh.subscribe("/waypoint_generator/waypoints", 1, &FastExplorationFSM::triggerCallback, this);
@@ -903,60 +903,6 @@ void FastExplorationFSM::clearVisMarker() {
   // visualization_->drawSpheres({}, 0.1, Vector4d(0, 0, 1, 1), "B-Spline", 0, 0);
 
   // visualization_->drawLines({}, {}, 0.03, Vector4d(1, 0, 0, 1), "current_pose", 0, 6);
-}
-
-void FastExplorationFSM::frontierCallback(const ros::TimerEvent& e) {
-  static int delay = 0;
-  if (++delay < 5) return;
-
-  // 2026-07-16: FINISH 后任务与降落链路已经接管，禁止后台继续改动 frontier 代价矩阵；
-  // 旧逻辑会在落地阶段重复删除 frontier，并最终触发 invalid pointer。
-  if (state_ == WAIT_TRIGGER) {
-    auto ft = expl_manager_->frontier_finder_;
-    auto ed = expl_manager_->ed_;
-    ft->searchFrontiers();
-    ft->computeFrontiersToVisit();
-    ft->updateFrontierCostMatrix();
-
-    ft->getFrontiers(ed->frontiers_);
-    ft->getFrontierBoxes(ed->frontier_boxes_);
-    expl_manager_->preselectInitialFrontier(fd_->odom_pos_, fd_->odom_yaw_);
-
-    // Draw frontier and bounding box
-    for (int i = 0; i < ed->frontiers_.size(); ++i) {
-      visualization_->drawCubes(ed->frontiers_[i], 0.1,
-                                visualization_->getColor(double(i) / ed->frontiers_.size(), 0.4),
-                                "frontier", i, 4);
-      // visualization_->drawBox(ed->frontier_boxes_[i].first, ed->frontier_boxes_[i].second,
-      // Vector4d(0.5, 0, 1, 0.3),
-      //                         "frontier_boxes", i, 4);
-    }
-    for (int i = ed->frontiers_.size(); i < 50; ++i) {
-      visualization_->drawCubes({}, 0.1, Vector4d(0, 0, 0, 1), "frontier", i, 4);
-      // visualization_->drawBox(Vector3d(0, 0, 0), Vector3d(0, 0, 0), Vector4d(1, 0, 0, 0.3),
-      // "frontier_boxes", i, 4);
-    }
-  }
-
-  // if (!fd_->static_state_)
-  // {
-  //   static double astar_time = 0.0;
-  //   static int astar_num = 0;
-  //   auto t1 = ros::Time::now();
-
-  //   planner_manager_->path_finder_->reset();
-  //   planner_manager_->path_finder_->setResolution(0.4);
-  //   if (planner_manager_->path_finder_->search(fd_->odom_pos_, Vector3d(-5, 0, 1)))
-  //   {
-  //     auto path = planner_manager_->path_finder_->getPath();
-  //     visualization_->drawLines(path, 0.05, Vector4d(1, 0, 0, 1), "astar", 0, 6);
-  //     auto visit = planner_manager_->path_finder_->getVisited();
-  //     visualization_->drawCubes(visit, 0.3, Vector4d(0, 0, 1, 0.4), "astar-visit", 0, 6);
-  //   }
-  //   astar_num += 1;
-  //   astar_time = (ros::Time::now() - t1).toSec();
-  //   ROS_WARN("Average astar time: %lf", astar_time);
-  // }
 }
 
 void FastExplorationFSM::triggerCallback(const nav_msgs::PathConstPtr& msg) {

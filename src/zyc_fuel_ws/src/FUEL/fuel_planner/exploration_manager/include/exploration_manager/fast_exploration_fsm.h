@@ -57,7 +57,7 @@ private:
 
   /* ROS utils */
   ros::NodeHandle node_;
-  ros::Timer exec_timer_, safety_timer_, vis_timer_, frontier_timer_;
+  ros::Timer exec_timer_, safety_timer_, vis_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, mission_status_sub_;
   ros::Subscriber external_status_sub_;
   ros::Publisher replan_pub_, new_pub_, bspline_pub_, emergency_brake_pub_, safety_hold_pub_,
@@ -135,7 +135,6 @@ private:
   /* ROS functions */
   void FSMCallback(const ros::TimerEvent& e);
   void safetyCallback(const ros::TimerEvent& e);
-  void frontierCallback(const ros::TimerEvent& e);
   void triggerCallback(const nav_msgs::PathConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
   void missionStatusCallback(const std_msgs::StringConstPtr& msg);
