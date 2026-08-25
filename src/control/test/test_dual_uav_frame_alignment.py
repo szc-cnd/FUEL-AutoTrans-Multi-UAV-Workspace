@@ -150,7 +150,8 @@ def test_diff_recovery_subgoal_cannot_complete_relay_and_status_is_sequenced():
     assert "response_matches_active_goal" in status
     assert "late_success_for_active_goal" in status
     assert "ignore stale UAV1 Diff status" in status
-    assert source.count("stampDiffGoalId(&goal);") == 2
+    # 旧路线执行、间距退让和简化FIFO直达各自发布带时间戳的Diff目标。
+    assert source.count("stampDiffGoalId(&goal);") == 3
 
 
 def test_internal_diff_relay_uses_verified_route_subgoals_without_consuming_relay():
@@ -204,7 +205,17 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
         "void appendRelayWaypoint", 1
     )[0]
     assert "for (const RoutePoint& point : relay_waypoints_)" in publish
-    assert "relay_waypoints_.erase" not in source
+    simple_execution = source.split(
+        "bool handleSimpleDiffPlannerExecution", 1
+    )[1].split("bool getLaggedTarget", 1)[0]
+    consume = source.split("void consumeSimpleRelayFront", 1)[1].split(
+        "bool handleSimpleDiffPlannerExecution", 1
+    )[0]
+    assert "consumeSimpleRelayFront();" in simple_execution
+    assert "relay_waypoints_.erase" in consume
+    assert simple_execution.index("UAV1 FIFO ARRIVED") < simple_execution.index(
+        "consumeSimpleRelayFront();"
+    )
     assert "relay_waypoints_.pop_back" not in source
     assert "relay_waypoints_.clear" not in source
 

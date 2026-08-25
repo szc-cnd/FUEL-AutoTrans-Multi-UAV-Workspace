@@ -112,13 +112,13 @@ def test_successful_new_route_subgoal_resets_failure_budget():
     assert "diff_forward_candidate_failures_ = 0;" in route_completion
 
 
-def test_nonterminal_diff_goal_cannot_fall_back_to_distant_relay():
+def test_legacy_nonterminal_diff_goal_still_requires_verified_history():
     execution = SOURCE.split("bool handleDiffPlannerExecution", maxsplit=1)[1].split(
         "void timerCallback", maxsplit=1
     )[0]
+    assert "return handleSimpleDiffPlannerExecution(now);" in execution
     assert "selectForwardRouteCandidate" in execution
     assert '"nonterminal relay requires verified history candidate"' in execution
-    assert "!terminal_relay && !diff_recovery_goal_valid_" in execution
     selector = SOURCE.split("bool selectForwardRouteCandidate", maxsplit=1)[1].split(
         "bool getFollowerHistoryRetreatTarget", maxsplit=1
     )[0]
@@ -126,7 +126,7 @@ def test_nonterminal_diff_goal_cannot_fall_back_to_distant_relay():
     assert "diff_allow_route_backtrack_attachment_" in selector
 
 
-def test_diff_prefers_confirmed_leader_segment_endpoints_within_150m():
+def test_legacy_diff_prefers_confirmed_leader_segment_endpoints_within_7m():
     selector = SOURCE.split("bool selectForwardRouteCandidate", maxsplit=1)[1].split(
         "bool getFollowerHistoryRetreatTarget", maxsplit=1
     )[0]
@@ -138,7 +138,7 @@ def test_diff_prefers_confirmed_leader_segment_endpoints_within_150m():
     )[1].split("void leaderOdomCallback", maxsplit=1)[0]
 
     assert 'name="leader_trajectory_topic" value="$(arg leader_trajectory_topic)"' in LAUNCH
-    assert 'name="diff_history_target_max_distance" value="1.50"' in LAUNCH
+    assert 'name="diff_history_target_max_distance" value="7.00"' in LAUNCH
     assert "evaluateDeBoor(trajectory_end)" in trajectory_callback
     assert "leader_segment_endpoint_max_speed_" in endpoint_confirmation
     assert "leader_segment_endpoint_dwell_" in endpoint_confirmation
@@ -155,6 +155,57 @@ def test_diff_prefers_confirmed_leader_segment_endpoints_within_150m():
     )[0]
     assert "remaining_relay_progress" in execution
     assert "remaining_relay_progress <= path_sample_spacing_" in execution
+
+
+def test_simple_mode_queues_each_confirmed_segment_endpoint_as_fifo():
+    endpoint_confirmation = SOURCE.split(
+        "void confirmPendingLeaderSegmentEndpoint", maxsplit=1
+    )[1].split("void leaderOdomCallback", maxsplit=1)[0]
+    odom_callback = SOURCE.split("void leaderOdomCallback", maxsplit=1)[1].split(
+        "void appendFollowerExecutedPoint", maxsplit=1
+    )[0]
+
+    assert 'name="simple_segment_endpoint_following" value="true"' in LAUNCH
+    assert 'name="simple_diff_retry_delay" value="0.20"' in LAUNCH
+    assert 'appendRelayWaypoint(confirmed, "SEGMENT_ENDPOINT")' in endpoint_confirmation
+    assert "door_waypoint_released_" in endpoint_confirmation
+    assert "!exit_waypoint_released_" in endpoint_confirmation
+    assert "if (simple_segment_endpoint_following_) return;" in odom_callback
+
+
+def test_simple_mode_gives_diff_only_the_fifo_front_and_consumes_on_arrival():
+    execution = SOURCE.split(
+        "bool handleSimpleDiffPlannerExecution", maxsplit=1
+    )[1].split("bool getLaggedTarget", maxsplit=1)[0]
+    consume = SOURCE.split("void consumeSimpleRelayFront", maxsplit=1)[1].split(
+        "bool handleSimpleDiffPlannerExecution", maxsplit=1
+    )[0]
+
+    assert "const RoutePoint desired_world = relay_waypoints_[active_relay_index_]" in execution
+    assert "goal.pose.position = desired_local;" in execution
+    assert "selectForwardRouteCandidate" not in execution
+    assert "diff_recovery_goal_local_" not in execution
+    assert "blacklistRouteCandidate" not in execution
+    assert "consumeSimpleRelayFront();" in execution
+    assert "relay_waypoints_.erase" in consume
+
+
+def test_simple_mode_retries_same_endpoint_without_wrapper_recovery():
+    status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
+        "void consumeSimpleRelayFront", maxsplit=1
+    )[0]
+    timer = SOURCE.split("void timerCallback", maxsplit=1)[1].split(
+        "void hold", maxsplit=1
+    )[0]
+
+    assert '"retry the same coordinates (no alternate/recovery point)."' in status_callback
+    simple_failure = status_callback.split(
+        "if (simple_segment_endpoint_following_)", maxsplit=1
+    )[1].split("return;", maxsplit=1)[0]
+    assert "handleDiffPlanningFailure" not in simple_failure
+    assert "blacklistRouteCandidate" not in simple_failure
+    assert "diff_recovery_requested_" not in simple_failure
+    assert "!simple_segment_endpoint_following_ && handleStuckRecovery(now)" in timer
 
 
 def test_candidate_blacklist_and_clipped_retry_are_bounded():

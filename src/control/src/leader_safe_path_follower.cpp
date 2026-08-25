@@ -100,6 +100,11 @@ class LeaderSafePathFollower {
                             "/UAV1/planning/pos_cmd");
     // 2026-07-28: 新模式只向UAV1独立Diff发布离散目标；旧PositionCommand直控保留为可回退开关。
     pnh_.param("use_diff_planner", use_diff_planner_, true);
+    // 简化接力模式把前机每段实际停稳终点作为FIFO目标直接交给Diff。跟随器不再
+    // 生成短子目标、拉黑候选或退让坐标，规划失败时只重试当前队首。
+    pnh_.param("simple_segment_endpoint_following",
+               simple_segment_endpoint_following_, false);
+    pnh_.param("simple_diff_retry_delay", simple_diff_retry_delay_, 0.20);
     pnh_.param<std::string>("diff_goal_topic", diff_goal_topic_,
                             "/UAV1/planning/goal");
     pnh_.param<std::string>("traj_started_topic", traj_started_topic_,
@@ -160,7 +165,8 @@ class LeaderSafePathFollower {
         !std::isfinite(leader_segment_endpoint_max_speed_) ||
         leader_segment_endpoint_max_speed_ <= 0.0 ||
         !std::isfinite(leader_segment_endpoint_dwell_) ||
-        leader_segment_endpoint_dwell_ < 0.0) {
+        leader_segment_endpoint_dwell_ < 0.0 ||
+        !std::isfinite(simple_diff_retry_delay_) || simple_diff_retry_delay_ < 0.0) {
       throw std::runtime_error(
           "leader_safe_path_follower: invalid flexible Diff recovery parameters");
     }
@@ -1141,6 +1147,18 @@ class LeaderSafePathFollower {
                static_cast<long>(pending_leader_segment_trajectory_id_),
                confirmed.progress, confirmed.position.x, confirmed.position.y,
                confirmed.position.z, leader_segment_endpoint_dwell_);
+      if (simple_segment_endpoint_following_ && door_waypoint_released_ &&
+          !exit_waypoint_released_ && !terminal_mode_active_) {
+        const bool already_queued = !relay_waypoints_.empty() &&
+            distance3d(relay_waypoints_.back().position, confirmed.position) <=
+                leader_segment_endpoint_radius_;
+        if (!already_queued) {
+          appendRelayWaypoint(confirmed, "SEGMENT_ENDPOINT");
+          ROS_ERROR("[safe_follower] FIFO cache UAV0 segment endpoint id=%ld; "
+                    "UAV1 will consume it only after arrival.",
+                    static_cast<long>(pending_leader_segment_trajectory_id_));
+        }
+      }
     }
     pending_leader_segment_endpoint_valid_ = false;
     leader_segment_endpoint_dwell_start_ = ros::Time(0);
@@ -1316,6 +1334,8 @@ class LeaderSafePathFollower {
 
     // 2026-07-28: 最终出口门心已排队后不再生成门外内部点；稠密实飞路线仍继续记录供终点接力使用。
     if (exit_waypoint_released_) return;
+    // 简化模式仅消费前机真实停稳的分段终点；禁止按里程再插入内部候选点。
+    if (simple_segment_endpoint_following_) return;
 
     // 2026-07-16: 0或负数表示任务全程滚动发点；正数仅保留为调试时的可选安全上限。
     if (max_internal_relay_points_ > 0 &&
@@ -1787,6 +1807,41 @@ class LeaderSafePathFollower {
     // A non-stale status is the planner's response to the current goal.
     diff_plan_response_received_ = true;
     diff_goal_first_publish_stamp_ = ros::Time(0);
+    if (simple_segment_endpoint_following_) {
+      if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
+        setDiffWaitPositionHold(true, "retry same FIFO endpoint after Diff failure");
+        ++diff_planning_failure_events_;
+        diff_goal_published_ = false;
+        diff_accepted_goal_valid_ = false;
+        diff_command_seen_for_goal_ = false;
+        simple_diff_retry_not_before_ =
+            ros::Time::now() + ros::Duration(simple_diff_retry_delay_);
+        ROS_ERROR("[safe_follower] UAV1 Diff status=%s; keep FIFO endpoint %zu and "
+                  "retry the same coordinates (no alternate/recovery point).",
+                  status.c_str(), active_relay_index_ + 1);
+      } else if (status == "TRAJECTORY_PUBLISHED") {
+        setDiffWaitPositionHold(false, "current FIFO endpoint trajectory published");
+        diff_planning_failure_events_ = 0;
+        if (accepted_valid) {
+          diff_accepted_goal_local_ = accepted;
+          diff_accepted_goal_valid_ = true;
+        }
+      } else if (status == "OCCUPIED_RECOVERY_VERTICAL" ||
+                 status == "OCCUPIED_RECOVERY_HISTORY" ||
+                 status == "OCCUPIED_RECOVERY_LATERAL") {
+        // 这些轨迹由Diff自身生成，不是跟随器编造的恢复目标。
+        setDiffWaitPositionHold(false, "Diff internal occupied recovery trajectory");
+      } else if (status == "OCCUPIED_RECOVERY_ABORTED" ||
+                 status == "OCCUPIED_RECOVERY_SUCCEEDED") {
+        setDiffWaitPositionHold(true, "retry FIFO endpoint after Diff recovery");
+        diff_goal_published_ = false;
+        diff_accepted_goal_valid_ = false;
+        diff_command_seen_for_goal_ = false;
+        simple_diff_retry_not_before_ =
+            ros::Time::now() + ros::Duration(simple_diff_retry_delay_);
+      }
+      return;
+    }
     // A true planning failure backs away first. An outside-map goal still uses the
     // existing short forward point because retreating cannot bring that goal into the map.
     if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
@@ -1811,6 +1866,187 @@ class LeaderSafePathFollower {
       // 失败时继续锁点；成功后也先等正常目标的新轨迹发布再解除。
       setDiffWaitPositionHold(true, status.c_str());
     }
+  }
+
+  void consumeSimpleRelayFront() {
+    if (active_relay_index_ >= relay_waypoints_.size()) return;
+    const std::size_t consumed = active_relay_index_;
+    relay_waypoints_.erase(relay_waypoints_.begin() + consumed);
+    const std::size_t invalid = std::numeric_limits<std::size_t>::max();
+    auto adjust_index = [consumed, invalid](std::size_t* index) {
+      if (*index == invalid) return;
+      if (*index == consumed)
+        *index = invalid;
+      else if (*index > consumed)
+        --(*index);
+    };
+    adjust_index(&exit_waypoint_index_);
+    adjust_index(&outside_wait_waypoint_index_);
+    adjust_index(&terminal_waypoint_index_);
+    publishRelayPath();
+  }
+
+  bool handleSimpleDiffPlannerExecution(const ros::Time& now) {
+    if (active_relay_index_ >= relay_waypoints_.size()) {
+      setDiffWaitPositionHold(true, "waiting for next FIFO segment endpoint");
+      publishState(have_confirmed_door_ ? "DIFF_WAIT_NEXT_SEGMENT_ENDPOINT"
+                                        : "DIFF_WAIT_CONFIRMED_DOOR",
+                   1.0, 0.65, 0.0);
+      return true;
+    }
+
+    const RoutePoint desired_world = relay_waypoints_[active_relay_index_];
+    const bool terminal_relay = terminal_mode_active_ &&
+        active_relay_index_ == terminal_waypoint_index_;
+    const bool outside_wait_relay = outside_wait_waypoint_released_ &&
+        active_relay_index_ == outside_wait_waypoint_index_;
+    const geometry_msgs::Point desired_local = terminal_relay
+        ? worldToFollower(desired_world.position)
+        : useFollowerCruiseHeight(worldToFollower(desired_world.position));
+    const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+
+    // 只保留最基本的双机间距锁点，不发布任何退让坐标。前机重新拉开后仍重试同一队首。
+    if (!terminal_relay && enable_diff_separation_safety_ && leaderOdomFresh(now)) {
+      const geometry_msgs::Point leader_world =
+          leaderToWorld(leader_odom_.pose.pose.position);
+      const geometry_msgs::Point follower_world = followerToWorld(current_local);
+      const double separation = std::hypot(leader_world.x - follower_world.x,
+                                           leader_world.y - follower_world.y);
+      if (separation + 1.0e-6 < min_separation_) {
+        if (!simple_separation_hold_active_) {
+          simple_separation_hold_active_ = true;
+          setDiffWaitPositionHold(true, "FIFO spacing hold");
+          diff_goal_published_ = false;
+          diff_accepted_goal_valid_ = false;
+          diff_command_seen_for_goal_ = false;
+          ROS_WARN("[safe_follower] FIFO spacing HOLD %.2fm < %.2fm; keep the same endpoint.",
+                   separation, min_separation_);
+        }
+        publishState("DIFF_FIFO_SPACING_HOLD", 1.0, 0.3, 0.0);
+        return true;
+      }
+      if (simple_separation_hold_active_) {
+        simple_separation_hold_active_ = false;
+        diff_goal_published_ = false;
+        simple_diff_retry_not_before_ = now;
+        ROS_WARN("[safe_follower] FIFO spacing restored to %.2fm; retry same endpoint.",
+                 separation);
+      }
+    }
+
+    const double horizontal_error =
+        std::hypot(desired_local.x - current_local.x,
+                   desired_local.y - current_local.y);
+    const double vertical_error = std::fabs(desired_local.z - current_local.z);
+    const bool strict_arrival = horizontal_error <= relay_arrive_radius_ &&
+        vertical_error <= relay_arrive_z_tolerance_ &&
+        follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
+        follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
+    const bool endpoint_capture = !terminal_relay &&
+        horizontal_error <= diff_endpoint_capture_radius_ &&
+        vertical_error <= relay_arrive_z_tolerance_;
+    if (endpoint_capture && diff_endpoint_capture_stamp_.isZero()) {
+      diff_endpoint_capture_stamp_ = now;
+      setDiffWaitPositionHold(true, "captured FIFO endpoint");
+    }
+    if (!endpoint_capture) diff_endpoint_capture_stamp_ = ros::Time(0);
+    const bool capture_complete = endpoint_capture &&
+        (now - diff_endpoint_capture_stamp_).toSec() >= diff_endpoint_capture_dwell_;
+    if (strict_arrival || capture_complete) {
+      if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
+      const double dwell = capture_complete ? 0.0 : relay_arrive_dwell_;
+      if ((now - relay_arrival_stamp_).toSec() < dwell) return true;
+      if (terminal_relay) {
+        if (!follower_landing_requested_) {
+          std_msgs::Bool request;
+          request.data = true;
+          follower_landing_request_pub_.publish(request);
+          follower_landing_requested_ = true;
+          setFollowerDetectionEnable(false, "follower landing requested");
+          ROS_ERROR("[safe_follower] UAV1 Diff terminal reached; published AUTO.LAND request.");
+        }
+        return true;
+      }
+
+      ROS_ERROR("[safe_follower] UAV1 FIFO ARRIVED and consume endpoint 1/%zu "
+                "at (%.2f,%.2f,%.2f).",
+                relay_waypoints_.size(), desired_local.x, desired_local.y,
+                desired_local.z);
+      if (outside_wait_relay) {
+        outside_wait_arrived_ = true;
+        setFollowerDetectionEnable(false, "follower reached outside-door hover point");
+        tryQueueFollowerTerminalTarget();
+      }
+      setDiffWaitPositionHold(true, "FIFO endpoint arrived");
+      consumeSimpleRelayFront();
+      relay_arrival_stamp_ = ros::Time(0);
+      diff_endpoint_capture_stamp_ = ros::Time(0);
+      diff_goal_published_ = false;
+      diff_plan_response_received_ = false;
+      diff_accepted_goal_valid_ = false;
+      diff_command_seen_for_goal_ = false;
+      diff_goal_first_publish_stamp_ = ros::Time(0);
+      diff_goal_index_ = std::numeric_limits<std::size_t>::max();
+      simple_diff_retry_not_before_ = now;
+      return true;
+    }
+    relay_arrival_stamp_ = ros::Time(0);
+
+    const bool response_timeout = diff_goal_published_ &&
+        !diff_plan_response_received_ && !diff_goal_first_publish_stamp_.isZero() &&
+        (now - diff_goal_first_publish_stamp_).toSec() >= diff_goal_response_timeout_;
+    const bool command_stale = diff_goal_published_ && diff_plan_response_received_ &&
+        ((diff_command_seen_for_goal_ && !diff_command_stamp_.isZero() &&
+          (now - diff_command_stamp_).toSec() >= diff_command_stale_timeout_) ||
+         (!diff_command_seen_for_goal_ && !diff_goal_publish_stamp_.isZero() &&
+          (now - diff_goal_publish_stamp_).toSec() >= diff_command_stale_timeout_));
+    if (response_timeout || command_stale) {
+      setDiffWaitPositionHold(true, response_timeout ? "FIFO Diff response timeout"
+                                                    : "FIFO Diff command stale");
+      diff_goal_published_ = false;
+      diff_plan_response_received_ = false;
+      diff_accepted_goal_valid_ = false;
+      diff_command_seen_for_goal_ = false;
+      diff_goal_first_publish_stamp_ = ros::Time(0);
+      simple_diff_retry_not_before_ = now + ros::Duration(simple_diff_retry_delay_);
+      ROS_ERROR("[safe_follower] UAV1 Diff %s; retry same FIFO endpoint after %.2fs.",
+                response_timeout ? "RESPONSE TIMEOUT" : "COMMAND STALE",
+                simple_diff_retry_delay_);
+      return true;
+    }
+
+    if (!diff_goal_published_ && now >= simple_diff_retry_not_before_) {
+      if (diff_goal_pub_.getNumSubscribers() == 0) {
+        setDiffWaitPositionHold(true, "waiting for Diff subscriber");
+        publishState("WAIT_UAV1_DIFF_SUBSCRIBER", 1.0, 0.4, 0.0);
+        return true;
+      }
+      geometry_msgs::PoseStamped goal;
+      goal.header.stamp = now;
+      goal.header.frame_id = follower_odom_.header.frame_id.empty()
+                                 ? world_frame_ : follower_odom_.header.frame_id;
+      goal.pose.position = desired_local;
+      const double local_yaw = worldYawToFollower(desired_world.yaw);
+      goal.pose.orientation.w = std::cos(local_yaw * 0.5);
+      goal.pose.orientation.z = std::sin(local_yaw * 0.5);
+      stampDiffGoalId(&goal);
+      diff_goal_pub_.publish(goal);
+      diff_goal_index_ = active_relay_index_;
+      diff_goal_published_ = true;
+      diff_plan_response_received_ = false;
+      diff_accepted_goal_valid_ = false;
+      diff_command_seen_for_goal_ = false;
+      diff_goal_publish_stamp_ = now;
+      diff_goal_first_publish_stamp_ = now;
+      publishTarget(desired_world.position);
+      ROS_ERROR("[safe_follower] SEND UAV1 DIFF FIFO endpoint local=(%.2f,%.2f,%.2f), "
+                "queued=%zu.", desired_local.x, desired_local.y, desired_local.z,
+                relay_waypoints_.size());
+    }
+    publishState(terminal_relay ? "UAV1_DIFF_GO_TERMINAL"
+                                : "UAV1_DIFF_GO_FIFO_ENDPOINT",
+                 0.1, 0.8, 1.0);
+    return true;
   }
 
   bool getLaggedTarget(RoutePoint* target, std::size_t* route_index = nullptr) const {
@@ -2960,6 +3196,8 @@ class LeaderSafePathFollower {
   // 2026-07-28: 将前机释放的离散接力点交给UAV1自身Diff；这里只管理顺序、到达和动态紧停，不生成飞行轨迹。
   bool handleDiffPlannerExecution(const ros::Time& now) {
     if (!use_diff_planner_) return false;
+    if (simple_segment_endpoint_following_)
+      return handleSimpleDiffPlannerExecution(now);
     if (handleDiffSeparationSafety(now)) return true;
     if (active_relay_index_ >= relay_waypoints_.size()) {
       // 2026-07-28: 上一点消费后到下一点释放前保持同一个物理锁点，不能让等待位置随里程计漂移重置。
@@ -3488,7 +3726,7 @@ class LeaderSafePathFollower {
           "[safe_follower] leader odometry stale; continue only along cached connected history.");
     }
     // 2026-07-27: 卡死恢复优先于正常连续/离散跟随，避免正常目标每50ms覆盖脱困指令。
-    if (handleStuckRecovery(now)) return;
+    if (!simple_segment_endpoint_following_ && handleStuckRecovery(now)) return;
     if (!leader_started_) {
       hold("leader mission not started");
       return;
@@ -3801,6 +4039,7 @@ class LeaderSafePathFollower {
   std::string dynamic_obstacle_topic_;  // 默认/UAV1/ldop/dynamic_objects。
   bool have_leader_odom_{false}, have_follower_odom_{false};
   bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
+  bool simple_segment_endpoint_following_{false};
   bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
   bool have_leader_landing_target_{false}, terminal_mode_active_{false};
   bool release_uav1_{false};
@@ -3833,6 +4072,7 @@ class LeaderSafePathFollower {
   bool obstacle_check_enabled_{true}, require_fresh_cloud_{true};
   bool diff_separation_hold_active_{false}, separation_recovery_active_{false};
   bool separation_recovery_goal_valid_{false};
+  bool simple_separation_hold_active_{false};
   // 2026-07-27: 后机物理卡死监测与点云选向脱困状态，独立于两机间距恢复逻辑。
   bool motion_monitor_active_{false}, last_command_moving_{false}, recovery_active_{false};
   // 2026-07-22: HOLD目标只在进入等待/故障的首周期锁存，避免随后位置漂移不断改写恢复目标。
@@ -3877,6 +4117,7 @@ class LeaderSafePathFollower {
   double dynamic_retention_route_half_width_{0.70};  // 2026-07-28: 动态保留只覆盖通道中心带，墙边框立即淘汰。
   double diff_goal_retry_period_{1.0};  // 2026-07-28: 仅Diff无任何状态应答时使用的超时重试周期。
   double diff_goal_response_timeout_{2.0};  // 首次发布到任意规划状态的总上限。
+  double simple_diff_retry_delay_{0.20};
   double diff_recovery_arrive_radius_{0.18};  // 2026-07-28: 短子目标切换半径。
   double diff_failure_retreat_distance_{0.40};  // 规划失败后沿已验证路线后退的距离。
   double diff_failure_retreat_arrive_radius_{0.10};
@@ -3937,6 +4178,7 @@ class LeaderSafePathFollower {
   ros::Time terminal_arrival_stamp_, relay_arrival_stamp_;
   ros::Time diff_goal_publish_stamp_;  // 2026-07-28: 防止瞬时假占据导致一次性目标永久失效。
   ros::Time diff_goal_first_publish_stamp_;  // 不被同一点周期重发刷新的总应答计时。
+  ros::Time simple_diff_retry_not_before_;
   ros::Time diff_command_stamp_, diff_endpoint_capture_stamp_;  // 2026-07-28: 轨迹存活与近目标捕获计时。
   ros::Time motion_monitor_start_, recovery_attempt_start_;
   ros::Time blocked_since_;  // 2026-07-27: 当前串行检查点连续被自身点云阻挡的起始时间。

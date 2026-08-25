@@ -113,6 +113,10 @@
         <param name="command_topic" value="/UAV1/planning/pos_cmd"/>
         <!-- 2026-07-28: 禁止接力管理器直控后机，改向UAV1 Diff发布离散目标。 -->
         <param name="use_diff_planner" value="true"/>
+        <!-- 前机每段实际停稳终点按FIFO缓存；后机一次只把队首原坐标交给Diff，
+             到达后删除。失败只重试同一点，不生成候选、裁短或退让目标。 -->
+        <param name="simple_segment_endpoint_following" value="true"/>
+        <param name="simple_diff_retry_delay" value="0.20"/>
         <param name="diff_goal_topic" value="/UAV1/planning/goal"/>
         <!-- 2026-07-28: 仅在3秒内连规划状态都未收到时重发，禁止飞行中1Hz覆盖Diff轨迹。 -->
         <param name="diff_goal_retry_period" value="3.0"/>
