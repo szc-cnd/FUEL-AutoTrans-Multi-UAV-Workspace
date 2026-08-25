@@ -5,11 +5,13 @@
 #include <std_msgs/Empty.h>
 #include <visualization_msgs/Marker.h>
 #include <ros/ros.h>
+#include <std_msgs/Bool.h>
 
 using namespace Eigen;
 
 ros::Publisher pos_cmd_pub;
 ros::Publisher traj_started_pub;
+ros::Publisher safety_hold_pub;
 
 quadrotor_msgs::PositionCommand cmd;
 // double pos_gain[3] = {0, 0, 0};
@@ -37,6 +39,17 @@ double YAW_DOT_DOT_MAX_PER_SEC = 5 * M_PI;
 bool receive_yaw_ = false;
 ros::Time receive_yaw_time_(0);
 bool traj_started_published_ = false;
+bool safety_hold_active_ = false;
+
+void publishSafetyHold(bool active)
+{
+  if (safety_hold_active_ == active)
+    return;
+  std_msgs::Bool msg;
+  msg.data = active;
+  safety_hold_pub.publish(msg);
+  safety_hold_active_ = active;
+}
 
 void heartbeatCallback(std_msgs::EmptyPtr msg)
 {
@@ -87,6 +100,8 @@ void polyTrajCallback(traj_utils::PolyTrajPtr msg)
   traj_id_ = msg->traj_id;
 
   receive_traj_ = true;
+  // 新轨迹确认规划器已恢复，解除traj_server触发的安全锁点。
+  publishSafetyHold(false);
   // 2026-07-07: 新轨迹到来时允许重新发一次 /planning/traj_started，兼容重规划与重复任务启动。
   traj_started_published_ = false;
 }
@@ -215,6 +230,7 @@ void cmdCallback(const ros::TimerEvent &e)
               (time_now - heartbeat_time_).toSec());
 
     receive_traj_ = false;
+    publishSafetyHold(true);
     publish_cmd(last_pos_, Vector3d::Zero(), Vector3d::Zero(), Vector3d::Zero(), last_yaw_, 0);
   }
 
@@ -357,6 +373,7 @@ int main(int argc, char **argv)
   
   pos_cmd_pub = nh.advertise<quadrotor_msgs::PositionCommand>("/position_cmd", 50);
   traj_started_pub = nh.advertise<std_msgs::Empty>("/planning/traj_started", 1, true);
+  safety_hold_pub = nh.advertise<std_msgs::Bool>("safety_hold", 1, false);
 
   ros::Timer cmd_timer = nh.createTimer(ros::Duration(0.01), cmdCallback);
 

@@ -65,9 +65,6 @@
         <!-- 目标被占据时只调整XY并保持0.6m目标高度；自身低处进入膨胀占据时先原地升回0.6m。 -->
         <arg name="enable_occupied_recovery" value="true"/>
         <arg name="preserve_modified_goal_height" value="true"/>
-        <!-- 单线程规划内部若不返回，由独立看门狗SIGKILL并自动拉起干净进程。 -->
-        <arg name="planner_respawn" value="true"/>
-        <arg name="planner_respawn_delay" value="0.2"/>
         <arg name="escape_max_distance" value="0.40"/>
         <arg name="escape_history_time" value="1.50"/>
         <arg name="escape_speed" value="0.10"/>
@@ -80,29 +77,17 @@
         <arg name="point4_x" value="0.0"/><arg name="point4_y" value="0.0"/><arg name="point4_z" value="0.60"/>
     </include>
 
-    <node pkg="diff_planner" type="diff_planner_watchdog.py"
-          name="uav1_diff_planner_watchdog" output="screen" required="true">
-        <param name="planner_node" value="/drone_1_diff_planner_node"/>
-        <param name="expected_executable" value="diff_planner_node"/>
-        <param name="goal_topic" value="$(arg goal_topic)"/>
-        <param name="heartbeat_topic" value="/drone_1_planning/heartbeat"/>
-        <param name="status_topic" value="/drone_1_planning/status"/>
-        <param name="safety_hold_topic" value="/UAV1/planning/safety_hold"/>
-        <!-- 规划窗口为2.0s，心跳阈值留出启动和消息传输余量。 -->
-        <param name="heartbeat_timeout" value="3.0"/>
-        <param name="minimum_goal_age" value="0.4"/>
-        <param name="restart_cooldown" value="2.0"/>
-    </node>
-
-    <!-- 2026-07-28: UAV1 traj_server是后机PositionCommand唯一发布者，并独立发布真实轨迹接管信号。 -->
+    <!-- 2026-07-28: UAV1 traj_server是后机PositionCommand唯一发布者，并负责心跳超时安全锁点。 -->
     <node pkg="diff_planner" name="drone_1_traj_server" type="traj_server" output="screen">
         <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
         <remap from="~planning/trajectory" to="/drone_1_planning/trajectory"/>
         <remap from="/planning/yaw" to="/UAV1/planning/yaw"/>
-        <!-- 与看门狗共用规划器真实心跳；该节点只订阅，不发布心跳。 -->
+        <!-- traj_server只订阅规划器心跳；超时保护固定为2秒。 -->
         <remap from="~heartbeat" to="/drone_1_planning/heartbeat"/>
+        <remap from="~safety_hold" to="/UAV1/planning/safety_hold"/>
         <remap from="/planning/traj_started" to="/UAV1/planning/traj_started"/>
         <param name="traj_server/time_forward" value="0.35" type="double"/>
+        <param name="traj_server/heartbeat_timeout" value="2.0" type="double"/>
         <param name="traj_server/yaw_dot_max" value="1.57" type="double"/>
         <param name="traj_server/yaw_dot_dot_max" value="6.28" type="double"/>
     </node>
