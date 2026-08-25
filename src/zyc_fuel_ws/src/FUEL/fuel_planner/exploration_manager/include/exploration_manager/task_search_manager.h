@@ -180,6 +180,7 @@ private:
   void clearPendingTurnEvidence();
   bool allStage2TargetsFound() const;
   bool goalTemporarilyBlocked(const Eigen::Vector3d& goal) const;
+  bool goalDirectionTemporarilyBlocked(const Eigen::Vector3d& goal) const;
   void publishLandingRequest(bool active);
   void publishSearchState();
   double minDistance2D(const Eigen::Vector3d& point,
@@ -329,6 +330,11 @@ private:
   double max_goal_descent_{0.10};
   double novelty_weight_{2.5};
   double travel_weight_{0.65};
+  double preferred_distance_min_{1.0};
+  double preferred_distance_max_{2.0};
+  double near_distance_weight_{1.5};
+  double far_distance_weight_{1.2};
+  double direction_sector_rad_{30.0 * M_PI / 180.0};
   double yaw_weight_{0.20};
   double height_weight_{2.0};
   double repeat_penalty_{6.0};
@@ -351,6 +357,13 @@ private:
   double goal_switch_weight_{1.2};
   double failed_goal_radius_{0.55};
   double failed_goal_cooldown_{2.0};
+  int failed_direction_threshold_{2};
+  double failed_direction_pause_{3.0};
+  Eigen::Vector2d recent_failed_direction_{0.0, 0.0};
+  ros::Time recent_failed_direction_stamp_;
+  int recent_failed_direction_count_{0};
+  Eigen::Vector2d paused_failed_direction_{0.0, 0.0};
+  ros::Time failed_direction_pause_until_;
   double inside_return_margin_{0.10};
   double entry_path_direction_grace_distance_{1.50};
   // 单通道转弯：旧轴前方终止后，直接从占据图选择仍在延伸的自由分支。

@@ -39,6 +39,19 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/max_goal_descent", max_goal_descent_, 0.10);
   nh.param("mission/task_search/novelty_weight", novelty_weight_, 2.5);
   nh.param("mission/task_search/travel_weight", travel_weight_, 0.65);
+  nh.param("mission/task_search/preferred_distance_min", preferred_distance_min_, 1.0);
+  nh.param("mission/task_search/preferred_distance_max", preferred_distance_max_, 2.0);
+  nh.param("mission/task_search/near_distance_weight", near_distance_weight_, 1.5);
+  nh.param("mission/task_search/far_distance_weight", far_distance_weight_, 1.2);
+  double direction_sector_deg = 30.0;
+  nh.param("mission/task_search/direction_sector_deg", direction_sector_deg, 30.0);
+  preferred_distance_min_ = std::max(0.0, preferred_distance_min_);
+  preferred_distance_max_ =
+      std::max(preferred_distance_min_, preferred_distance_max_);
+  near_distance_weight_ = std::max(0.0, near_distance_weight_);
+  far_distance_weight_ = std::max(0.0, far_distance_weight_);
+  direction_sector_rad_ =
+      std::max(5.0, std::min(180.0, direction_sector_deg)) * M_PI / 180.0;
   nh.param("mission/task_search/yaw_weight", yaw_weight_, 0.20);
   nh.param("mission/task_search/height_weight", height_weight_, 2.0);
   nh.param("mission/task_search/repeat_penalty", repeat_penalty_, 6.0);
@@ -71,6 +84,12 @@ void TaskSearchManager::initialize(ros::NodeHandle& nh) {
   nh.param("mission/task_search/goal_switch_weight", goal_switch_weight_, 1.2);
   nh.param("mission/task_search/failed_goal_radius", failed_goal_radius_, 0.55);
   nh.param("mission/task_search/failed_goal_cooldown", failed_goal_cooldown_, 2.0);
+  nh.param("mission/task_search/failed_direction_threshold",
+           failed_direction_threshold_, 2);
+  nh.param("mission/task_search/failed_direction_pause",
+           failed_direction_pause_, 3.0);
+  failed_direction_threshold_ = std::max(2, failed_direction_threshold_);
+  failed_direction_pause_ = std::max(0.0, failed_direction_pause_);
   nh.param("mission/task_search/inside_return_margin", inside_return_margin_, 0.10);
   nh.param("mission/task_search/entry_path_direction_grace_distance",
            entry_path_direction_grace_distance_, 1.50);
@@ -1049,17 +1068,27 @@ int TaskSearchManager::selectSearchCandidate(
     motion_forward = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
   motion_forward.normalize();
   int best_idx = -1;
-  int best_non_backward_idx = -1;
   int rejected_revisit = 0;
   int rejected_failed = 0;
   int rejected_door_return = 0;
   int rejected_exit_regression = 0;
+  struct RankedCandidate {
+    int index{-1};
+    int direction_sector{0};
+    bool backward{false};
+    double direction_score{0.0};
+    double score{0.0};
+    double travel{0.0};
+    double clearance{0.0};
+    double clearance_reward{0.0};
+  };
+  std::vector<RankedCandidate> ranked_candidates;
+  ranked_candidates.reserve(points.size());
   double best_score = std::numeric_limits<double>::infinity();
-  double best_non_backward_score = std::numeric_limits<double>::infinity();
   double best_clearance = 0.0;
   double best_clearance_reward = 0.0;
-  double best_non_backward_clearance = 0.0;
-  double best_non_backward_clearance_reward = 0.0;
+  double best_travel = 0.0;
+  int selected_sector = -1;
 
   // 2026-07-20: 终点未确认（或拓扑距离不足）时该保护完全关闭，下面原有的全体最优回退
   // 继续允许U形通道掉头；只有可信最终出口出现后才开始约束普通frontier。
@@ -1108,7 +1137,7 @@ int TaskSearchManager::selectSearchCandidate(
 
   for (size_t i = 0; i < points.size(); ++i) {
     const Eigen::Vector3d& point = points[i];
-    if (goalTemporarilyBlocked(point)) {
+    if (goalTemporarilyBlocked(point) || goalDirectionTemporarilyBlocked(point)) {
       ++rejected_failed;
       continue;
     }
@@ -1180,75 +1209,93 @@ int TaskSearchManager::selectSearchCandidate(
               clearance, clearance_reward_start_, clearance_reward_full_,
               clearance_reward_max_)
         : 0.0;
-    double score = travel_weight_ * travel + yaw_weight_ * yaw_cost +
-                   height_weight_ * height_cost - novelty_weight_ * std::min(2.0, novelty) -
-                   frontier_gain_weight_ * frontier_gain - clearance_reward;
+    // 方向评分有意不含距离：远frontier仍然可以提供正确的探索方向。
+    double direction_score = yaw_weight_ * yaw_cost + height_weight_ * height_cost -
+                             novelty_weight_ * std::min(2.0, novelty) -
+                             frontier_gain_weight_ * frontier_gain - clearance_reward;
     // 前向只作为软偏好：正前方获得完整加分，斜前方按投影加分，横向和后方不加分也不拒绝。
     // 使用稳定通道方向而非瞬时机头角，避免避障转头时把合法横移误判成回头。
     const Eigen::Vector2d candidate_delta = point.head<2>() - cur_pos.head<2>();
     if (prefer_motion_forward_ && candidate_delta.norm() > 1e-3) {
       const double forward_alignment =
           candidate_delta.normalized().dot(motion_forward.normalized());
-      score += task_search::viewpointDirectionScoreAdjustment(
+      direction_score += task_search::viewpointDirectionScoreAdjustment(
           forward_alignment, forward_viewpoint_bonus_, backward_viewpoint_penalty_);
     }
     // 2026-07-14: 仅对仍有效且尚未到达的活动目标施加连续性代价；失败目标已由
     // reportGoalFailure 失效，不会阻止规划器绕开真正不可达的位置。
     if (active_goal_valid_ && !goalTemporarilyBlocked(active_goal_) &&
         (cur_pos.head<2>() - active_goal_.head<2>()).norm() > 0.35) {
-      score += goal_switch_weight_ *
-               (point.head<2>() - active_goal_.head<2>()).norm();
+      direction_score += goal_switch_weight_ *
+                         (point.head<2>() - active_goal_.head<2>()).norm();
     }
-    if (goal_distance < repeat_goal_radius_) score += repeat_penalty_;
+    if (goal_distance < repeat_goal_radius_) direction_score += repeat_penalty_;
 
     // 2026-07-13: 固定门方向只用于刚穿门后的短距离；进入通道深处后由未搜索覆盖决定方向，允许正常拐弯。
     if (entry_forward_phase) {
       const double progress = (point - corridor_origin_).dot(corridor_dir_);
-      score -= entry_forward_weight_ * std::max(0.0, progress - current_progress);
-      if (progress < current_progress - 0.10) score += repeat_penalty_;
-    }
-    if (score < best_score) {
-      best_score = score;
-      best_idx = static_cast<int>(i);
-      best_clearance = clearance;
-      best_clearance_reward = clearance_reward;
+      direction_score -=
+          entry_forward_weight_ * std::max(0.0, progress - current_progress);
+      if (progress < current_progress - 0.10) direction_score += repeat_penalty_;
     }
     const bool is_backward =
         candidate_delta.norm() > 0.35 &&
         candidate_delta.normalized().dot(motion_forward) < backward_cos_threshold_;
-    if (!is_backward && score < best_non_backward_score) {
-      best_non_backward_score = score;
-      best_non_backward_idx = static_cast<int>(i);
-      best_non_backward_clearance = clearance;
-      best_non_backward_clearance_reward = clearance_reward;
-    }
+    const double distance_cost =
+        travel_weight_ * travel + task_search::preferredDistanceCost(
+                                      travel, preferred_distance_min_,
+                                      preferred_distance_max_, near_distance_weight_,
+                                      far_distance_weight_);
+    ranked_candidates.push_back(
+        {static_cast<int>(i),
+         task_search::directionSector(candidate_delta, motion_forward,
+                                      direction_sector_rad_),
+         is_backward, direction_score, direction_score + distance_cost, travel,
+         clearance, clearance_reward});
   }
 
-  // 后方候选仍执行硬拒绝；前向加分只负责在合法的前向/横向/斜向候选中加速排序。
-  if (prefer_motion_forward_) {
-    if (best_non_backward_idx >= 0) {
-      best_idx = best_non_backward_idx;
-      best_score = best_non_backward_score;
-      best_clearance = best_non_backward_clearance;
-      best_clearance_reward = best_non_backward_clearance_reward;
-    } else if (best_idx >= 0 && !allow_search_backtrack_) {
-      ROS_ERROR_THROTTLE(1.0,
-                         "[task_search] reject backward-only frontier set; hold for forward map "
-                         "update instead of returning through completed corridor.");
-      best_idx = -1;
-      best_score = std::numeric_limits<double>::infinity();
+  const bool have_non_backward = std::any_of(
+      ranked_candidates.begin(), ranked_candidates.end(),
+      [](const RankedCandidate& candidate) { return !candidate.backward; });
+  if (prefer_motion_forward_ && !have_non_backward && !ranked_candidates.empty() &&
+      !allow_search_backtrack_) {
+    ROS_ERROR_THROTTLE(1.0,
+                       "[task_search] reject backward-only frontier set; hold for forward map "
+                       "update instead of returning through completed corridor.");
+  } else {
+    const bool require_non_backward = prefer_motion_forward_ && have_non_backward;
+    double best_direction_score = std::numeric_limits<double>::infinity();
+    for (const auto& candidate : ranked_candidates) {
+      if (require_non_backward && candidate.backward) continue;
+      if (candidate.direction_score < best_direction_score) {
+        best_direction_score = candidate.direction_score;
+        selected_sector = candidate.direction_sector;
+      }
+    }
+
+    // 方向由全部远近frontier决定；具体目标只在胜出扇区内按1-2m距离带排序。
+    for (const auto& candidate : ranked_candidates) {
+      if ((require_non_backward && candidate.backward) ||
+          candidate.direction_sector != selected_sector)
+        continue;
+      if (candidate.score < best_score) {
+        best_score = candidate.score;
+        best_idx = candidate.index;
+        best_travel = candidate.travel;
+        best_clearance = candidate.clearance;
+        best_clearance_reward = candidate.clearance_reward;
+      }
     }
   }
 
   ROS_WARN("[task_search] candidates=%zu selected=%d rejected_revisit=%d rejected_failed=%d "
            "rejected_door=%d rejected_exit_regression=%d exit_guard=%d "
-           "current_exit_distance=%.2f entry_forward=%d forward_candidate=%d score=%.2f "
+           "current_exit_distance=%.2f entry_forward=%d sector=%d travel=%.2f score=%.2f "
            "clearance=%.2f reward=%.2f.",
            points.size(), best_idx, rejected_revisit, rejected_failed, rejected_door_return,
            rejected_exit_regression, static_cast<int>(final_exit_guard),
            current_distance_to_exit, static_cast<int>(entry_forward_phase),
-           best_non_backward_idx, best_score, best_clearance,
-           best_clearance_reward);
+           selected_sector, best_travel, best_score, best_clearance, best_clearance_reward);
   return best_idx;
 }
 
@@ -1788,11 +1835,39 @@ void TaskSearchManager::recordSelectedGoal(const Eigen::Vector3d& goal) {
 
 void TaskSearchManager::reportGoalFailure(const Eigen::Vector3d& goal) {
   // 2026-07-13: A*/足迹检查失败的目标短时拉黑，规划器不能以 100Hz 重试同一点。
-  failed_goals_.emplace_back(goal, ros::Time::now());
+  const ros::Time now = ros::Time::now();
+  failed_goals_.emplace_back(goal, now);
   while (failed_goals_.size() > 20) failed_goals_.pop_front();
-  if (active_goal_valid_ &&
-      (active_goal_.head<2>() - goal.head<2>()).norm() < failed_goal_radius_)
-    active_goal_valid_ = false;
+  // 任一实际规划/安全失败都必须解除活动目标，否则3s目标保持会把下一轮重新拉回旧点。
+  active_goal_valid_ = false;
+
+  Eigen::Vector3d robot_pos;
+  bool robot_pose_valid = false;
+  {
+    std::lock_guard<std::mutex> lock(body_cloud_mutex_);
+    robot_pos = latest_robot_pos_;
+    robot_pose_valid = latest_robot_pose_valid_;
+  }
+  const Eigen::Vector2d failed_delta = goal.head<2>() - robot_pos.head<2>();
+  if (!robot_pose_valid || failed_delta.norm() < 0.20) return;
+
+  const Eigen::Vector2d failed_direction = failed_delta.normalized();
+  const bool same_recent_direction =
+      recent_failed_direction_.norm() > 1e-3 &&
+      (now - recent_failed_direction_stamp_).toSec() <= failed_goal_cooldown_ &&
+      failed_direction.dot(recent_failed_direction_) >= std::cos(direction_sector_rad_);
+  recent_failed_direction_count_ = same_recent_direction
+                                       ? recent_failed_direction_count_ + 1
+                                       : 1;
+  recent_failed_direction_ = failed_direction;
+  recent_failed_direction_stamp_ = now;
+  if (recent_failed_direction_count_ >= failed_direction_threshold_) {
+    paused_failed_direction_ = failed_direction;
+    failed_direction_pause_until_ = now + ros::Duration(failed_direction_pause_);
+    recent_failed_direction_count_ = 0;
+    ROS_WARN("[task_search] pause repeatedly failed direction for %.1fs.",
+             failed_direction_pause_);
+  }
 }
 
 bool TaskSearchManager::goalTemporarilyBlocked(const Eigen::Vector3d& goal) const {
@@ -1803,6 +1878,26 @@ bool TaskSearchManager::goalTemporarilyBlocked(const Eigen::Vector3d& goal) cons
       return true;
   }
   return false;
+}
+
+bool TaskSearchManager::goalDirectionTemporarilyBlocked(
+    const Eigen::Vector3d& goal) const {
+  const ros::Time now = ros::Time::now();
+  if (paused_failed_direction_.norm() < 1e-3 ||
+      now > failed_direction_pause_until_)
+    return false;
+
+  Eigen::Vector3d robot_pos;
+  bool robot_pose_valid = false;
+  {
+    std::lock_guard<std::mutex> lock(body_cloud_mutex_);
+    robot_pos = latest_robot_pos_;
+    robot_pose_valid = latest_robot_pose_valid_;
+  }
+  const Eigen::Vector2d candidate_delta = goal.head<2>() - robot_pos.head<2>();
+  if (!robot_pose_valid || candidate_delta.norm() < 0.20) return false;
+  return candidate_delta.normalized().dot(paused_failed_direction_) >=
+         std::cos(0.5 * direction_sector_rad_);
 }
 
 void TaskSearchManager::colorDetectionCallback(const geometry_msgs::PoseStampedConstPtr& msg) {

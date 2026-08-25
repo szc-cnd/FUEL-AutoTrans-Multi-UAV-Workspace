@@ -83,6 +83,38 @@ inline double viewpointDirectionScoreAdjustment(double forward_alignment,
          backward_penalty * std::max(0.0, -forward_alignment);
 }
 
+inline double preferredDistanceCost(double distance, double preferred_min,
+                                    double preferred_max, double near_weight,
+                                    double far_weight) {
+  const double minimum = std::max(0.0, preferred_min);
+  const double maximum = std::max(minimum, preferred_max);
+  if (distance < minimum)
+    return std::max(0.0, near_weight) * (minimum - distance);
+  if (distance > maximum)
+    return std::max(0.0, far_weight) * (distance - maximum);
+  return 0.0;
+}
+
+inline int directionSector(const Eigen::Vector2d& direction,
+                           const Eigen::Vector2d& reference,
+                           double sector_width_rad) {
+  if (direction.norm() < 1e-6 || reference.norm() < 1e-6) return 0;
+  const double width = std::max(1.0 * M_PI / 180.0,
+                                std::min(2.0 * M_PI, sector_width_rad));
+  const int sector_count = std::max(1, static_cast<int>(std::ceil(2.0 * M_PI / width)));
+  const Eigen::Vector2d unit_direction = direction.normalized();
+  const Eigen::Vector2d unit_reference = reference.normalized();
+  const double relative_angle = std::atan2(
+      unit_reference.x() * unit_direction.y() -
+          unit_reference.y() * unit_direction.x(),
+      unit_reference.dot(unit_direction));
+  int sector = static_cast<int>(
+      std::floor((relative_angle + M_PI + 0.5 * width) / width));
+  sector %= sector_count;
+  if (sector < 0) sector += sector_count;
+  return sector;
+}
+
 inline bool insideForwardHalfPlane(const Eigen::Vector2d& direction,
                                    const Eigen::Vector2d& mission_inside_direction) {
   if (direction.norm() < 1e-6 || mission_inside_direction.norm() < 1e-6) return true;

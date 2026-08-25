@@ -25,6 +25,34 @@ int main() {
                        1.0, 5.0, 5.0) + 5.0) < 1e-9);
   assert(std::fabs(fast_planner::task_search::viewpointDirectionScoreAdjustment(
                        -1.0, 5.0, 5.0) - 5.0) < 1e-9);
+  // 1-2m是零附加代价的优选带；过近和过远只受各自一侧的线性惩罚。
+  assert(std::fabs(fast_planner::task_search::preferredDistanceCost(
+                       1.0, 1.0, 2.0, 1.5, 1.2)) < 1e-9);
+  assert(std::fabs(fast_planner::task_search::preferredDistanceCost(
+                       2.0, 1.0, 2.0, 1.5, 1.2)) < 1e-9);
+  assert(std::fabs(fast_planner::task_search::preferredDistanceCost(
+                       0.5, 1.0, 2.0, 1.5, 1.2) - 0.75) < 1e-9);
+  assert(std::fabs(fast_planner::task_search::preferredDistanceCost(
+                       3.0, 1.0, 2.0, 1.5, 1.2) - 1.2) < 1e-9);
+  // 扇区以稳定前进方向为零度中心，边界两侧的小角度候选不会被拆开。
+  const double sector_width = 30.0 * M_PI / 180.0;
+  const Eigen::Vector2d minus_five(
+      std::cos(-5.0 * M_PI / 180.0), std::sin(-5.0 * M_PI / 180.0));
+  const Eigen::Vector2d plus_five(
+      std::cos(5.0 * M_PI / 180.0), std::sin(5.0 * M_PI / 180.0));
+  const Eigen::Vector2d plus_forty(
+      std::cos(40.0 * M_PI / 180.0), std::sin(40.0 * M_PI / 180.0));
+  const int forward_sector = fast_planner::task_search::directionSector(
+      Eigen::Vector2d(1.0, 0.0), Eigen::Vector2d(1.0, 0.0), sector_width);
+  assert(fast_planner::task_search::directionSector(
+             minus_five, Eigen::Vector2d(1.0, 0.0), sector_width) ==
+         forward_sector);
+  assert(fast_planner::task_search::directionSector(
+             plus_five, Eigen::Vector2d(1.0, 0.0), sector_width) ==
+         forward_sector);
+  assert(fast_planner::task_search::directionSector(
+             plus_forty, Eigen::Vector2d(1.0, 0.0), sector_width) !=
+         forward_sector);
   assert(fast_planner::task_search::insideForwardHalfPlane(
       Eigen::Vector2d(1.0, 0.0), Eigen::Vector2d(1.0, 0.0)));
   assert(fast_planner::task_search::insideForwardHalfPlane(
