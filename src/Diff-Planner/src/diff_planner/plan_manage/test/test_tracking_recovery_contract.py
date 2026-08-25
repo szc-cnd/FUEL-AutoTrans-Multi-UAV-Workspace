@@ -86,7 +86,12 @@ def test_uav1_hard_watchdog_restarts_only_the_stuck_planner_process():
     assert '<arg name="planner_respawn" value="true"/>' in relay
     assert 'value="/drone_1_planning/heartbeat"' in relay
     assert '<remap from="~heartbeat" to="/drone_1_planning/heartbeat"/>' in relay
+    assert '<arg name="planning_timeout" value="2.0"/>' in relay
+    assert '<param name="heartbeat_timeout" value="3.0"/>' in relay
+    assert '<param name="restart_cooldown" value="2.0"/>' in relay
     assert "os.kill(pid, signal.SIGKILL)" in watchdog
+    assert "self._restart_cooldown" in watchdog
+    assert "self._last_restart" in watchdog
     assert '"PLANNING_FAILED goal_stamp_ns={}"' in watchdog
     assert 'cmdline_path = "/proc/{}/cmdline"' in watchdog
     assert "self._safety_hold_pub.publish(Bool(data=True))" in watchdog

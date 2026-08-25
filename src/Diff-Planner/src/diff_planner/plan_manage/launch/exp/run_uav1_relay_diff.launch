@@ -27,6 +27,8 @@
         <arg name="max_vel" value="$(arg max_vel)"/>
         <arg name="max_acc" value="$(arg max_acc)"/>
         <arg name="max_jer" value="8.0"/>
+        <!-- 后机点云建图与优化共享单线程回调，给一次困难目标留出完整的规划窗口。 -->
+        <arg name="planning_timeout" value="2.0"/>
         <arg name="planning_horizon" value="8.0"/>
         <arg name="waypoint_switch_dist" value="0.12"/>
         <!-- 2026-07-28: 20m局部窗口覆盖当前U形通道，UAV1点云独立形成静态避障地图。 -->
@@ -86,8 +88,10 @@
         <param name="heartbeat_topic" value="/drone_1_planning/heartbeat"/>
         <param name="status_topic" value="/drone_1_planning/status"/>
         <param name="safety_hold_topic" value="/UAV1/planning/safety_hold"/>
-        <param name="heartbeat_timeout" value="1.2"/>
+        <!-- 规划窗口为2.0s，心跳阈值留出启动和消息传输余量。 -->
+        <param name="heartbeat_timeout" value="3.0"/>
         <param name="minimum_goal_age" value="0.4"/>
+        <param name="restart_cooldown" value="2.0"/>
     </node>
 
     <!-- 2026-07-28: UAV1 traj_server是后机PositionCommand唯一发布者，并独立发布真实轨迹接管信号。 -->

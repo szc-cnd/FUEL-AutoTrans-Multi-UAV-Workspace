@@ -119,7 +119,8 @@ add_library(ldop_core
 
 # 只让LDOP目标使用C++20，避免在catkin单体构建中把该标准泄漏给后续
 # 仍使用ROS Noetic/C++11的飞控与规划包。
-target_compile_features(ldop_core PUBLIC cxx_std_20)
+# LDOP 自身使用 C++20，但不能把标准要求传播给同一工作空间里的 ROS Noetic 包。
+target_compile_features(ldop_core PRIVATE cxx_std_20)
 set_target_properties(ldop_core PROPERTIES CXX_EXTENSIONS OFF)
 
 # add_dependencies(...) 用来声明“编译顺序依赖”。
@@ -129,10 +130,10 @@ add_dependencies(ldop_core ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED
 # 这里 ldop_core 需要使用 roscpp、UFOMap 和线程库。
 target_link_libraries(ldop_core PUBLIC
   ${catkin_LIBRARIES}
-  UFO::Map
   liblzf::liblzf
   ${CMAKE_THREAD_LIBS_INIT}
 )
+target_link_libraries(ldop_core PRIVATE UFO::Map)
 
 # add_executable(...) 定义一个可执行文件。
 # 这里生成的是节点程序 ldop_node，

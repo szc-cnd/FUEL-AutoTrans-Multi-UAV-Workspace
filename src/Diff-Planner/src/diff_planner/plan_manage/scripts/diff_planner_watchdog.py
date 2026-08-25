@@ -33,10 +33,12 @@ class DiffPlannerWatchdog:
         )
         self._heartbeat_timeout = float(rospy.get_param("~heartbeat_timeout", 1.2))
         self._minimum_goal_age = float(rospy.get_param("~minimum_goal_age", 0.4))
+        self._restart_cooldown = float(rospy.get_param("~restart_cooldown", 2.0))
         self._lock = threading.Lock()
         self._pending_goal_stamp_ns = 0
         self._pending_since = 0.0
         self._last_heartbeat = time.monotonic()
+        self._last_restart = 0.0
         self._restart_in_progress = False
 
         goal_topic = rospy.get_param("~goal_topic", "/UAV1/planning/goal")
@@ -125,6 +127,7 @@ class DiffPlannerWatchdog:
                 or self._restart_in_progress
                 or goal_age < self._minimum_goal_age
                 or heartbeat_age < self._heartbeat_timeout
+                or now - self._last_restart < self._restart_cooldown
             ):
                 return
             self._restart_in_progress = True
@@ -143,6 +146,8 @@ class DiffPlannerWatchdog:
             # 旧轨迹并锁当前位置，再终止规划进程；上层收到失败回执后会继续锁点。
             self._safety_hold_pub.publish(Bool(data=True))
             os.kill(pid, signal.SIGKILL)
+            with self._lock:
+                self._last_restart = time.monotonic()
             self._status_pub.publish(
                 String(data="PLANNING_FAILED goal_stamp_ns={}".format(goal_stamp_ns))
             )
