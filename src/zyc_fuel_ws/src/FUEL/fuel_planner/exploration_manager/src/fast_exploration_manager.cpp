@@ -536,8 +536,7 @@ bool FastExplorationManager::isLowProbeCorridorSafe(
 
 bool FastExplorationManager::buildVerticalDetourFallback(
     const Vector3d& pos, double cur_yaw, const Vector3d& forward,
-    Vector3d& next_pos, double& next_yaw,
-    bool require_map_confirmed_underpass) {
+    Vector3d& next_pos, double& next_yaw) {
   if (!vertical_detour_enabled_ || forward.head<2>().norm() < 1e-3 ||
       low_probe_phase_ != vertical_detour::LowProbePhase::IDLE)
     return false;
@@ -573,22 +572,6 @@ bool FastExplorationManager::buildVerticalDetourFallback(
              pos.z(), low_z, pos.x(), pos.y(), cur_yaw * 180.0 / M_PI);
     return true;
   };
-
-  // 同高度正前方已经不可达时，若地图明确显示原地下降柱以及低位正前短管道
-  // 都安全，则将其识别为悬空障碍下穿，并优先于任何侧向贴墙恢复。
-  if (require_map_confirmed_underpass) {
-    Vector3d low_start = pos;
-    low_start.z() = vertical_detour_low_height_;
-    if (pos.z() > vertical_detour_low_height_ + vertical_detour_height_tolerance_ &&
-        isLowProbeCorridorSafe(low_start, direction,
-                               vertical_detour_forward_check_distance_) &&
-        startLowProbe()) {
-      ROS_WARN("[vertical_detour] mapped underpass confirmed below suspended obstacle; "
-               "prefer centered low corridor before side-wall recovery.");
-      return true;
-    }
-    return false;
-  }
 
   const bool descend_first = vertical_detour::preferDescending(
       pos.z(), vertical_detour_down_first_height_);
@@ -918,6 +901,26 @@ bool FastExplorationManager::occupiedNearHeight(const Vector3d& point,
   return false;
 }
 
+bool FastExplorationManager::hasCurrentHeightForwardObstacle(
+    const Vector3d& pos, const Vector3d& forward) const {
+  if (!sdf_map_ || forward.head<2>().norm() < 1e-3) return false;
+  const Vector3d travel(forward.head<2>().normalized().x(),
+                        forward.head<2>().normalized().y(), 0.0);
+  const Vector3d lateral(-travel.y(), travel.x(), 0.0);
+  const double sample_step = std::max(0.05, sdf_map_->getResolution());
+  const double max_distance = std::max(vertical_detour_forward_check_distance_,
+                                       wide_side_bypass_max_lookahead_);
+  for (double ahead = sample_step; ahead <= max_distance + 1e-6;
+       ahead += sample_step) {
+    for (double side : {-vertical_detour_footprint_radius_, 0.0,
+                        vertical_detour_footprint_radius_}) {
+      const Vector3d probe = pos + ahead * travel + side * lateral;
+      if (cameraOccupancyColumn(probe, pos.z())) return true;
+    }
+  }
+  return false;
+}
+
 bool FastExplorationManager::hasLowVerticalSupport(
     const Vector3d& point, double current_height) const {
   if (!sdf_map_) return false;
@@ -1164,11 +1167,6 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   const Vector3d recovery_forward = task_search_manager_
                                         ? task_search_manager_->recoveryForwardDirection(cur_yaw)
                                         : Vector3d(std::cos(cur_yaw), std::sin(cur_yaw), 0.0);
-  // 累计地图已经显示下方短通道可通行时，先固定 XY/yaw 降到探测高度；
-  // 到低位后仍由现有确认阶段复查前方，确认安全才放行，不能直接穿越。
-  if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
-                                  true))
-    return true;
   // 竖直障碍物把通道切成左右两路时，先直接去占据地图中净宽更大的一侧。
   // 该场景不参与普通frontier总分，也不等待上下绕行接管。
   bool split_obstacle_detected = false;
@@ -1429,22 +1427,33 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
     }
   }
 
-  if (best_micro_adjustment.valid)
+  // 专用分流检查已经确认左右均无安全落点时，通用微调不能再用一个局部净空
+  // 更高的小步冒充完整侧绕；此时应交给后面的上下绕行。
+  if (vertical_detour::acceptGenericHorizontalFallback(
+          split_obstacle_detected, best_micro_adjustment.valid))
     return commitRecoveryChoice(best_micro_adjustment, true);
-  if (long_side_fallback.valid)
+  if (vertical_detour::acceptGenericHorizontalFallback(
+          split_obstacle_detected, long_side_fallback.valid))
     return commitRecoveryChoice(long_side_fallback, false);
-  // 已知是水平分流障碍时，下降不会绕过贯穿当前高度的占据区。较宽侧
-  // 暂时还不能落点就等待下一轮地图，不能让低位探测抢占并锁死水平重选。
   if (split_obstacle_detected) {
     ROS_WARN_THROTTLE(
         0.5,
         "[wide_side_bypass] horizontal split remains, but no safe side step is available; "
-        "skip vertical detour and retry from the updated map.");
-    return false;
+        "try vertical recovery after horizontal candidates are exhausted.");
   }
-  // 未被累计地图预先确认的上下绕行仍保持最后尝试，避免盲目下降抢占水平恢复。
-  if (buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw))
+  // 上下绕行严格保持最后尝试，并且必须有当前飞行高度的前方占据证据。
+  // 远目标断连或未知地图本身不能触发下降，避免在空旷道路误判下穿。
+  const bool current_height_obstacle =
+      hasCurrentHeightForwardObstacle(pos, recovery_forward);
+  if (vertical_detour::allowVerticalRecovery(current_height_obstacle) &&
+      buildVerticalDetourFallback(pos, cur_yaw, recovery_forward, next_pos, next_yaw))
     return true;
+  if (!current_height_obstacle) {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[vertical_detour] skip vertical recovery: horizontal candidates exhausted but "
+        "no current-height forward obstacle is confirmed.");
+  }
 
   // 2026-07-28: 日志同时给出短回撤锁状态，区分“没有安全回撤点”和“已回撤、等待重新前进”。
   ROS_WARN_THROTTLE(

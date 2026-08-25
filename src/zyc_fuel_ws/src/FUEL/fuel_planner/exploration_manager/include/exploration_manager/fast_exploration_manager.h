@@ -268,6 +268,8 @@ private:
                            const Vector3d& forward, Vector3d& next_pos,
                            double& next_yaw, bool& split_obstacle_detected);
   bool occupiedNearHeight(const Vector3d& point, double height) const;
+  bool hasCurrentHeightForwardObstacle(const Vector3d& pos,
+                                       const Vector3d& forward) const;
   bool hasLowVerticalSupport(const Vector3d& point,
                              double current_height) const;
   bool planInflationHistoryEscape(const Vector3d& pos, const Vector3d& vel,
@@ -282,8 +284,7 @@ private:
                             const Vector3d& turn_direction);
   bool buildVerticalDetourFallback(const Vector3d& pos, double cur_yaw,
                                    const Vector3d& forward, Vector3d& next_pos,
-                                   double& next_yaw,
-                                   bool require_map_confirmed_underpass = false);
+                                   double& next_yaw);
   bool buildStationaryVerticalDetourPlan(const Vector3d& pos,
                                          const Vector3d& yaw);
   bool handleActiveLowProbe(const Vector3d& pos, Vector3d& next_pos, double& next_yaw,

@@ -33,6 +33,15 @@ inline bool inflationEscapeAllowed(LowProbePhase phase) {
   return phase == LowProbePhase::IDLE;
 }
 
+inline bool acceptGenericHorizontalFallback(bool split_obstacle_detected,
+                                            bool candidate_valid) {
+  return candidate_valid && !split_obstacle_detected;
+}
+
+inline bool allowVerticalRecovery(bool current_height_obstacle_confirmed) {
+  return current_height_obstacle_confirmed;
+}
+
 inline bool groundAscentRecoveryNeeded(
     double current_height, double cruise_height, double height_tolerance,
     int lower_obstacle_count, int minimum_obstacle_count,

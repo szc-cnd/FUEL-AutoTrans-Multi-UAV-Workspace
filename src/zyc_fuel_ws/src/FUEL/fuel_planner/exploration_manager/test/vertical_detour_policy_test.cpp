@@ -6,6 +6,8 @@ int main() {
   using fast_planner::vertical_detour::LowProbePhase;
   using fast_planner::vertical_detour::LowProbeObservation;
   using fast_planner::vertical_detour::advanceLowProbe;
+  using fast_planner::vertical_detour::acceptGenericHorizontalFallback;
+  using fast_planner::vertical_detour::allowVerticalRecovery;
   using fast_planner::vertical_detour::ascentShouldAbort;
   using fast_planner::vertical_detour::inflationEscapeAllowed;
   using fast_planner::vertical_detour::groundAscentRecoveryNeeded;
@@ -21,6 +23,15 @@ int main() {
   assert(!ascentShouldAbort(0.08, 0.08, 3.9, 4.0));
   assert(ascentShouldAbort(0.081, 0.08, 3.9, 4.0));
   assert(ascentShouldAbort(0.0, 0.08, 4.0, 4.0));
+
+  // 分流障碍的专用侧绕失败后，通用微调不能抢占上下绕行。
+  assert(acceptGenericHorizontalFallback(false, true));
+  assert(!acceptGenericHorizontalFallback(true, true));
+  assert(!acceptGenericHorizontalFallback(false, false));
+
+  // 远目标断连或未知地图不能单独触发上下绕行。
+  assert(allowVerticalRecovery(true));
+  assert(!allowVerticalRecovery(false));
 
   // 只有低于巡航层、下方存在足够占据支撑且整根上升柱安全时才抢占水平逃逸。
   assert(groundAscentRecoveryNeeded(0.22, 0.60, 0.06, 3, 2, true));
