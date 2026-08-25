@@ -451,7 +451,9 @@ bool FastExplorationManager::buildGroundAscentPlan(
   if (!ground_ascent_active_) {
     if (!shouldStartGroundAscent(pos)) return false;
     ground_ascent_active_ = true;
-    ground_ascent_optional_ = false;
+    // 0.6 m remains the preferred cruise layer, but low-altitude recovery must
+    // not monopolize planning when the vehicle cannot settle or climb safely.
+    ground_ascent_optional_ = true;
     ground_ascent_yaw_ = yaw[0];
     ground_ascent_target_ = pos;
     ground_ascent_target_.z() = task_search_manager_
@@ -461,8 +463,8 @@ bool FastExplorationManager::buildGroundAscentPlan(
     ground_ascent_anchor_valid_ = false;
     ground_ascent_still_since_ = ros::Time(0);
     cancelActiveLowProbe("ground ascent recovery owns xy/yaw");
-    ROS_ERROR("[ground_ascent] activate before horizontal escape: z=%.2f -> %.2f, "
-              "hold xy/yaw after one stationary confirmation.",
+    ROS_ERROR("[ground_ascent] try before horizontal escape: z=%.2f -> %.2f, "
+              "resume normal planning if stationary or climb conditions are unavailable.",
               pos.z(), ground_ascent_target_.z());
   }
 
@@ -494,7 +496,7 @@ bool FastExplorationManager::buildGroundAscentPlan(
       ground_ascent_optional_ = false;
       ground_ascent_anchor_valid_ = false;
       ground_ascent_still_since_ = ros::Time(0);
-      ROS_WARN("[ground_ascent] post-turn recovery to fixed %.2fm yielded: "
+      ROS_WARN("[ground_ascent] optional recovery to fixed %.2fm yielded: "
                "speed %.3fm/s is not stationary; keep the configured cruise "
                "height and resume normal planning.",
                ground_ascent_target_.z(), speed);
@@ -540,7 +542,7 @@ bool FastExplorationManager::buildGroundAscentPlan(
       ground_ascent_optional_ = false;
       ground_ascent_anchor_valid_ = false;
       ground_ascent_still_since_ = ros::Time(0);
-      ROS_WARN("[ground_ascent] post-turn recovery to fixed %.2fm is unavailable; "
+      ROS_WARN("[ground_ascent] optional recovery to fixed %.2fm is unavailable; "
                "keep the configured cruise height and resume normal planning.",
                ground_ascent_target_.z());
     }
