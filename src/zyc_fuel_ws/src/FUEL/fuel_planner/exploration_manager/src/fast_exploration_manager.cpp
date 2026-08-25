@@ -451,6 +451,7 @@ bool FastExplorationManager::buildGroundAscentPlan(
   if (!ground_ascent_active_) {
     if (!shouldStartGroundAscent(pos)) return false;
     ground_ascent_active_ = true;
+    ground_ascent_optional_ = false;
     ground_ascent_yaw_ = yaw[0];
     ground_ascent_target_ = pos;
     ground_ascent_target_.z() = task_search_manager_
@@ -479,6 +480,7 @@ bool FastExplorationManager::buildGroundAscentPlan(
         ground_ascent_still_confirm_time_)
       return false;
     ground_ascent_active_ = false;
+    ground_ascent_optional_ = false;
     ground_ascent_anchor_valid_ = false;
     ground_ascent_still_since_ = ros::Time(0);
     ROS_ERROR("[ground_ascent] cruise height %.2fm confirmed; resume horizontal planning.",
@@ -487,6 +489,17 @@ bool FastExplorationManager::buildGroundAscentPlan(
   }
 
   if (!std::isfinite(speed) || speed > ground_ascent_max_stationary_speed_) {
+    if (ground_ascent_optional_) {
+      ground_ascent_active_ = false;
+      ground_ascent_optional_ = false;
+      ground_ascent_anchor_valid_ = false;
+      ground_ascent_still_since_ = ros::Time(0);
+      ROS_WARN("[ground_ascent] post-turn recovery to fixed %.2fm yielded: "
+               "speed %.3fm/s is not stationary; keep the configured cruise "
+               "height and resume normal planning.",
+               ground_ascent_target_.z(), speed);
+      return false;
+    }
     ground_ascent_still_since_ = ros::Time(0);
     ROS_WARN_THROTTLE(0.5,
                       "[ground_ascent] wait for brake: speed=%.3fm/s limit=%.3fm/s.",
@@ -511,16 +524,28 @@ bool FastExplorationManager::buildGroundAscentPlan(
   ground_ascent_anchor_ = pos;
   ground_ascent_target_.x() = pos.x();
   ground_ascent_target_.y() = pos.y();
-  if (!isKnownSafeGroundAscentPath(start, ground_ascent_target_)) return false;
   const bool controlled_escape =
       planner_manager_->isControlledEscapePosition(start);
-  if (!planner_manager_->planVerticalTraj(start, ground_ascent_target_) ||
-      !planner_manager_->isTrajectorySafe(0.03, controlled_escape) ||
-      (controlled_escape && !planner_manager_->trajectoryClearsInflation(
-                                std::fabs(ground_ascent_target_.z() - start.z()) + 0.15,
-                                0.02, true)))
+  const bool ascent_ready =
+      isKnownSafeGroundAscentPath(start, ground_ascent_target_) &&
+      planner_manager_->planVerticalTraj(start, ground_ascent_target_) &&
+      planner_manager_->isTrajectorySafe(0.03, controlled_escape) &&
+      (!controlled_escape || planner_manager_->trajectoryClearsInflation(
+                                 std::fabs(ground_ascent_target_.z() - start.z()) + 0.15,
+                                 0.02, true)) &&
+      planner_manager_->planYawTurnInPlace(yaw, ground_ascent_yaw_);
+  if (!ascent_ready) {
+    if (ground_ascent_optional_) {
+      ground_ascent_active_ = false;
+      ground_ascent_optional_ = false;
+      ground_ascent_anchor_valid_ = false;
+      ground_ascent_still_since_ = ros::Time(0);
+      ROS_WARN("[ground_ascent] post-turn recovery to fixed %.2fm is unavailable; "
+               "keep the configured cruise height and resume normal planning.",
+               ground_ascent_target_.z());
+    }
     return false;
-  if (!planner_manager_->planYawTurnInPlace(yaw, ground_ascent_yaw_)) return false;
+  }
 
   ed_->path_next_goal_ = {start, 0.5 * (start + ground_ascent_target_),
                           ground_ascent_target_};
@@ -1756,14 +1781,15 @@ void FastExplorationManager::completeTurnInPlace(const Vector3d& pos) {
     // 转弯结束后不允许把避障造成的实时低高度继续当成新通道的目标高度。
     // 复用已有固定 XY/yaw 垂直恢复，只增加这一处明确触发，不建立新状态机。
     ground_ascent_active_ = true;
+    ground_ascent_optional_ = true;
     ground_ascent_anchor_valid_ = false;
     ground_ascent_still_since_ = ros::Time(0);
     ground_ascent_target_ = pos;
     ground_ascent_target_.z() = cruise_height;
     ground_ascent_yaw_ = turn_in_place_final_yaw_;
     cancelActiveLowProbe("post-turn cruise-height recovery owns xy/yaw");
-    ROS_ERROR("[ground_ascent] turn completed at z=%.2f; hold new yaw and recover "
-              "at fixed XY to default %.2fm before translation.",
+    ROS_ERROR("[ground_ascent] turn completed at z=%.2f; try fixed-XY recovery "
+              "to default %.2fm before translation; failure will resume normal planning.",
               pos.z(), cruise_height);
   }
   turn_in_place_session_active_ = false;

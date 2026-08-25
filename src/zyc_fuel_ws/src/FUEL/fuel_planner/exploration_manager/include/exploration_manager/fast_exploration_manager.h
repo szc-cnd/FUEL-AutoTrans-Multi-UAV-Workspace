@@ -200,6 +200,8 @@ private:
   // 当前位置下方出现受支撑障碍时，先固定 XY/yaw 回到巡航高度，再恢复水平搜索。
   bool ground_ascent_enabled_{true};
   bool ground_ascent_active_{false};
+  // 转弯后的 0.60m 高度恢复只是偏好：失败时让出规划权，但不改默认高度。
+  bool ground_ascent_optional_{false};
   bool ground_ascent_plan_{false};
   bool vertical_detour_plan_{false};
   double ground_ascent_cruise_height_{0.60};
