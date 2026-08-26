@@ -311,7 +311,7 @@ run_detection_pane() {
 }
 
 run_planner_pane() {
-  local down_camera_pid="" planner_pid="" rviz_status
+  local down_camera_pid="" launch_status
 
   stop_owned_down_camera() {
     if [[ -n "${down_camera_pid}" ]] && kill -0 "${down_camera_pid}" 2>/dev/null; then
@@ -319,18 +319,6 @@ run_planner_pane() {
       kill -INT "${down_camera_pid}" 2>/dev/null || true
       wait "${down_camera_pid}" 2>/dev/null || true
     fi
-  }
-
-  stop_owned_planner() {
-    if [[ -n "${planner_pid}" ]] && kill -0 "${planner_pid}" 2>/dev/null; then
-      kill -INT "${planner_pid}" 2>/dev/null || true
-      wait "${planner_pid}" 2>/dev/null || true
-    fi
-  }
-
-  stop_owned_planner_and_camera() {
-    stop_owned_planner
-    stop_owned_down_camera
   }
 
   pane_init 6 单机Diff与RViz
@@ -343,26 +331,19 @@ run_planner_pane() {
     sh "${MATCH_WS}/shfiles/run_uav1_sensor_stack.sh" landing &
     down_camera_pid=$!
   fi
-  trap stop_owned_planner_and_camera EXIT INT TERM
+  trap stop_owned_down_camera EXIT INT TERM
   if ! wait_for_topic_message "${DOWN_CAMERA_TOPIC}"; then
-    stop_owned_planner_and_camera
+    stop_owned_down_camera
     trap - EXIT INT TERM
     keep_pane_open
   fi
-  printf '[启动] diff_planner run_swarm.launch 和 UAV1 综合检测 RViz\n'
+  printf '[启动] diff_planner run_swarm.launch 及其原生 RViz 检测布局\n'
   printf '[隔离] 不启动前机接力、双机坐标对齐或搜索精降\n'
-  roslaunch diff_planner run_swarm.launch enable_rviz:=false &
-  planner_pid=$!
-  rosrun rviz rviz \
-    -d "${MATCH_WS}/src/Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz" \
-    /move_base_simple/goal:=/UAV1/planning/goal \
-    /drone__diff_planner_node/goal_point:=/drone_1_diff_planner_node/goal_point \
-    /diff_planner_node/global_list:=/drone_1_diff_planner_node/global_list \
-    /diff_planner_node/a_star_list:=/drone_1_diff_planner_node/a_star_list
-  rviz_status=$?
-  stop_owned_planner_and_camera
+  roslaunch diff_planner run_swarm.launch
+  launch_status=$?
+  stop_owned_down_camera
   trap - EXIT INT TERM
-  printf '[退出] UAV1 综合检测 RViz，返回码=%s\n' "${rviz_status}"
+  printf '[退出] 单机 Diff 与 RViz，返回码=%s\n' "${launch_status}"
   keep_pane_open
 }
 

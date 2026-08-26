@@ -19,6 +19,10 @@ UAV1_DIFF_RVIZ = (
     ROOT.parent
     / "Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz"
 )
+RUN_SWARM_RVIZ = (
+    ROOT.parent
+    / "Diff-Planner/src/diff_planner/plan_manage/launch/include/exp.rviz"
+)
 UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
 UAV1_SEVEN_SCRIPT = (
     ROOT.parents[1] / "shfiles/start_uav1_seven_terminator.sh"
@@ -33,7 +37,8 @@ UAV1_DETECTION_LAUNCH = (
 
 def test_uav1_seven_uses_local_master_and_standalone_diff():
     script = UAV1_SEVEN_SCRIPT.read_text(encoding="utf-8")
-    rviz = UAV1_DIFF_RVIZ.read_text(encoding="utf-8")
+    rviz = RUN_SWARM_RVIZ.read_text(encoding="utf-8")
+    rviz_config = yaml.safe_load(rviz)
 
     assert 'LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"' in script
     assert 'export ROS_MASTER_URI="http://${LOCAL_MASTER_IP}:11311"' in script
@@ -41,8 +46,8 @@ def test_uav1_seven_uses_local_master_and_standalone_diff():
     assert "start_or_reuse_local_master" in script
     assert "roscore" in script
     assert "roslaunch diff_planner run_swarm.launch" in script
-    assert "run_swarm.launch enable_rviz:=false" in script
-    assert "launch/include/uav1_lite.rviz" in script
+    assert "run_swarm.launch enable_rviz:=false" not in script
+    assert "launch/include/uav1_lite.rviz" not in script
     assert 'PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"' in script
     assert 'run_uav1_sensor_stack.sh" landing &' in script
     assert 'wait_for_topic_message "${DOWN_CAMERA_TOPIC}"' in script
@@ -57,9 +62,27 @@ def test_uav1_seven_uses_local_master_and_standalone_diff():
         "/UAV1/vision/qr_debug_image",
         "/UAV1/thermal/debug_image",
         "/UAV1/landing/front/debug_image",
-        "/UAV1/landing/combined_debug_image",
+        "/UAV1/down_camera/image_raw",
     ):
         assert topic in rviz
+
+    def dictionaries(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from dictionaries(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from dictionaries(child)
+
+    displays = list(dictionaries(rviz_config))
+    for topic in (
+        "/drone__diff_planner_node/goal_point",
+        "/diff_planner_node/global_list",
+    ):
+        marker = next(item for item in displays if item.get("Marker Topic") == topic)
+        assert marker["Enabled"] is False
+        assert marker["Value"] is False
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():

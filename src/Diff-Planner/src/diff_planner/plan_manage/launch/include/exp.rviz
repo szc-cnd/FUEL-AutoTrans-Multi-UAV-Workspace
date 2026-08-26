@@ -574,13 +574,68 @@ Visualization Manager:
                 drone: true
               Queue Size: 100
               Value: true
+            - Class: rviz/MarkerArray
+              Enabled: true
+              Marker Topic: /UAV1/target_reporting/markers
+              Name: UAV1 detection targets
+              Namespaces: {}
+              Queue Size: 100
+              Value: true
             - Class: rviz/Image
               Enabled: true
-              Image Topic: /UAV1/landing/combined_debug_image
+              Image Topic: /UAV1/color_tag_detector/debug_image
               Max Value: 1
               Median window: 5
               Min Value: 0
-              Name: UAV1 landing down camera
+              Name: UAV1 color detection
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/vision/qr_debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: UAV1 QR detection
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/thermal/debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: UAV1 thermal detection
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/down_camera/image_raw
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: UAV1 down camera
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /UAV1/landing/front/debug_image
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: UAV1 front ArUco
               Normalize Range: true
               Queue Size: 2
               Transport Hint: raw
