@@ -117,6 +117,13 @@ class EvoReportTest(unittest.TestCase):
                                 for command in commands))
             self.assertEqual({command[command.index("--plot_mode") + 1]
                               for command in commands}, {"xy", "xyz"})
+            traj_commands = [command for command in commands if command[0] == "/fake/evo_traj"]
+            self.assertEqual(len(traj_commands), 2)
+            for command in traj_commands:
+                self.assertIn(str(pathlib.Path(output) / "reference_active.tum"), command)
+                self.assertIn(str(pathlib.Path(output) / "actual_active.tum"), command)
+                self.assertNotIn(str(pathlib.Path(output) / "reference_full.tum"), command)
+                self.assertNotIn(str(pathlib.Path(output) / "actual_full.tum"), command)
             config_path = pathlib.Path(output) / "evo_headless.json"
             self.assertEqual(json.loads(config_path.read_text())["plot_backend"], "Agg")
             self.assertEqual(
@@ -141,6 +148,8 @@ class EvoReportTest(unittest.TestCase):
             self.assertIn("最大误差：0.079710 m（7.97 cm）", summary)
             self.assertIn("均方根误差（RMSE）：0.036563 m（3.66 cm）", summary)
             self.assertIn("误差平方和（SSE）：6.494604 m²（64946.04 cm²）", summary)
+            self.assertIn("规划区间 XY 轨迹", summary)
+            self.assertIn("规划区间 XYZ 轨迹", summary)
 
     def test_missing_active_interval_leaves_failure_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:

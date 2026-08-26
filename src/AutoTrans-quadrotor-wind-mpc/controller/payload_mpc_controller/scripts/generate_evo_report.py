@@ -266,8 +266,8 @@ def write_summary(summary_path, status, run_dir, full_samples=0, active_samples=
 
         summary.write("\n## 输出文件\n\n")
         for filename, label in (
-                ("trajectory_full_xy.png", "全程 XY 轨迹"),
-                ("trajectory_full_xyz.png", "全程 XYZ 轨迹"),
+                ("trajectory_full_xy.png", "规划区间 XY 轨迹"),
+                ("trajectory_full_xyz.png", "规划区间 XYZ 轨迹"),
                 ("ape_active.png", "规划区间位置误差图"),
                 ("ape_active_stats.txt", "evo 原始误差统计"),
                 ("report.log", "evo 原始命令和输出"),
@@ -331,8 +331,8 @@ def generate_report(run_dir, setpoint_csv_path=None, trajectory_csv_path=None,
                 json.dump({"plot_backend": "Agg"}, config_file, indent=2)
 
             common_traj = [
-                evo_traj_command, "tum", paths["reference_full"], paths["actual_full"],
-                "--ref", paths["reference_full"], "--no_warnings",
+                evo_traj_command, "tum", paths["reference_active"], paths["actual_active"],
+                "--ref", paths["reference_active"], "--no_warnings",
             ]
             jobs = []
             for mode in ("xy", "xyz"):
