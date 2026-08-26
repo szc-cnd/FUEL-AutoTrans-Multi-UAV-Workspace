@@ -152,6 +152,13 @@ def test_uav1_relay_enables_short_history_retreat_recovery():
     history = history.split("bool DiffReplanFSM::selectVerticalRecoveryTarget", 1)[0]
     assert "history_distance += std::hypot" in history
     assert "history_distance - escape_max_distance_" in history
+    assert "estimateInflatedClearance(candidate)" not in history
+    assert "validateRecoverySegment(odom_pos_, candidate" not in history
+    assert "occupied_recovery_attempt_count_ > 0" not in history
+    occupied_recovery = source.split("case OCCUPIED_RECOVERY:", 1)[1]
+    occupied_recovery = occupied_recovery.split("finishProcess();", 1)[0]
+    assert "!occupied_recovery_from_history_" in occupied_recovery
+    assert "occupied_recovery_from_history_ ||" in occupied_recovery
     assert 'changeFSMExecState(WAIT_TARGET, "OCCUPIED_RECOVERY_WAIT_NEXT_TARGET")' in source
     preempt = source.split("const bool normal_planning_state", 1)[1].split(
         "static int fsm_num", 1

@@ -675,7 +675,8 @@ namespace diff_planner
         break;
       }
 
-      if (now_sec - last_escape_path_check_time_ >= 0.10)
+      if (!occupied_recovery_from_history_ &&
+          now_sec - last_escape_path_check_time_ >= 0.10)
       {
         last_escape_path_check_time_ = now_sec;
         const bool allow_initial_occupied =
@@ -691,7 +692,12 @@ namespace diff_planner
       const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
       const bool reached = (odom_pos_ - occupied_recovery_target_).norm() <=
                            escape_reach_tolerance_;
-      if (current_occ == 0 && reached && odom_vel_.norm() < escape_stop_speed_)
+      // A history target is a pose the vehicle already reached with real odometry.
+      // Do not let the same inflated-map false positive that triggered recovery
+      // veto that trusted retreat or prevent it from completing.
+      const bool recovery_pose_valid = occupied_recovery_from_history_ ||
+                                       current_occ == 0;
+      if (recovery_pose_valid && reached && odom_vel_.norm() < escape_stop_speed_)
         ++occupied_recovery_free_count_;
       else
         occupied_recovery_free_count_ = 0;
@@ -1203,9 +1209,6 @@ namespace diff_planner
   bool DiffReplanFSM::selectHistoryRecoveryTarget(Eigen::Vector3d &target,
                                                   double &clearance)
   {
-    if (occupied_recovery_attempt_count_ > 0)
-      return false;
-
     const double resolution = planner_manager_->grid_map_->getResolution();
     const double min_distance = std::max(resolution, 2.0 * escape_reach_tolerance_);
     double history_distance = 0.0;
@@ -1217,6 +1220,8 @@ namespace diff_planner
     for (auto it = free_odom_history_.rbegin(); it != free_odom_history_.rend(); ++it)
     {
       const Eigen::Vector3d candidate(it->x, it->y, it->z);
+      if (!candidate.allFinite())
+        continue;
       history_distance += std::hypot(candidate.x() - previous.x(),
                                      candidate.y() - previous.y());
       previous = candidate;
@@ -1224,19 +1229,11 @@ namespace diff_planner
       if (history_distance < min_distance)
         continue;
 
-      const double candidate_clearance = estimateInflatedClearance(candidate);
-      if (candidate_clearance + 1.0e-6 < escape_min_clearance_)
-        continue;
-
-      double occupied_prefix = 0.0;
-      if (!validateRecoverySegment(odom_pos_, candidate, true, &occupied_prefix))
-        continue;
-
       const double distance_error = std::abs(history_distance - escape_max_distance_);
       if (distance_error < best_distance_error)
       {
         target = candidate;
-        clearance = candidate_clearance;
+        clearance = 0.0;
         best_distance_error = distance_error;
         selected_history_distance = history_distance;
         selected_direct_distance = direct_distance;
@@ -1248,9 +1245,9 @@ namespace diff_planner
     }
     if (found)
     {
-      ROS_INFO("[局部脱障] 沿历史轨迹后退 %.3f m，直线位移 %.3f m，目标后退量 %.3f m，净空 %.3f m。",
+      ROS_INFO("[局部脱障] 信任后机自身实飞历史，沿轨迹后退 %.3f m，直线位移 %.3f m，目标后退量 %.3f m；不使用当前膨胀地图否决。",
                selected_history_distance, selected_direct_distance,
-               escape_max_distance_, clearance);
+               escape_max_distance_);
     }
     return found;
   }
