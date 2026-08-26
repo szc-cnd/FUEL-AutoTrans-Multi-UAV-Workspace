@@ -217,7 +217,7 @@ def test_simple_mode_skips_occupied_endpoint_and_waits_for_leader_to_clear_next(
     assert "leader_world.x - desired_world.position.x" in execution
     assert "leader_to_waypoint + 1.0e-6 < waypoint_release_min_separation_" in execution
     assert "DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT" in execution
-    assert 'name="waypoint_release_min_separation" value="1.50"' in LAUNCH
+    assert 'name="waypoint_release_min_separation" value="1.00"' in LAUNCH
 
 
 def test_simple_mode_has_unbounded_dynamic_waypoint_queue():
