@@ -123,8 +123,10 @@ def test_diff_execution_continuously_holds_and_retreats_for_uav_spacing():
 
     source = FOLLOWER.read_text(encoding="utf-8")
     fifo_spacing = source.split(
-        "// 只按XY水平间距锁点", 1
+        "// 前机必须已经越过当前队首", 1
     )[1].split("const double horizontal_error", 1)[0]
+    assert "std::hypot(leader_world.x - desired_world.position.x" in fifo_spacing
+    assert "waypoint_release_min_separation_" in fifo_spacing
     assert "std::hypot(leader_world.x - follower_world.x" in fifo_spacing
     assert "leader_world.z" not in fifo_spacing
     assert "follower_world.z" not in fifo_spacing

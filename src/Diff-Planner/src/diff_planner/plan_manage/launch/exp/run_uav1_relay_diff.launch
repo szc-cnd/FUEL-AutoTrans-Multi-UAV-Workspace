@@ -62,13 +62,15 @@
         <arg name="require_pre_agent_trajectory" value="false"/>
         <!-- 2026-07-28: 后机规划失败由safe_follower改发已验证短子目标，禁用会阻塞FSM并导致Lost heartbeat的随机初始化。 -->
         <arg name="enable_random_global_init" value="false"/>
-        <!-- 目标被占据时只调整XY并保持0.6m目标高度；自身低处进入膨胀占据时先原地升回0.6m。 -->
+        <!-- 自身位置被误判占据时，只沿已执行自由历史后退约0.45m；成功后丢弃旧FIFO点并等待下一缓存点。 -->
         <arg name="enable_occupied_recovery" value="true"/>
         <arg name="preserve_modified_goal_height" value="true"/>
-        <arg name="escape_max_distance" value="0.40"/>
-        <arg name="escape_history_time" value="1.50"/>
+        <arg name="escape_max_distance" value="0.45"/>
+        <arg name="escape_history_time" value="3.00"/>
         <arg name="escape_speed" value="0.10"/>
         <arg name="escape_recovery_height" value="0.60"/>
+        <arg name="history_only_occupied_recovery" value="true"/>
+        <arg name="wait_new_target_after_occupied_recovery" value="true"/>
         <arg name="point_num" value="1"/>
         <arg name="point0_x" value="0.0"/><arg name="point0_y" value="0.0"/><arg name="point0_z" value="0.60"/>
         <arg name="point1_x" value="0.0"/><arg name="point1_y" value="0.0"/><arg name="point1_z" value="0.60"/>

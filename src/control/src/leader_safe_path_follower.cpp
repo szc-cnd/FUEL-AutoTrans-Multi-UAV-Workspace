@@ -1805,16 +1805,39 @@ class LeaderSafePathFollower {
       } else if (status == "OCCUPIED_RECOVERY_VERTICAL" ||
                  status == "OCCUPIED_RECOVERY_HISTORY" ||
                  status == "OCCUPIED_RECOVERY_LATERAL") {
-        // 这些轨迹由Diff自身生成，不是跟随器编造的恢复目标。
+        // Diff正在沿自身安全历史执行脱障；期间禁止FIFO超时逻辑重发旧目标。
+        simple_occupied_recovery_active_ = true;
         setDiffWaitPositionHold(false, "Diff internal occupied recovery trajectory");
-      } else if (status == "OCCUPIED_RECOVERY_ABORTED" ||
-                 status == "OCCUPIED_RECOVERY_SUCCEEDED") {
-        setDiffWaitPositionHold(true, "retry FIFO endpoint after Diff recovery");
+      } else if (status == "OCCUPIED_RECOVERY_ABORTED") {
+        // Diff会在地图刷新后继续从历史中寻找后退点；不要再次向占据位置前方规划。
+        simple_occupied_recovery_active_ = true;
+        setDiffWaitPositionHold(true, "wait for Diff occupied recovery retry");
         diff_goal_published_ = false;
         diff_accepted_goal_valid_ = false;
         diff_command_seen_for_goal_ = false;
-        simple_diff_retry_not_before_ =
-            ros::Time::now() + ros::Duration(simple_diff_retry_delay_);
+      } else if (status == "OCCUPIED_RECOVERY_SUCCEEDED") {
+        simple_occupied_recovery_active_ = false;
+        setDiffWaitPositionHold(true, "occupied recovery finished; skip unsafe FIFO endpoint");
+        const bool terminal_relay = terminal_mode_active_ &&
+            active_relay_index_ == terminal_waypoint_index_;
+        if (!terminal_relay && active_relay_index_ < relay_waypoints_.size()) {
+          const geometry_msgs::Point skipped =
+              relay_waypoints_[active_relay_index_].position;
+          consumeSimpleRelayFront();
+          ROS_ERROR("[safe_follower] UAV1 retreated along history; discard unsafe FIFO "
+                    "endpoint (%.2f,%.2f,%.2f) and wait for UAV0 to clear the next "
+                    "cached endpoint by %.2fm.",
+                    skipped.x, skipped.y, skipped.z,
+                    waypoint_release_min_separation_);
+        }
+        diff_goal_published_ = false;
+        diff_plan_response_received_ = false;
+        diff_accepted_goal_valid_ = false;
+        diff_command_seen_for_goal_ = false;
+        diff_goal_first_publish_stamp_ = ros::Time(0);
+        diff_goal_index_ = std::numeric_limits<std::size_t>::max();
+        simple_waypoint_clearance_hold_active_ = false;
+        simple_diff_retry_not_before_ = ros::Time::now();
       }
       return;
     }
@@ -1863,6 +1886,11 @@ class LeaderSafePathFollower {
   }
 
   bool handleSimpleDiffPlannerExecution(const ros::Time& now) {
+    if (simple_occupied_recovery_active_) {
+      publishState("DIFF_FIFO_OCCUPIED_HISTORY_RETREAT", 1.0, 0.25, 0.0);
+      return true;
+    }
+
     if (active_relay_index_ >= relay_waypoints_.size()) {
       setDiffWaitPositionHold(true, "waiting for next FIFO segment endpoint");
       publishState(have_confirmed_door_ ? "DIFF_WAIT_NEXT_SEGMENT_ENDPOINT"
@@ -1881,10 +1909,44 @@ class LeaderSafePathFollower {
         : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
 
-    // 只按XY水平间距锁点，不发布任何退让坐标；前机重新拉开后仍重试同一队首。
-    if (!terminal_relay && enable_diff_separation_safety_ && leaderOdomFresh(now)) {
+    // 前机必须已经越过当前队首并从该点继续走开1.5m，后机才可进入该点。
+    if (!terminal_relay && enable_diff_separation_safety_) {
+      if (!leaderOdomFresh(now)) {
+        simple_waypoint_clearance_hold_active_ = true;
+        setDiffWaitPositionHold(true, "waiting for fresh UAV0 odometry before FIFO release");
+        diff_goal_published_ = false;
+        publishState("DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT", 1.0, 0.3, 0.0);
+        return true;
+      }
       const geometry_msgs::Point leader_world =
           leaderToWorld(leader_odom_.pose.pose.position);
+      const double leader_to_waypoint =
+          std::hypot(leader_world.x - desired_world.position.x,
+                     leader_world.y - desired_world.position.y);
+      if (leader_to_waypoint + 1.0e-6 < waypoint_release_min_separation_) {
+        if (!simple_waypoint_clearance_hold_active_) {
+          simple_waypoint_clearance_hold_active_ = true;
+          setDiffWaitPositionHold(true, "UAV0 has not cleared next FIFO endpoint");
+          diff_goal_published_ = false;
+          diff_accepted_goal_valid_ = false;
+          diff_command_seen_for_goal_ = false;
+          ROS_WARN("[safe_follower] FIFO endpoint HOLD: UAV0 is only %.2fm beyond/from "
+                   "the cached point, require %.2fm before UAV1 plans to it.",
+                   leader_to_waypoint, waypoint_release_min_separation_);
+        }
+        publishState("DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT", 1.0, 0.3, 0.0);
+        return true;
+      }
+      if (simple_waypoint_clearance_hold_active_) {
+        simple_waypoint_clearance_hold_active_ = false;
+        diff_goal_published_ = false;
+        simple_diff_retry_not_before_ = now;
+        ROS_WARN("[safe_follower] UAV0 is %.2fm from the cached FIFO point; release UAV1 "
+                 "planning after %.2fm clearance.",
+                 leader_to_waypoint, waypoint_release_min_separation_);
+      }
+
+      // 同时保留两机实时XY间距保护。
       const geometry_msgs::Point follower_world = followerToWorld(current_local);
       const double separation = std::hypot(leader_world.x - follower_world.x,
                                            leader_world.y - follower_world.y);
@@ -3989,6 +4051,8 @@ class LeaderSafePathFollower {
   bool have_leader_odom_{false}, have_follower_odom_{false};
   bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
   bool simple_segment_endpoint_following_{false};
+  bool simple_occupied_recovery_active_{false};
+  bool simple_waypoint_clearance_hold_active_{false};
   bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
   bool have_leader_landing_target_{false}, terminal_mode_active_{false};
   bool release_uav1_{false};

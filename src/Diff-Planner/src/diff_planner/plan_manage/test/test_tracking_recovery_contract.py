@@ -141,9 +141,23 @@ def test_occupied_goal_is_replaced_and_new_goal_callback_never_nested_spins():
 def test_uav1_relay_enables_short_history_retreat_recovery():
     launch = RELAY_LAUNCH.read_text(encoding="utf-8")
     assert '<arg name="enable_occupied_recovery" value="true"/>' in launch
-    assert '<arg name="escape_max_distance" value="0.40"/>' in launch
-    assert '<arg name="escape_history_time" value="1.50"/>' in launch
+    assert '<arg name="escape_max_distance" value="0.45"/>' in launch
+    assert '<arg name="escape_history_time" value="3.00"/>' in launch
     assert '<arg name="escape_speed" value="0.10"/>' in launch
+    assert '<arg name="history_only_occupied_recovery" value="true"/>' in launch
+    assert '<arg name="wait_new_target_after_occupied_recovery" value="true"/>' in launch
+
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    history = source.split("bool DiffReplanFSM::selectHistoryRecoveryTarget", 1)[1]
+    history = history.split("bool DiffReplanFSM::selectVerticalRecoveryTarget", 1)[0]
+    assert "history_distance += std::hypot" in history
+    assert "history_distance - escape_max_distance_" in history
+    assert 'changeFSMExecState(WAIT_TARGET, "OCCUPIED_RECOVERY_WAIT_NEXT_TARGET")' in source
+    preempt = source.split("const bool normal_planning_state", 1)[1].split(
+        "static int fsm_num", 1
+    )[0]
+    assert "getInflateOccupancy(odom_pos_)" in preempt
+    assert 'changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_START")' in preempt
 
 
 def test_depth_timeout_waits_for_map_and_automatically_resumes():

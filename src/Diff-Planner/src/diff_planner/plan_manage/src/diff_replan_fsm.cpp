@@ -44,6 +44,10 @@ namespace diff_planner
     nh.param("fsm/escape_recovery_height", escape_recovery_height_, 0.60);
     nh.param("fsm/escape_free_cycles", escape_free_cycles_, 5);
     nh.param("fsm/escape_max_attempts", escape_max_attempts_, 2);
+    nh.param("fsm/history_only_occupied_recovery",
+             history_only_occupied_recovery_, false);
+    nh.param("fsm/wait_new_target_after_occupied_recovery",
+             wait_new_target_after_occupied_recovery_, false);
     if (!std::isfinite(escape_max_distance_) || escape_max_distance_ <= 0.0)
       escape_max_distance_ = 0.40;
     if (!std::isfinite(escape_history_time_) || escape_history_time_ <= 0.0)
@@ -244,6 +248,30 @@ namespace diff_planner
     if (have_odom_)
       updateFreeOdomHistory(now_sec);
 
+    // Actual occupied odometry has priority over every normal planning state.
+    // Enter recovery before collision replanning can feed the occupied start
+    // back into the optimizer repeatedly.
+    const bool normal_planning_state =
+        exec_state_ == SEQUENTIAL_START || exec_state_ == GEN_NEW_TRAJ ||
+        exec_state_ == REPLAN_TRAJ || exec_state_ == EXEC_TRAJ;
+    if (enable_occupied_recovery_ && have_odom_ && normal_planning_state)
+    {
+      const int current_occ =
+          planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
+      if (current_occ != 0)
+      {
+        ROS_ERROR("[局部脱障] 实际里程计位置进入膨胀占据区：occ=%d, "
+                  "pos=(%.3f, %.3f, %.3f)。停止重规划并沿历史轨迹后退。",
+                  current_occ, odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
+        need_hover_stop_ = true;
+        flag_escape_emergency_ = true;
+        occupied_recovery_active_ = false;
+        occupied_recovery_episode_ = true;
+        occupied_recovery_free_count_ = 0;
+        changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_START");
+      }
+    }
+
     static int fsm_num = 0;
     fsm_num++;
     if (fsm_num == 500)
@@ -379,20 +407,7 @@ namespace diff_planner
       const PtsChk_t *chk_ptr = &planner_manager_->traj_.local_traj.pts_chk;
       bool close_to_current_traj_end = (chk_ptr->size() >= 1 && chk_ptr->back().size() >= 1) ? chk_ptr->back().back().first - t_cur < emergency_time_ : 0; // In case of empty vector
 
-      const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
-      if (enable_occupied_recovery_ && current_occ != 0)
-      {
-        ROS_ERROR("[局部脱障] 实际里程计位置进入膨胀占据区：occ=%d, pos=(%.3f, %.3f, %.3f)。先急停再脱障。",
-                  current_occ, odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
-        need_hover_stop_ = true;
-        flag_escape_emergency_ = true;
-        occupied_recovery_active_ = false;
-        occupied_recovery_episode_ = true;
-        occupied_recovery_free_count_ = 0;
-        changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_START");
-        break;
-      }
-      else if (planner_manager_->grid_map_->getInflateOccupancy(final_goal_))
+      if (planner_manager_->grid_map_->getInflateOccupancy(final_goal_))
       {
         if (!mondify_final_goal_)
         {
@@ -575,7 +590,8 @@ namespace diff_planner
           occupied_recovery_episode_ = true;
           occupied_recovery_free_count_ = 0;
         }
-        else if (enable_occupied_recovery_ && occupied_recovery_episode_)
+        else if (enable_occupied_recovery_ && occupied_recovery_episode_ &&
+                 !history_only_occupied_recovery_)
         {
           ++occupied_recovery_free_count_;
           if (occupied_recovery_free_count_ < escape_free_cycles_)
@@ -589,7 +605,9 @@ namespace diff_planner
           occupied_recovery_free_count_ = 0;
         }
 
-        if (enable_occupied_recovery_ && current_occ != 0 &&
+        if (enable_occupied_recovery_ &&
+            (current_occ != 0 || (history_only_occupied_recovery_ &&
+                                  occupied_recovery_episode_)) &&
             have_target_ && have_trigger_ && !mandatory_stop_)
         {
           if (occupied_recovery_attempt_count_ >= escape_max_attempts_)
@@ -680,7 +698,7 @@ namespace diff_planner
 
       if (occupied_recovery_free_count_ >= escape_free_cycles_)
       {
-        ROS_INFO("[局部脱障] 已到达自由区域：target=(%.3f, %.3f, %.3f)，连续确认 %d 次，恢复正常规划。",
+        ROS_INFO("[局部脱障] 已到达自由区域：target=(%.3f, %.3f, %.3f)，连续确认 %d 次。",
                  occupied_recovery_target_.x(), occupied_recovery_target_.y(),
                  occupied_recovery_target_.z(), occupied_recovery_free_count_);
         publishPlanningStatus("OCCUPIED_RECOVERY_SUCCEEDED");
@@ -688,11 +706,23 @@ namespace diff_planner
         occupied_recovery_episode_ = false;
         occupied_recovery_attempt_count_ = 0;
         occupied_recovery_failure_reported_ = false;
-        need_hover_stop_ = false;
         replan_fail_count_ = 0;
         last_target_change_time_ = now_sec;
         stuck_detect_ignore_until_ = now_sec + stuck_detect_grace_time_;
-        changeFSMExecState(GEN_NEW_TRAJ, "OCCUPIED_RECOVERY_DONE");
+        if (wait_new_target_after_occupied_recovery_)
+        {
+          // Relay mode discards the unsafe FIFO endpoint in the follower. Do not
+          // immediately drive back to the same point before that status is handled.
+          need_hover_stop_ = true;
+          have_target_ = false;
+          have_trigger_ = false;
+          changeFSMExecState(WAIT_TARGET, "OCCUPIED_RECOVERY_WAIT_NEXT_TARGET");
+        }
+        else
+        {
+          need_hover_stop_ = false;
+          changeFSMExecState(GEN_NEW_TRAJ, "OCCUPIED_RECOVERY_DONE");
+        }
       }
       break;
     }
@@ -796,6 +826,18 @@ namespace diff_planner
       depth_timeout_emergency_ = true;
       need_hover_stop_ = true;
       changeFSMExecState(EMERGENCY_STOP, "SAFETY");
+      return;
+    }
+
+    if (enable_occupied_recovery_ &&
+        map->getInflateOccupancy(odom_pos_) != 0)
+    {
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      occupied_recovery_active_ = false;
+      occupied_recovery_episode_ = true;
+      occupied_recovery_free_count_ = 0;
+      changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_SAFETY_PREEMPT");
       return;
     }
 
@@ -1166,11 +1208,20 @@ namespace diff_planner
 
     const double resolution = planner_manager_->grid_map_->getResolution();
     const double min_distance = std::max(resolution, 2.0 * escape_reach_tolerance_);
+    double history_distance = 0.0;
+    double best_distance_error = std::numeric_limits<double>::infinity();
+    double selected_history_distance = 0.0;
+    double selected_direct_distance = 0.0;
+    bool found = false;
+    Eigen::Vector3d previous = odom_pos_;
     for (auto it = free_odom_history_.rbegin(); it != free_odom_history_.rend(); ++it)
     {
       const Eigen::Vector3d candidate(it->x, it->y, it->z);
-      const double distance = (candidate - odom_pos_).norm();
-      if (distance < min_distance || distance > escape_max_distance_)
+      history_distance += std::hypot(candidate.x() - previous.x(),
+                                     candidate.y() - previous.y());
+      previous = candidate;
+      const double direct_distance = (candidate - odom_pos_).norm();
+      if (history_distance < min_distance)
         continue;
 
       const double candidate_clearance = estimateInflatedClearance(candidate);
@@ -1181,13 +1232,27 @@ namespace diff_planner
       if (!validateRecoverySegment(odom_pos_, candidate, true, &occupied_prefix))
         continue;
 
-      target = candidate;
-      clearance = candidate_clearance;
-      ROS_INFO("[局部脱障] 采用最近历史自由点，距离 %.3f m，占据前缀 %.3f m，净空 %.3f m。",
-               distance, occupied_prefix, clearance);
-      return true;
+      const double distance_error = std::abs(history_distance - escape_max_distance_);
+      if (distance_error < best_distance_error)
+      {
+        target = candidate;
+        clearance = candidate_clearance;
+        best_distance_error = distance_error;
+        selected_history_distance = history_distance;
+        selected_direct_distance = direct_distance;
+        found = true;
+      }
+
+      if (history_distance >= escape_max_distance_)
+        break;
     }
-    return false;
+    if (found)
+    {
+      ROS_INFO("[局部脱障] 沿历史轨迹后退 %.3f m，直线位移 %.3f m，目标后退量 %.3f m，净空 %.3f m。",
+               selected_history_distance, selected_direct_distance,
+               escape_max_distance_, clearance);
+    }
+    return found;
   }
 
   bool DiffReplanFSM::selectVerticalRecoveryTarget(Eigen::Vector3d &target,
@@ -1294,15 +1359,17 @@ namespace diff_planner
                                                    double &clearance)
   {
     occupied_recovery_vertical_ = false;
+    if (selectHistoryRecoveryTarget(target, clearance))
+    {
+      from_history = true;
+      return true;
+    }
+    if (history_only_occupied_recovery_)
+      return false;
     if (selectVerticalRecoveryTarget(target, clearance))
     {
       from_history = false;
       occupied_recovery_vertical_ = true;
-      return true;
-    }
-    if (selectHistoryRecoveryTarget(target, clearance))
-    {
-      from_history = true;
       return true;
     }
     if (selectLateralRecoveryTarget(target, clearance))

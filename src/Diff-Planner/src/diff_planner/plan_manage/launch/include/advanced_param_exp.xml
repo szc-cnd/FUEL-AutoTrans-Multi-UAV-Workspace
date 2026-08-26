@@ -55,6 +55,8 @@
     <arg name="escape_recovery_height" default="0.60"/>
     <arg name="escape_free_cycles" default="5"/>
     <arg name="escape_max_attempts" default="2"/>
+    <arg name="history_only_occupied_recovery" default="false"/>
+    <arg name="wait_new_target_after_occupied_recovery" default="false"/>
     <arg name="preserve_modified_goal_height" default="false"/>
     <!-- 2026-07-07: 暴露预设航点切换距离阈值，便于窄门洞场景避免还没穿过去就切下一个 waypoint。 -->
     <arg name="waypoint_switch_dist" default="-1.0"/>
@@ -175,6 +177,8 @@
         <param name="fsm/escape_recovery_height" value="$(arg escape_recovery_height)" type="double"/>
         <param name="fsm/escape_free_cycles" value="$(arg escape_free_cycles)" type="int"/>
         <param name="fsm/escape_max_attempts" value="$(arg escape_max_attempts)" type="int"/>
+        <param name="fsm/history_only_occupied_recovery" value="$(arg history_only_occupied_recovery)" type="bool"/>
+        <param name="fsm/wait_new_target_after_occupied_recovery" value="$(arg wait_new_target_after_occupied_recovery)" type="bool"/>
         <!-- 2026-07-07: 允许实验 launch 单独收紧 waypoint 切换距离，避免在 doorway 内提早拐向下一段。 -->
         <param name="fsm/waypoint_switch_dist" value="$(arg waypoint_switch_dist)" type="double"/>
         <!--always set to 1.5 times grater than sensing horizen-->

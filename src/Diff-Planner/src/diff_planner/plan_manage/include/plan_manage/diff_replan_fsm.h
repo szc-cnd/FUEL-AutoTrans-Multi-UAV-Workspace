@@ -100,6 +100,8 @@ namespace diff_planner
     double escape_recovery_height_;
     int escape_free_cycles_;
     int escape_max_attempts_;
+    bool history_only_occupied_recovery_;
+    bool wait_new_target_after_occupied_recovery_;
     bool flag_realworld_experiment_;
     bool enable_fail_safe_;
     bool enable_ground_height_measurement_;

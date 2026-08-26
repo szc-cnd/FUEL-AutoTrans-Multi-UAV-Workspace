@@ -197,6 +197,24 @@ def test_simple_mode_gives_diff_only_the_fifo_front_and_consumes_on_arrival():
     assert "diff_endpoint_capture_radius_" not in ordinary_arrival
 
 
+def test_simple_mode_skips_occupied_endpoint_and_waits_for_leader_to_clear_next():
+    status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
+        "void consumeSimpleRelayFront", maxsplit=1
+    )[0]
+    execution = SOURCE.split(
+        "bool handleSimpleDiffPlannerExecution", maxsplit=1
+    )[1].split("bool getLaggedTarget", maxsplit=1)[0]
+
+    assert 'status == "OCCUPIED_RECOVERY_SUCCEEDED"' in status_callback
+    assert "consumeSimpleRelayFront();" in status_callback
+    assert "simple_occupied_recovery_active_" in status_callback
+    assert "leader_to_waypoint" in execution
+    assert "leader_world.x - desired_world.position.x" in execution
+    assert "leader_to_waypoint + 1.0e-6 < waypoint_release_min_separation_" in execution
+    assert "DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT" in execution
+    assert 'name="waypoint_release_min_separation" value="1.50"' in LAUNCH
+
+
 def test_simple_mode_has_unbounded_dynamic_waypoint_queue():
     assert 'name="max_internal_relay_points" value="0"' in LAUNCH
     endpoint_confirmation = SOURCE.split(

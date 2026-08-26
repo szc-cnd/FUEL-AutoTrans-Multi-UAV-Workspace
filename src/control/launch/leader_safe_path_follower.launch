@@ -113,8 +113,8 @@
         <param name="command_topic" value="/UAV1/planning/pos_cmd"/>
         <!-- 2026-07-28: 禁止接力管理器直控后机，改向UAV1 Diff发布离散目标。 -->
         <param name="use_diff_planner" value="true"/>
-        <!-- 前机每段实际停稳终点按FIFO缓存；后机一次只把队首原坐标交给Diff，
-             到达后删除。失败只重试同一点，不生成候选、裁短或退让目标。 -->
+        <!-- 前机每段实际停稳终点按FIFO缓存；后机一次只把队首原坐标交给Diff。
+             自身位置占据时沿历史后退，删除危险队首，再等前机离下一缓存点1.5m后放行。 -->
         <!-- 必须保持true：当前队首未到达时禁止切换候选点或生成退让目标。 -->
         <param name="simple_segment_endpoint_following" value="true"/>
         <param name="simple_diff_retry_delay" value="0.20"/>
@@ -176,7 +176,7 @@
         <!-- Diff持续水平间距保护：1.50m内锁点；旧复杂模式在1.30m内恢复退让。 -->
         <param name="enable_diff_separation_safety" value="true"/>
         <param name="min_separation" value="1.50"/>
-        <!-- UAV0 只在两机对齐坐标系下的实时XY距离达到1.50m后，才向UAV1释放普通航点。 -->
+        <!-- UAV0当前位置离当前FIFO目标的XY距离达到1.50m后，才向UAV1释放该点。 -->
         <param name="waypoint_release_min_separation" value="1.50"/>
         <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
         <param name="fixed_follow_height" value="0.60"/>
