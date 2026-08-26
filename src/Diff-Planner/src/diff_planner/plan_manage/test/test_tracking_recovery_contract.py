@@ -138,13 +138,15 @@ def test_occupied_goal_is_replaced_and_new_goal_callback_never_nested_spins():
     assert 'changeFSMExecState(GEN_NEW_TRAJ, "NEW_EXTERNAL_GOAL")' in waypoint
 
 
-def test_uav1_relay_enables_short_history_retreat_recovery():
+def test_uav1_relay_prefers_history_but_allows_fallback_recovery():
     launch = RELAY_LAUNCH.read_text(encoding="utf-8")
     assert '<arg name="enable_occupied_recovery" value="true"/>' in launch
     assert '<arg name="escape_max_distance" value="0.45"/>' in launch
     assert '<arg name="escape_history_time" value="3.00"/>' in launch
     assert '<arg name="escape_speed" value="0.10"/>' in launch
-    assert '<arg name="history_only_occupied_recovery" value="true"/>' in launch
+    assert '<arg name="history_only_occupied_recovery" value="false"/>' in launch
+    assert "未经用户明确确认" in launch
+    assert "不得把 history_only_occupied_recovery 重新设为 true" in launch
     assert '<arg name="wait_new_target_after_occupied_recovery" value="true"/>' in launch
 
     source = FSM_SOURCE.read_text(encoding="utf-8")
