@@ -256,13 +256,10 @@ class LeaderSafePathFollower {
     pnh_.param("terminal_arrive_dwell", terminal_arrive_dwell_, 1.0);
     pnh_.param("terminal_approach_speed", terminal_approach_speed_, 0.25);
     pnh_.param("path_sample_spacing", path_sample_spacing_, 0.08);
-    pnh_.param("history_path_join_tolerance", history_path_join_tolerance_, 0.35);
     pnh_.param("outside_door_distance", outside_door_distance_, 0.50);
-    if (!std::isfinite(history_path_join_tolerance_) ||
-        history_path_join_tolerance_ <= path_sample_spacing_ ||
-        !std::isfinite(outside_door_distance_) || outside_door_distance_ <= 0.0) {
+    if (!std::isfinite(outside_door_distance_) || outside_door_distance_ <= 0.0) {
       throw std::runtime_error(
-          "leader_safe_path_follower: invalid history path or outside-door parameters");
+          "leader_safe_path_follower: invalid outside-door parameters");
     }
     pnh_.param("max_route_length", max_route_length_, 60.0);
     // 2026-07-21: 雷达里程计yaw可能不跟随实际转弯，接力判向改用最近实飞路线的局部切线；
@@ -937,14 +934,6 @@ class LeaderSafePathFollower {
           anchor_index = i;
         }
       }
-      if (anchor_distance > history_path_join_tolerance_) {
-        ROS_WARN_THROTTLE(
-            1.0,
-            "[safe_follower] reject UAV0 history snapshot: nearest join %.2fm > %.2fm; "
-            "never bridge an unverified gap.",
-            anchor_distance, history_path_join_tolerance_);
-        return;
-      }
       start_index = anchor_index + 1;
     } else {
       leader_started_ = true;
@@ -952,15 +941,6 @@ class LeaderSafePathFollower {
 
     std::size_t appended = 0;
     for (std::size_t i = start_index; i < samples.size(); ++i) {
-      if (!route_.empty()) {
-        const double gap = distance3d(route_.back().position, samples[i].position);
-        if (gap > history_path_join_tolerance_) {
-          ROS_WARN("[safe_follower] stop UAV0 history recovery at pose %zu/%zu: "
-                   "segment %.2fm > %.2fm; keep only the connected prefix.",
-                   i + 1, samples.size(), gap, history_path_join_tolerance_);
-          break;
-        }
-      }
       RoutePoint sample = samples[i];
       if (appendAcceptedRoutePoint(&sample)) ++appended;
     }
@@ -973,7 +953,7 @@ class LeaderSafePathFollower {
     turn_candidate_length_ = 0.0;
     publishRoute(msg->header.stamp.isZero() ? ros::Time::now()
                                              : msg->header.stamp);
-    ROS_WARN("[safe_follower] recovered %zu connected UAV0 history samples; "
+    ROS_WARN("[safe_follower] recovered %zu UAV0 history samples; "
              "cached route remains %.2fm long.",
              appended, route_length_);
   }
@@ -1176,17 +1156,6 @@ class LeaderSafePathFollower {
     // 2026-07-24: 安全路线的几何进度只取前机XY，z统一为后机自己的巡航高度。
     point.position = followerCruisePointToWorld(point.position);
     point.yaw = yawFromQuaternion(msg->pose.pose.orientation);
-    if (!route_.empty()) {
-      const double route_gap = distance3d(route_.back().position, point.position);
-      if (route_gap > history_path_join_tolerance_) {
-        ROS_WARN_THROTTLE(
-            1.0,
-            "[safe_follower] reject direct UAV0 odometry gap %.2fm > %.2fm; "
-            "wait for the cumulative history Path instead of drawing a shortcut.",
-            route_gap, history_path_join_tolerance_);
-        return;
-      }
-    }
     confirmPendingLeaderSegmentEndpoint(point, msg->twist.twist, now);
     bool current_point_already_appended = false;
     // 2026-07-20: 独立保存最近一次判向采样点，不能拿route_.back()判向；route_.back()在回头期间
@@ -4109,7 +4078,7 @@ class LeaderSafePathFollower {
   double terminal_landing_spacing_{0.50}, terminal_approach_height_{0.60};
   double terminal_arrive_radius_{0.25}, terminal_arrive_z_tolerance_{0.15};
   double terminal_arrive_dwell_{1.0}, terminal_approach_speed_{0.25};
-  double path_sample_spacing_{0.08}, history_path_join_tolerance_{0.35};
+  double path_sample_spacing_{0.08};
   double outside_door_distance_{0.50};
   double max_route_length_{60.0}, route_length_{0.0};
   // 2026-07-21: 用最近0.45m实飞路线切线判向，不再依赖可能与实际转弯不一致的雷达里程计yaw。

@@ -312,7 +312,7 @@ def test_leader_odometry_uses_latest_low_latency_sample_and_rejects_delay():
     assert params["leader_odom_max_transport_age"] == "0.50"
 
 
-def test_history_snapshot_recovers_only_connected_leader_route():
+def test_history_snapshot_does_not_reject_leader_route_sample_gaps():
     root = ET.parse(LAUNCH).getroot()
     follower = next(
         node for node in root.findall("node")
@@ -323,16 +323,20 @@ def test_history_snapshot_recovers_only_connected_leader_route():
         for item in follower.findall("param")
     }
     assert params["leader_history_path_topic"] == "$(arg leader_history_path_topic)"
-    assert params["history_path_join_tolerance"] == "0.35"
+    assert "history_path_join_tolerance" not in params
 
     source = FOLLOWER.read_text(encoding="utf-8")
     callback = source.split("void leaderHistoryPathCallback", 1)[1].split(
         "void leaderTrajectoryCallback", 1
     )[0]
-    assert "anchor_distance > history_path_join_tolerance_" in callback
-    assert "gap > history_path_join_tolerance_" in callback
+    assert "history_path_join_tolerance" not in callback
     assert "appendAcceptedRoutePoint(&sample)" in callback
     assert "\n    route_.clear" not in callback
+
+    odom_callback = source.split("void leaderOdomCallback", 1)[1].split(
+        "void followerOdomCallback", 1
+    )[0]
+    assert "reject direct UAV0 odometry gap" not in odom_callback
 
     timer = source.split("void timerCallback", 1)[1].split(
         "void publishTarget", 1
