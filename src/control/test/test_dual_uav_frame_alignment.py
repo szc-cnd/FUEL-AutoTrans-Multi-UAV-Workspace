@@ -20,12 +20,30 @@ UAV1_DIFF_RVIZ = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz"
 )
 UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
+UAV1_SINGLE_SEVEN_SCRIPT = (
+    ROOT.parents[1] / "shfiles/start_uav1_single_seven_terminator.sh"
+)
 UAV1_SEVEN_LAYOUT = ROOT.parents[1] / "shfiles/terminator_uav1_six.conf"
 UAV1_SENSOR_STACK = ROOT.parents[1] / "shfiles/run_uav1_sensor_stack.sh"
 UAV1_DETECTION_LAUNCH = (
     ROOT.parent
     / "uav0_competition_bringup/launch/uav1_detection_stack.launch"
 )
+
+
+def test_uav1_single_seven_uses_local_master_and_standalone_diff():
+    script = UAV1_SINGLE_SEVEN_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"' in script
+    assert 'export ROS_MASTER_URI="http://${LOCAL_MASTER_IP}:11311"' in script
+    assert 'export ROS_IP="${LOCAL_ROS_IP}"' in script
+    assert "start_or_reuse_local_master" in script
+    assert "roscore" in script
+    assert "roslaunch diff_planner run_swarm.launch" in script
+    assert "leader_safe_path_follower.launch" not in script
+    assert "/UAV0/" not in script
+    assert "/UAV1/landing/control_owner" not in script
+    assert "setpoint_topic:=/UAV1/mavros/setpoint_raw/attitude" in script
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():
