@@ -1778,12 +1778,19 @@ class LeaderSafePathFollower {
         simple_occupied_recovery_active_ = true;
         setDiffWaitPositionHold(false, "Diff internal occupied recovery trajectory");
       } else if (status == "OCCUPIED_RECOVERY_ABORTED") {
-        // Diff会在地图刷新后继续从历史中寻找后退点；不要再次向占据位置前方规划。
-        simple_occupied_recovery_active_ = true;
-        setDiffWaitPositionHold(true, "wait for Diff occupied recovery retry");
+        // 本次脱障已结束，保留FIFO队首并按普通失败路径重新交给Diff，不能永久停在脱障等待态。
+        simple_occupied_recovery_active_ = false;
+        setDiffWaitPositionHold(true, "retry FIFO endpoint after occupied recovery abort");
         diff_goal_published_ = false;
+        diff_plan_response_received_ = false;
         diff_accepted_goal_valid_ = false;
         diff_command_seen_for_goal_ = false;
+        diff_goal_first_publish_stamp_ = ros::Time(0);
+        simple_diff_retry_not_before_ =
+            ros::Time::now() + ros::Duration(simple_diff_retry_delay_);
+        ROS_ERROR("[safe_follower] UAV1 Diff occupied recovery aborted; keep FIFO endpoint "
+                  "%zu and retry the same coordinates after %.2fs.",
+                  active_relay_index_ + 1, simple_diff_retry_delay_);
       } else if (status == "OCCUPIED_RECOVERY_SUCCEEDED") {
         simple_occupied_recovery_active_ = false;
         setDiffWaitPositionHold(true, "occupied recovery finished; skip unsafe FIFO endpoint");

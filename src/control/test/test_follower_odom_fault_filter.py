@@ -228,6 +228,21 @@ def test_simple_mode_skips_occupied_endpoint_and_waits_for_leader_to_clear_next(
     assert 'name="waypoint_release_min_separation" value="0.70"' in LAUNCH
 
 
+def test_simple_mode_retries_fifo_endpoint_after_occupied_recovery_abort():
+    status_callback = SOURCE.split("void diffStatusCallback", maxsplit=1)[1].split(
+        "void consumeSimpleRelayFront", maxsplit=1
+    )[0]
+    aborted = status_callback.split(
+        'status == "OCCUPIED_RECOVERY_ABORTED"', maxsplit=1
+    )[1].split('status == "OCCUPIED_RECOVERY_SUCCEEDED"', maxsplit=1)[0]
+
+    assert "simple_occupied_recovery_active_ = false;" in aborted
+    assert "simple_occupied_recovery_active_ = true;" not in aborted
+    assert "simple_diff_retry_not_before_" in aborted
+    assert "ros::Duration(simple_diff_retry_delay_)" in aborted
+    assert "consumeSimpleRelayFront();" not in aborted
+
+
 def test_simple_mode_has_unbounded_dynamic_waypoint_queue():
     assert 'name="max_internal_relay_points" value="0"' in LAUNCH
     endpoint_confirmation = SOURCE.split(
