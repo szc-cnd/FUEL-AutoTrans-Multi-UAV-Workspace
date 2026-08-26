@@ -213,8 +213,8 @@
         <param name="door_release_inside_distance" value="0.70"/>
         <param name="relay_release_distance" value="0.70"/>
         <param name="relay_waypoint_spacing" value="2.50"/>
-        <!-- 动态run_swarm语义：普通FIFO点进入25cm邻域就切换下一个，不要求零误差或停稳。 -->
-        <param name="relay_arrive_radius" value="0.25"/>
+        <!-- 普通FIFO点进入40cm邻域就切换下一个，避免已经通过困难区域后为补点回拉；不要求零误差或停稳。 -->
+        <param name="relay_arrive_radius" value="0.40"/>
         <param name="relay_arrive_z_tolerance" value="0.20"/>
         <!-- 较大圆柱净空仅用于最终降落点；普通接力点只检查精确落点小体素。 -->
         <param name="relay_endpoint_clearance_radius" value="0.38"/>

@@ -1982,7 +1982,7 @@ class LeaderSafePathFollower {
         horizontal_error <= relay_arrive_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_;
     const bool terminal_arrival = terminal_relay &&
-        horizontal_error <= relay_arrive_radius_ &&
+        horizontal_error <= terminal_arrive_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_ &&
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
