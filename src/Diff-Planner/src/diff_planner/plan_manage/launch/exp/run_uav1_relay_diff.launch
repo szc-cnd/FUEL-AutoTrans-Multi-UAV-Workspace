@@ -66,7 +66,8 @@
         <arg name="enable_occupied_recovery" value="true"/>
         <arg name="preserve_modified_goal_height" value="true"/>
         <arg name="escape_max_distance" value="0.45"/>
-        <arg name="escape_history_time" value="3.00"/>
+        <!-- 0 表示节点运行期间不按时间删除自身实飞历史，后退点只按累计 XY 距离选择。 -->
+        <arg name="escape_history_time" value="0.0"/>
         <arg name="escape_speed" value="0.10"/>
         <arg name="escape_recovery_height" value="0.60"/>
         <!-- 用户规则：未经用户明确确认，永远不得把 history_only_occupied_recovery 重新设为 true。 -->

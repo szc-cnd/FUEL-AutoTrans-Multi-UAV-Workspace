@@ -50,7 +50,7 @@ namespace diff_planner
              wait_new_target_after_occupied_recovery_, false);
     if (!std::isfinite(escape_max_distance_) || escape_max_distance_ <= 0.0)
       escape_max_distance_ = 0.40;
-    if (!std::isfinite(escape_history_time_) || escape_history_time_ <= 0.0)
+    if (!std::isfinite(escape_history_time_) || escape_history_time_ < 0.0)
       escape_history_time_ = 1.50;
     if (!std::isfinite(escape_speed_) || escape_speed_ <= 0.0)
       escape_speed_ = 0.10;
@@ -690,14 +690,21 @@ namespace diff_planner
       }
 
       const int current_occ = planner_manager_->grid_map_->getInflateOccupancy(odom_pos_);
-      const bool reached = (odom_pos_ - occupied_recovery_target_).norm() <=
-                           escape_reach_tolerance_;
+      const double recovery_position_error = occupied_recovery_from_history_
+                                                 ? std::hypot(
+                                                       odom_pos_.x() - occupied_recovery_target_.x(),
+                                                       odom_pos_.y() - occupied_recovery_target_.y())
+                                                 : (odom_pos_ - occupied_recovery_target_).norm();
+      const double recovery_speed = occupied_recovery_from_history_
+                                        ? std::hypot(odom_vel_.x(), odom_vel_.y())
+                                        : odom_vel_.norm();
+      const bool reached = recovery_position_error <= escape_reach_tolerance_;
       // A history target is a pose the vehicle already reached with real odometry.
       // Do not let the same inflated-map false positive that triggered recovery
       // veto that trusted retreat or prevent it from completing.
       const bool recovery_pose_valid = occupied_recovery_from_history_ ||
                                        current_occ == 0;
-      if (recovery_pose_valid && reached && odom_vel_.norm() < escape_stop_speed_)
+      if (recovery_pose_valid && reached && recovery_speed < escape_stop_speed_)
         ++occupied_recovery_free_count_;
       else
         occupied_recovery_free_count_ = 0;
@@ -1100,7 +1107,7 @@ namespace diff_planner
         exec_state_ == EMERGENCY_STOP)
       return;
 
-    while (!free_odom_history_.empty() &&
+    while (escape_history_time_ > 0.0 && !free_odom_history_.empty() &&
            now - free_odom_history_.front().stamp > escape_history_time_)
       free_odom_history_.pop_front();
 
@@ -1219,13 +1226,14 @@ namespace diff_planner
     Eigen::Vector3d previous = odom_pos_;
     for (auto it = free_odom_history_.rbegin(); it != free_odom_history_.rend(); ++it)
     {
-      const Eigen::Vector3d candidate(it->x, it->y, it->z);
+      const Eigen::Vector3d candidate(it->x, it->y, escape_recovery_height_);
       if (!candidate.allFinite())
         continue;
       history_distance += std::hypot(candidate.x() - previous.x(),
                                      candidate.y() - previous.y());
       previous = candidate;
-      const double direct_distance = (candidate - odom_pos_).norm();
+      const double direct_distance = std::hypot(candidate.x() - odom_pos_.x(),
+                                                candidate.y() - odom_pos_.y());
       if (history_distance < min_distance)
         continue;
 

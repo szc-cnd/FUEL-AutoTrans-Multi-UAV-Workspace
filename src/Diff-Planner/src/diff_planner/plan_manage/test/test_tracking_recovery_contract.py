@@ -142,7 +142,7 @@ def test_uav1_relay_prefers_history_but_allows_fallback_recovery():
     launch = RELAY_LAUNCH.read_text(encoding="utf-8")
     assert '<arg name="enable_occupied_recovery" value="true"/>' in launch
     assert '<arg name="escape_max_distance" value="0.45"/>' in launch
-    assert '<arg name="escape_history_time" value="3.00"/>' in launch
+    assert '<arg name="escape_history_time" value="0.0"/>' in launch
     assert '<arg name="escape_speed" value="0.10"/>' in launch
     assert '<arg name="history_only_occupied_recovery" value="false"/>' in launch
     assert "未经用户明确确认" in launch
@@ -153,12 +153,15 @@ def test_uav1_relay_prefers_history_but_allows_fallback_recovery():
     history = source.split("bool DiffReplanFSM::selectHistoryRecoveryTarget", 1)[1]
     history = history.split("bool DiffReplanFSM::selectVerticalRecoveryTarget", 1)[0]
     assert "history_distance += std::hypot" in history
+    assert "Eigen::Vector3d candidate(it->x, it->y, escape_recovery_height_)" in history
     assert "history_distance - escape_max_distance_" in history
     assert "estimateInflatedClearance(candidate)" not in history
     assert "validateRecoverySegment(odom_pos_, candidate" not in history
     assert "occupied_recovery_attempt_count_ > 0" not in history
     occupied_recovery = source.split("case OCCUPIED_RECOVERY:", 1)[1]
     occupied_recovery = occupied_recovery.split("finishProcess();", 1)[0]
+    assert "recovery_position_error = occupied_recovery_from_history_" in occupied_recovery
+    assert "std::hypot(odom_vel_.x(), odom_vel_.y())" in occupied_recovery
     assert "!occupied_recovery_from_history_" in occupied_recovery
     assert "occupied_recovery_from_history_ ||" in occupied_recovery
     assert 'changeFSMExecState(WAIT_TARGET, "OCCUPIED_RECOVERY_WAIT_NEXT_TARGET")' in source
@@ -167,6 +170,10 @@ def test_uav1_relay_prefers_history_but_allows_fallback_recovery():
     )[0]
     assert "getInflateOccupancy(odom_pos_)" in preempt
     assert 'changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_START")' in preempt
+
+    history_update = source.split("void DiffReplanFSM::updateFreeOdomHistory", 1)[1]
+    history_update = history_update.split("double DiffReplanFSM::estimateInflatedClearance", 1)[0]
+    assert "escape_history_time_ > 0.0" in history_update
 
 
 def test_depth_timeout_waits_for_map_and_automatically_resumes():
