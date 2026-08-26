@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 MATCH_WS="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SETUP="${UAV1_SINGLE_ROS_SETUP:-/opt/ros/noetic/setup.bash}"
-LAYOUT_CONFIG="${UAV1_SINGLE_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav1_six.conf}"
+LAYOUT_CONFIG="${UAV1_SINGLE_LAYOUT_CONFIG:-}"
 LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"
 LOCAL_ROS_IP="${UAV1_SINGLE_ROS_IP:-10.54.87.232}"
 RUN_ID="${UID:-$(id -u)}"
@@ -58,9 +58,9 @@ usage() {
   7 AutoTrans 控制器/桥接/日志/自动 rosbag。
 
 说明：
-  - ROS master 固定使用 UAV1 本机 10.54.87.232:11311，不依赖 UAV0。
+  - ROS master 固定使用 UAV1 本机 10.54.87.232:11311。
   - 第 6 屏执行 run_swarm.launch 中当前配置的单机预设航点。
-  - 第 6 屏启动下视相机，但不启动双机接力、坐标对齐、搜索精降或降落仲裁节点。
+  - 第 6 屏只启动下视相机和单机 Diff/RViz。
   - AutoTrans 直接向 /UAV1/mavros/setpoint_raw/attitude 发布控制量。
   - 不自动解锁、不切换 OFFBOARD、不额外发送目标点。
 
@@ -164,6 +164,101 @@ stop_terminator_window() {
   rm -f -- "${TERMINATOR_PID_FILE}"
 }
 
+write_runtime_config() {
+  if [[ -n "${LAYOUT_CONFIG}" ]]; then
+    if [[ ! -f "${LAYOUT_CONFIG}" ]]; then
+      log "找不到 Terminator 布局模板：${LAYOUT_CONFIG}"
+      return 1
+    fi
+    sed "s|__UAV1_SINGLE_SCRIPT__|${SCRIPT_PATH}|g" \
+      "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
+    return 0
+  fi
+
+  cat > "${RUNTIME_CONFIG}" <<EOF
+[global_config]
+  suppress_multiple_term_dialog = True
+[keybindings]
+[profiles]
+  [[default]]
+[layouts]
+  [[uav1_seven]]
+    [[[window0]]]
+      type = Window
+      parent = ""
+      title = UAV1 单机传感器检测规划控制
+      size = 1920,1080
+      maximised = True
+    [[[root]]]
+      type = VPaned
+      parent = window0
+      ratio = 0.5
+    [[[top]]]
+      type = HPaned
+      parent = root
+      ratio = 0.333
+    [[[step1]]]
+      type = Terminal
+      parent = top
+      profile = default
+      title = 1 UAV1 Master/MAVROS
+      command = ${SCRIPT_PATH} --pane mavros
+    [[[top_right]]]
+      type = HPaned
+      parent = top
+      ratio = 0.5
+    [[[step2]]]
+      type = Terminal
+      parent = top_right
+      profile = default
+      title = 2 UAV1 MID360
+      command = ${SCRIPT_PATH} --pane mid360
+    [[[step3]]]
+      type = Terminal
+      parent = top_right
+      profile = default
+      title = 3 UAV1 FAST-LIO
+      command = ${SCRIPT_PATH} --pane fastlio
+    [[[bottom]]]
+      type = HPaned
+      parent = root
+      ratio = 0.25
+    [[[step4]]]
+      type = Terminal
+      parent = bottom
+      profile = default
+      title = 4 UAV1 视觉位姿
+      command = ${SCRIPT_PATH} --pane pose
+    [[[bottom_right]]]
+      type = HPaned
+      parent = bottom
+      ratio = 0.333
+    [[[step5]]]
+      type = Terminal
+      parent = bottom_right
+      profile = default
+      title = 5 UAV1 检测上报
+      command = ${SCRIPT_PATH} --pane detection
+    [[[bottom_far_right]]]
+      type = HPaned
+      parent = bottom_right
+      ratio = 0.5
+    [[[step6]]]
+      type = Terminal
+      parent = bottom_far_right
+      profile = default
+      title = 6 UAV1 单机Diff/RViz
+      command = ${SCRIPT_PATH} --pane planner
+    [[[step7]]]
+      type = Terminal
+      parent = bottom_far_right
+      profile = default
+      title = 7 UAV1 AutoTrans
+      command = ${SCRIPT_PATH} --pane controller
+[plugins]
+EOF
+}
+
 wait_for_ros_master() {
   local elapsed=0
   while (( elapsed < WAIT_TIMEOUT )); do
@@ -252,17 +347,14 @@ pane_init() {
 run_mavros_pane() {
   local pane_status
   pane_init 1 本机ROS-master与MAVROS
-  trap stop_owned_local_master EXIT INT TERM
   if ! start_or_reuse_local_master; then
     stop_owned_local_master
-    trap - EXIT INT TERM
     keep_pane_open
   fi
   printf '[启动] UAV1 MAVROS，并设置 IMU/姿态/里程计/ESC 频率\n'
   sh "${MATCH_WS}/shfiles/run_uav1_sensor_stack.sh" mavros
   pane_status=$?
-  stop_owned_local_master
-  trap - EXIT INT TERM
+  printf '[保留] UAV1 本机 ROS master 继续运行：%s\n' "${ROS_MASTER_URI}"
   printf '[退出] MAVROS 分屏，返回码=%s\n' "${pane_status}"
   keep_pane_open
 }
@@ -338,7 +430,6 @@ run_planner_pane() {
     keep_pane_open
   fi
   printf '[启动] diff_planner run_swarm.launch 及其原生 RViz 检测布局\n'
-  printf '[隔离] 不启动前机接力、双机坐标对齐或搜索精降\n'
   roslaunch diff_planner run_swarm.launch
   launch_status=$?
   stop_owned_down_camera
@@ -423,10 +514,6 @@ if ! command -v timeout >/dev/null 2>&1; then
   log '缺少 timeout 命令，无法进行可靠的话题等待'
   exit 1
 fi
-if [[ ! -f "${LAYOUT_CONFIG}" ]]; then
-  log "找不到 Terminator 布局：${LAYOUT_CONFIG}"
-  exit 1
-fi
 if [[ ! -f "${MATCH_WS}/devel/setup.bash" ]]; then
   log "match_ws 尚未编译或缺少：${MATCH_WS}/devel/setup.bash"
   exit 1
@@ -453,8 +540,9 @@ fi
 
 export UAV1_SINGLE_THERMAL="${THERMAL}"
 
-sed "s|__UAV1_SIX_SCRIPT__|${SCRIPT_PATH}|g" \
-  "${LAYOUT_CONFIG}" > "${RUNTIME_CONFIG}"
+if ! write_runtime_config; then
+  exit 1
+fi
 
 log '打开 UAV1 单机 Terminator 七分屏'
 log '上排：1 本机Master/MAVROS | 2 MID360 | 3 FAST-LIO'
@@ -466,7 +554,7 @@ log "Terminator 启动日志：${TERMINATOR_LOG}"
 
 nohup terminator --no-dbus --maximise \
   --config="${RUNTIME_CONFIG}" \
-  --layout=uav1_six \
+  --layout=uav1_seven \
   >"${TERMINATOR_LOG}" 2>&1 &
 terminator_pid=$!
 printf '%s\n' "${terminator_pid}" > "${TERMINATOR_PID_FILE}"
