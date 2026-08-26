@@ -20,8 +20,8 @@ UAV1_DIFF_RVIZ = (
     / "Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz"
 )
 UAV1_SIX_SCRIPT = ROOT.parents[1] / "shfiles/start_uav1_six_terminator.sh"
-UAV1_SINGLE_SEVEN_SCRIPT = (
-    ROOT.parents[1] / "shfiles/start_uav1_single_seven_terminator.sh"
+UAV1_SEVEN_SCRIPT = (
+    ROOT.parents[1] / "shfiles/start_uav1_seven_terminator.sh"
 )
 UAV1_SEVEN_LAYOUT = ROOT.parents[1] / "shfiles/terminator_uav1_six.conf"
 UAV1_SENSOR_STACK = ROOT.parents[1] / "shfiles/run_uav1_sensor_stack.sh"
@@ -31,8 +31,8 @@ UAV1_DETECTION_LAUNCH = (
 )
 
 
-def test_uav1_single_seven_uses_local_master_and_standalone_diff():
-    script = UAV1_SINGLE_SEVEN_SCRIPT.read_text(encoding="utf-8")
+def test_uav1_seven_uses_local_master_and_standalone_diff():
+    script = UAV1_SEVEN_SCRIPT.read_text(encoding="utf-8")
 
     assert 'LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"' in script
     assert 'export ROS_MASTER_URI="http://${LOCAL_MASTER_IP}:11311"' in script

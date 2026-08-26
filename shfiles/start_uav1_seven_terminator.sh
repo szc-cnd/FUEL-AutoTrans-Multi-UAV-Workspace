@@ -17,10 +17,10 @@ LAYOUT_CONFIG="${UAV1_SINGLE_LAYOUT_CONFIG:-${SCRIPT_DIR}/terminator_uav1_six.co
 LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"
 LOCAL_ROS_IP="${UAV1_SINGLE_ROS_IP:-10.54.87.232}"
 RUN_ID="${UID:-$(id -u)}"
-TERMINATOR_LOG="${UAV1_SINGLE_TERMINATOR_LOG:-/tmp/uav1_single_seven_terminator_${RUN_ID}.log}"
-TERMINATOR_PID_FILE="${UAV1_SINGLE_TERMINATOR_PID_FILE:-/tmp/uav1_single_seven_terminator_${RUN_ID}.pid}"
-START_LOCK_FILE="${UAV1_SINGLE_START_LOCK_FILE:-/tmp/uav1_single_seven_start.lock}"
-RUNTIME_CONFIG="${UAV1_SINGLE_RUNTIME_CONFIG:-/tmp/uav1_single_seven_terminator_${RUN_ID}.conf}"
+TERMINATOR_LOG="${UAV1_SINGLE_TERMINATOR_LOG:-/tmp/uav1_seven_terminator_${RUN_ID}.log}"
+TERMINATOR_PID_FILE="${UAV1_SINGLE_TERMINATOR_PID_FILE:-/tmp/uav1_seven_terminator_${RUN_ID}.pid}"
+START_LOCK_FILE="${UAV1_SINGLE_START_LOCK_FILE:-/tmp/uav1_seven_start.lock}"
+RUNTIME_CONFIG="${UAV1_SINGLE_RUNTIME_CONFIG:-/tmp/uav1_seven_terminator_${RUN_ID}.conf}"
 ROSCORE_LOG="${UAV1_SINGLE_ROSCORE_LOG:-/tmp/uav1_single_roscore_${RUN_ID}.log}"
 WAIT_TIMEOUT="${UAV1_SINGLE_WAIT_TIMEOUT:-180}"
 THERMAL="${UAV1_SINGLE_THERMAL:-true}"
@@ -41,14 +41,14 @@ STOP_REQUEST=false
 OWNED_MASTER_PID=""
 
 log() {
-  printf '[uav1_single_seven] %s\n' "$*"
+  printf '[uav1_seven] %s\n' "$*"
 }
 
 usage() {
   cat <<'EOF'
 用法：
-  bash shfiles/start_uav1_single_seven_terminator.sh
-  bash shfiles/start_uav1_single_seven_terminator.sh stop
+  bash shfiles/start_uav1_seven_terminator.sh
+  bash shfiles/start_uav1_seven_terminator.sh stop
 
 作用：
   打开一个 UAV1 单机 Terminator 七分屏窗口并依次等待、启动：
@@ -70,7 +70,7 @@ EOF
 }
 
 keep_pane_open() {
-  printf '\n[uav1_single_seven] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
+  printf '\n[uav1_seven] 本分屏保持打开；运行中的节点请按 Ctrl+C 停止。\n'
   if [[ -t 0 ]]; then
     exec "${SHELL:-/bin/bash}" -i
   fi
@@ -139,12 +139,12 @@ terminator_window_running() {
     pid="$(tr -d '[:space:]' < "${TERMINATOR_PID_FILE}")"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       if [[ -r "/proc/${pid}/cmdline" ]] &&
-          tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq 'uav1_single_seven'; then
+          tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq 'uav1_seven'; then
         return 0
       fi
     fi
   fi
-  pgrep -af '[t]erminator.*uav1_single_seven' >/dev/null 2>&1
+  pgrep -af '[t]erminator.*uav1_seven' >/dev/null 2>&1
 }
 
 stop_terminator_window() {
