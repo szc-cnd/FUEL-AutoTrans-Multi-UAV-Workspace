@@ -86,7 +86,7 @@ def test_relay_waypoints_release_after_xy_clearance():
     }
     assert params["follow_distance"] == "1.50"
     assert params["release_path_length"] == "0.70"
-    assert params["waypoint_release_min_separation"] == "1.00"
+    assert params["waypoint_release_min_separation"] == "0.70"
     assert params["door_release_inside_distance"] == "0.70"
     assert params["relay_release_distance"] == "0.70"
 
@@ -117,17 +117,17 @@ def test_diff_execution_continuously_holds_and_retreats_for_uav_spacing():
         for item in follower.findall("param")
     }
     assert params["enable_diff_separation_safety"] == "true"
-    assert params["min_separation"] == "1.00"
-    assert params["separation_recovery_distance"] == "0.90"
-    assert params["separation_release_distance"] == "1.20"
+    assert params["min_separation"] == "0.70"
+    assert params["separation_recovery_distance"] == "0.60"
+    assert params["separation_release_distance"] == "0.80"
 
     source = FOLLOWER.read_text(encoding="utf-8")
     fifo_spacing = source.split(
-        "// 前机必须已经越过当前队首", 1
-    )[1].split("const double horizontal_error", 1)[0]
+        "bool handleSimpleDiffPlannerExecution", 1
+    )[1].split("const bool terminal_arrival", 1)[0]
     assert "std::hypot(leader_world.x - desired_world.position.x" in fifo_spacing
     assert "waypoint_release_min_separation_" in fifo_spacing
-    assert "std::hypot(leader_world.x - follower_world.x" in fifo_spacing
+    assert "std::hypot(leader_world.x - current_world.x" in fifo_spacing
     assert "leader_world.z" not in fifo_spacing
     assert "follower_world.z" not in fifo_spacing
 
@@ -239,7 +239,7 @@ def test_relay_waypoints_are_cached_and_only_consumed_after_arrival():
     )[0]
     assert "consumeSimpleRelayFront();" in simple_execution
     assert "relay_waypoints_.erase" in consume
-    assert simple_execution.index("UAV1 FIFO ARRIVED") < simple_execution.index(
+    assert simple_execution.index("UAV1 FIFO %s") < simple_execution.index(
         "consumeSimpleRelayFront();"
     )
     assert "relay_waypoints_.pop_back" not in source

@@ -172,18 +172,18 @@
         <param name="follower_detection_enable_topic" value="/UAV1/corridor_search/dynamic_detection_enable"/>
         <param name="follow_distance" value="1.50"/>
         <param name="release_path_length" value="0.70"/>
-        <!-- Diff持续水平间距保护：1.00m内锁点；旧复杂模式在0.90m内恢复退让。 -->
+        <!-- Diff持续水平间距保护：0.70m内锁点；旧复杂模式在0.60m内恢复退让。 -->
         <param name="enable_diff_separation_safety" value="true"/>
-        <param name="min_separation" value="1.00"/>
-        <!-- UAV0当前位置离当前FIFO目标的XY距离达到1.00m后，才向UAV1释放该点。 -->
-        <param name="waypoint_release_min_separation" value="1.00"/>
+        <param name="min_separation" value="0.70"/>
+        <!-- UAV0当前位置离当前FIFO目标的XY距离达到0.70m后，才向UAV1释放该点。 -->
+        <param name="waypoint_release_min_separation" value="0.70"/>
         <!-- 不接收前机z；名义0.60m，只有自身点云线段受阻才允许上探到0.70m。 -->
         <param name="fixed_follow_height" value="0.60"/>
         <param name="follow_height_min" value="0.60"/>
         <param name="follow_height_max" value="0.70"/>
         <!-- 前机轨迹只提供XY；不按前机实测高度拦截停稳终点，后机统一在自身0.60m高度交给Diff规划。 -->
-        <param name="separation_recovery_distance" value="0.90"/>
-        <param name="separation_release_distance" value="1.20"/>
+        <param name="separation_recovery_distance" value="0.60"/>
+        <param name="separation_release_distance" value="0.80"/>
         <param name="emergency_retreat_step" value="0.35"/>
         <param name="emergency_retreat_speed" value="0.30"/>
         <!-- 2026-07-16: 后机落点取前机安全轨迹末端后方约0.5m；终点模式关闭两机距离条件。 -->

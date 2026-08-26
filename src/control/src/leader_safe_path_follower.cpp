@@ -214,10 +214,10 @@ class LeaderSafePathFollower {
     // 双机普通接力只共享XY路线；后机名义高度与两机起飞悬停高度统一为0.60m。
     pnh_.param("follow_distance", follow_distance_, 1.50);
     pnh_.param("release_path_length", release_path_length_, 0.70);
-    pnh_.param("min_separation", min_separation_, 1.00);
+    pnh_.param("min_separation", min_separation_, 0.70);
     // 航点路径进度只证明前机走过该段；发布前还必须用两机对齐后的实时XY验证水平净距。
     pnh_.param("waypoint_release_min_separation",
-               waypoint_release_min_separation_, 1.00);
+               waypoint_release_min_separation_, 0.70);
     pnh_.param("fixed_follow_height", fixed_follow_height_, 0.60);
     pnh_.param("follow_height_min", follow_height_min_, 0.60);
     pnh_.param("follow_height_max", follow_height_max_, 0.70);
@@ -236,8 +236,8 @@ class LeaderSafePathFollower {
                             follower_detection_enable_topic_,
                             "/UAV1/corridor_search/dynamic_detection_enable");
     // 前机反向时：先在min_separation锁点，继续压缩到recovery阈值后退让，恢复到release阈值再重规划。
-    pnh_.param("separation_recovery_distance", separation_recovery_distance_, 0.90);
-    pnh_.param("separation_release_distance", separation_release_distance_, 1.20);
+    pnh_.param("separation_recovery_distance", separation_recovery_distance_, 0.60);
+    pnh_.param("separation_release_distance", separation_release_distance_, 0.80);
     pnh_.param("emergency_retreat_step", emergency_retreat_step_, 0.35);
     pnh_.param("emergency_retreat_speed", emergency_retreat_speed_, 0.30);
     if (!std::isfinite(min_separation_) || !std::isfinite(separation_recovery_distance_) ||
@@ -1877,9 +1877,24 @@ class LeaderSafePathFollower {
         ? worldToFollower(desired_world.position)
         : useFollowerCruiseHeight(worldToFollower(desired_world.position));
     const geometry_msgs::Point& current_local = follower_odom_.pose.pose.position;
+    const geometry_msgs::Point current_world = followerToWorld(current_local);
+    const double horizontal_error =
+        std::hypot(desired_local.x - current_local.x,
+                   desired_local.y - current_local.y);
+    const double vertical_error = std::fabs(desired_local.z - current_local.z);
+    const double pass_projection =
+        (current_world.x - desired_world.position.x) * std::cos(desired_world.yaw) +
+        (current_world.y - desired_world.position.y) * std::sin(desired_world.yaw);
+    const bool waypoint_arrival = !terminal_relay &&
+        horizontal_error <= relay_arrive_radius_ &&
+        vertical_error <= relay_arrive_z_tolerance_;
+    const bool waypoint_passed = !terminal_relay &&
+        std::isfinite(desired_world.yaw) && pass_projection >= 0.0 &&
+        vertical_error <= relay_arrive_z_tolerance_;
 
-    // 前机必须已经越过当前队首并从该点继续走开1.5m，后机才可进入该点。
-    if (!terminal_relay && enable_diff_separation_safety_) {
+    // 已到达或越过当前普通点时直接消费，不能再被旧点的间距保护拉回。
+    if (!terminal_relay && !waypoint_arrival && !waypoint_passed &&
+        enable_diff_separation_safety_) {
       if (!leaderOdomFresh(now)) {
         simple_waypoint_clearance_hold_active_ = true;
         setDiffWaitPositionHold(true, "waiting for fresh UAV0 odometry before FIFO release");
@@ -1916,9 +1931,8 @@ class LeaderSafePathFollower {
       }
 
       // 同时保留两机实时XY间距保护。
-      const geometry_msgs::Point follower_world = followerToWorld(current_local);
-      const double separation = std::hypot(leader_world.x - follower_world.x,
-                                           leader_world.y - follower_world.y);
+      const double separation = std::hypot(leader_world.x - current_world.x,
+                                           leader_world.y - current_world.y);
       if (separation + 1.0e-6 < min_separation_) {
         if (!simple_separation_hold_active_) {
           simple_separation_hold_active_ = true;
@@ -1941,21 +1955,14 @@ class LeaderSafePathFollower {
       }
     }
 
-    const double horizontal_error =
-        std::hypot(desired_local.x - current_local.x,
-                   desired_local.y - current_local.y);
-    const double vertical_error = std::fabs(desired_local.z - current_local.z);
     // 普通FIFO航点与run_swarm的逐点切换一致：进入到达邻域即可消费，
-    // 不要求悬停到零速或精确压中坐标。最终降落点仍保留严格停稳判定。
-    const bool waypoint_arrival = !terminal_relay &&
-        horizontal_error <= relay_arrive_radius_ &&
-        vertical_error <= relay_arrive_z_tolerance_;
+    // 或沿该点航向越过目标平面；最终降落点仍保留严格停稳判定。
     const bool terminal_arrival = terminal_relay &&
         horizontal_error <= terminal_arrive_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_ &&
         follower_horizontal_speed_ <= relay_arrive_max_horizontal_speed_ &&
         follower_vertical_speed_ <= relay_arrive_max_vertical_speed_;
-    if (waypoint_arrival || terminal_arrival) {
+    if (waypoint_arrival || waypoint_passed || terminal_arrival) {
       if (terminal_relay) {
         if (relay_arrival_stamp_.isZero()) relay_arrival_stamp_ = now;
         if ((now - relay_arrival_stamp_).toSec() < relay_arrive_dwell_) return true;
@@ -1970,8 +1977,9 @@ class LeaderSafePathFollower {
         return true;
       }
 
-      ROS_ERROR("[safe_follower] UAV1 FIFO ARRIVED and consume endpoint 1/%zu "
+      ROS_ERROR("[safe_follower] UAV1 FIFO %s and consume endpoint 1/%zu "
                 "at (%.2f,%.2f,%.2f).",
+                waypoint_passed && !waypoint_arrival ? "PASSED" : "ARRIVED",
                 relay_waypoints_.size(), desired_local.x, desired_local.y,
                 desired_local.z);
       if (outside_wait_relay) {
@@ -4065,14 +4073,14 @@ class LeaderSafePathFollower {
   double follower_alignment_z_{0.0}, follower_alignment_yaw_{0.0};
   double follower_alignment_cos_{1.0}, follower_alignment_sin_{0.0};
   double leader_start_height_{0.3}, follower_start_height_{0.3};
-  // 默认0.70m缓存路径间隔；双机XY间距1.00m内锁点，0.90m内触发退让。
-  double follow_distance_{1.50}, release_path_length_{0.70}, min_separation_{1.00};
-  double waypoint_release_min_separation_{1.00};
+  // 默认0.70m缓存路径间隔；双机XY间距0.70m内锁点，0.60m内触发退让。
+  double follow_distance_{1.50}, release_path_length_{0.70}, min_separation_{0.70};
+  double waypoint_release_min_separation_{0.70};
   double fixed_follow_height_{0.60}, follow_height_min_{0.60}, follow_height_max_{0.70};
   double down_search_release_height_{1.80};
   double down_search_min_vertical_separation_{1.00};
   double continuous_follow_speed_{0.42};
-  double separation_recovery_distance_{0.90}, separation_release_distance_{1.20};
+  double separation_recovery_distance_{0.60}, separation_release_distance_{0.80};
   double emergency_retreat_step_{0.35}, emergency_retreat_speed_{0.30};
   // 2026-07-16: 无launch覆盖时也保持后机在前机终点路线后方约0.5m的独立落点。
   double terminal_landing_spacing_{0.50}, terminal_approach_height_{0.60};

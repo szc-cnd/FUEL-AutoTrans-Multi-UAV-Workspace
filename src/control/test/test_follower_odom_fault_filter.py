@@ -189,6 +189,10 @@ def test_simple_mode_gives_diff_only_the_fifo_front_and_consumes_on_arrival():
     assert "consumeSimpleRelayFront();" in execution
     assert "relay_waypoints_.erase" in consume
     assert "const bool waypoint_arrival = !terminal_relay" in execution
+    assert "const bool waypoint_passed = !terminal_relay" in execution
+    assert "pass_projection >= 0.0" in execution
+    assert "!waypoint_arrival && !waypoint_passed" in execution
+    assert "waypoint_arrival || waypoint_passed || terminal_arrival" in execution
     assert 'name="relay_arrive_radius" value="0.40"' in LAUNCH
     ordinary_arrival = execution.split(
         "const bool waypoint_arrival", maxsplit=1
@@ -217,7 +221,7 @@ def test_simple_mode_skips_occupied_endpoint_and_waits_for_leader_to_clear_next(
     assert "leader_world.x - desired_world.position.x" in execution
     assert "leader_to_waypoint + 1.0e-6 < waypoint_release_min_separation_" in execution
     assert "DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT" in execution
-    assert 'name="waypoint_release_min_separation" value="1.00"' in LAUNCH
+    assert 'name="waypoint_release_min_separation" value="0.70"' in LAUNCH
 
 
 def test_simple_mode_has_unbounded_dynamic_waypoint_queue():
