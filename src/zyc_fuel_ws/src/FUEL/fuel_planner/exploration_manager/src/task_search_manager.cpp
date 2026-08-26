@@ -1379,44 +1379,50 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
-  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。以该障碍
-  // 所在水平面为九宫格中心，在累计占据图中检查完整的0.5m×0.5m足迹窗口。
-  // 只有窗口从障碍前一排经八邻域连到后一排，才说明左、右或斜向确有一台无人机
-  // 能穿过的旁路；单个FREE栅格和转角侧面的零碎空间都不能再否决真实转弯。
+  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。把障碍所在
+  // 的通道水平区域划成九宫格，统计障碍落在哪些格子；九宫格横向中心始终投影到
+  // 当前通道轴线，不能跟着偏到通道一侧的无人机或瞬时目标移动。
   const Eigen::Vector2d lateral(-travel.y(), travel.x());
-  constexpr double kBypassWindowSize = 0.50;
+  constexpr double kBypassCellSize = 0.50;
   const double map_resolution = std::max(0.01, sdf_map_->getResolution());
-  auto knownFreeWindow = [&](const Eigen::Vector3d& center) {
-    const double half = 0.5 * kBypassWindowSize;
-    for (double forward_offset = -half;
-         forward_offset <= half + 1e-6;
-         forward_offset += map_resolution) {
-      for (double lateral_offset = -half;
-           lateral_offset <= half + 1e-6;
-           lateral_offset += map_resolution) {
+  const double cell_sample_step = std::min(kBypassCellSize, map_resolution);
+  auto cellOccupied = [&](const Eigen::Vector3d& center) {
+    const double half = 0.5 * kBypassCellSize;
+    for (double forward_offset = -half + 0.5 * cell_sample_step;
+         forward_offset < half - 1e-6;
+         forward_offset += cell_sample_step) {
+      for (double lateral_offset = -half + 0.5 * cell_sample_step;
+           lateral_offset < half - 1e-6;
+           lateral_offset += cell_sample_step) {
         Eigen::Vector3d sample = center;
         sample.head<2>() +=
             forward_offset * travel + lateral_offset * lateral;
-        if (!sdf_map_->isInMap(sample) ||
-            sdf_map_->getOccupancy(sample) != SDFMap::FREE)
-          return false;
+        if (sdf_map_->isInMap(sample) &&
+            sdf_map_->getOccupancy(sample) == SDFMap::OCCUPIED)
+          return true;
       }
     }
-    return true;
+    return false;
   };
 
-  std::array<std::array<bool, 3>, 3> free_windows{};
+  Eigen::Vector3d grid_center = forward_end;
+  const Eigen::Vector2d corridor_axis_origin =
+      segment_direction_.norm() > 1e-3 ? segment_origin_ : origin.head<2>();
+  grid_center.head<2>() = task_search::corridorGridCenter(
+      forward_end.head<2>(), corridor_axis_origin, travel);
+
+  std::array<std::array<bool, 3>, 3> occupied_cells{};
   for (int forward_index = 0; forward_index < 3; ++forward_index) {
     for (int lateral_index = 0; lateral_index < 3; ++lateral_index) {
-      Eigen::Vector3d center = forward_end;
+      Eigen::Vector3d center = grid_center;
       center.head<2>() +=
-          (forward_index - 1) * kBypassWindowSize * travel +
-          (lateral_index - 1) * kBypassWindowSize * lateral;
-      free_windows[forward_index][lateral_index] = knownFreeWindow(center);
+          (forward_index - 1) * kBypassCellSize * travel +
+          (lateral_index - 1) * kBypassCellSize * lateral;
+      occupied_cells[forward_index][lateral_index] = cellOccupied(center);
     }
   }
   const bool has_bypass =
-      task_search::hasNineGridObstacleBypass(free_windows);
+      task_search::hasNineGridObstacleBypass(occupied_cells);
   Eigen::Vector3d robot_pos;
   {
     std::lock_guard<std::mutex> lock(body_cloud_mutex_);
@@ -1431,19 +1437,20 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   ROS_WARN_THROTTLE(
       0.5,
       "[task_search] obstacle-plane audit robot=(%.2f,%.2f) origin=(%.2f,%.2f) "
-      "obstacle=(%.2f,%.2f) active_goal=(%.2f,%.2f) "
-      "grid=[%d%d%d/%d%d%d/%d%d%d] decision=%s.",
+      "ray_hit=(%.2f,%.2f) grid_center=(%.2f,%.2f) active_goal=(%.2f,%.2f) "
+      "occupied=[%d%d%d/%d%d%d/%d%d%d] decision=%s.",
       robot_pos.x(), robot_pos.y(), origin.x(), origin.y(),
-      forward_end.x(), forward_end.y(), goal_x, goal_y,
-        static_cast<int>(free_windows[0][0]),
-        static_cast<int>(free_windows[0][1]),
-        static_cast<int>(free_windows[0][2]),
-        static_cast<int>(free_windows[1][0]),
-        static_cast<int>(free_windows[1][1]),
-        static_cast<int>(free_windows[1][2]),
-      static_cast<int>(free_windows[2][0]),
-      static_cast<int>(free_windows[2][1]),
-      static_cast<int>(free_windows[2][2]),
+      forward_end.x(), forward_end.y(), grid_center.x(), grid_center.y(),
+      goal_x, goal_y,
+      static_cast<int>(occupied_cells[0][0]),
+      static_cast<int>(occupied_cells[0][1]),
+      static_cast<int>(occupied_cells[0][2]),
+      static_cast<int>(occupied_cells[1][0]),
+      static_cast<int>(occupied_cells[1][1]),
+      static_cast<int>(occupied_cells[1][2]),
+      static_cast<int>(occupied_cells[2][0]),
+      static_cast<int>(occupied_cells[2][1]),
+      static_cast<int>(occupied_cells[2][2]),
       has_bypass ? "LOCAL_BYPASS" : "TEST_MAPPED_TURN");
   if (has_bypass) {
     return false;

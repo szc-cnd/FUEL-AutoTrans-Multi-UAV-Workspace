@@ -121,20 +121,30 @@ inline bool insideForwardHalfPlane(const Eigen::Vector2d& direction,
   return direction.normalized().dot(mission_inside_direction.normalized()) >= -1e-6;
 }
 
-// 障碍物所在水平面按九宫格检查。每格表示能完整容纳无人机水平足迹的自由窗口；
-// 只有历史自由窗口能从障碍前一排经八邻域连到障碍后一排，才说明确实存在穿过
-// 该障碍段的局部旁路。八邻域允许左上、右下等斜向绕行，不局限于正左/正右。
+inline Eigen::Vector2d corridorGridCenter(
+    const Eigen::Vector2d& obstacle_station,
+    const Eigen::Vector2d& corridor_origin,
+    const Eigen::Vector2d& corridor_direction) {
+  if (corridor_direction.norm() < 1e-6) return obstacle_station;
+  const Eigen::Vector2d direction = corridor_direction.normalized();
+  return corridor_origin +
+         (obstacle_station - corridor_origin).dot(direction) * direction;
+}
+
+// 将通道内障碍物所在的水平区域划成固定九宫格，每格记录是否含有占据，而不是
+// 以命中的障碍点为中心寻找九个“完全FREE”的窗口。只要非占据格能从前排连到
+// 后排，障碍就只封住了局部区域，应交给A*结合膨胀地图做最终安全复核。
 inline bool hasNineGridObstacleBypass(
-    const std::array<std::array<bool, 3>, 3>& free_windows) {
+    const std::array<std::array<bool, 3>, 3>& occupied_cells) {
   std::array<std::array<bool, 3>, 3> reachable{};
   for (int lateral = 0; lateral < 3; ++lateral)
-    reachable[0][lateral] = free_windows[0][lateral];
+    reachable[0][lateral] = !occupied_cells[0][lateral];
 
   for (int iteration = 0; iteration < 9; ++iteration) {
     auto next = reachable;
     for (int forward = 0; forward < 3; ++forward) {
       for (int lateral = 0; lateral < 3; ++lateral) {
-        if (!free_windows[forward][lateral] || reachable[forward][lateral])
+        if (occupied_cells[forward][lateral] || reachable[forward][lateral])
           continue;
         for (int df = -1; df <= 1; ++df) {
           for (int dl = -1; dl <= 1; ++dl) {

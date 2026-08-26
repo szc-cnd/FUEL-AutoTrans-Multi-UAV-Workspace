@@ -60,29 +60,27 @@ int main() {
   assert(!fast_planner::task_search::insideForwardHalfPlane(
       Eigen::Vector2d(-0.01, 1.0), Eigen::Vector2d(1.0, 0.0)));
 
-  // 单个或零散FREE栅格不能证明能穿过障碍；必须存在完整自由窗口组成的连续旁路。
-  std::array<std::array<bool, 3>, 3> isolated_free{};
-  isolated_free[1][0] = true;
-  assert(!fast_planner::task_search::hasNineGridObstacleBypass(isolated_free));
+  // 九宫格中心投影在通道轴线上，不能跟着偏到一侧的无人机射线移动。
+  const Eigen::Vector2d grid_center =
+      fast_planner::task_search::corridorGridCenter(
+          Eigen::Vector2d(3.75, 0.50), Eigen::Vector2d(0.95, 0.01),
+          Eigen::Vector2d(1.0, 0.0));
+  assert((grid_center - Eigen::Vector2d(3.75, 0.01)).norm() < 1e-9);
 
-  // 正左侧三个足迹窗口连通，属于可由A*处理的半幅局部障碍。
-  std::array<std::array<bool, 3>, 3> left_bypass{};
-  left_bypass[0][0] = true;
-  left_bypass[1][0] = true;
-  left_bypass[2][0] = true;
-  assert(fast_planner::task_search::hasNineGridObstacleBypass(left_bypass));
+  // 中间或一侧的局部障碍没有横向封死通道，应留给A*做膨胀足迹复核。
+  std::array<std::array<bool, 3>, 3> center_obstacle{};
+  center_obstacle[1][1] = true;
+  assert(fast_planner::task_search::hasNineGridObstacleBypass(center_obstacle));
+  std::array<std::array<bool, 3>, 3> side_obstacle{};
+  side_obstacle[1][0] = true;
+  side_obstacle[2][0] = true;
+  assert(fast_planner::task_search::hasNineGridObstacleBypass(side_obstacle));
 
-  // 左上/右下等斜向窗口同样属于九宫格旁路，不能被正左右射线遗漏。
-  std::array<std::array<bool, 3>, 3> diagonal_bypass{};
-  diagonal_bypass[0][1] = true;
-  diagonal_bypass[1][0] = true;
-  diagonal_bypass[2][1] = true;
-  assert(fast_planner::task_search::hasNineGridObstacleBypass(diagonal_bypass));
-
-  // 障碍前后虽然各有空间，但障碍所在一排没有足迹窗口，仍然不可穿过。
+  // 障碍横跨整个通道截面时不存在九宫格旁路，才继续测试真实拐弯。
   std::array<std::array<bool, 3>, 3> blocked_plane{};
-  blocked_plane[0][1] = true;
-  blocked_plane[2][1] = true;
+  blocked_plane[1][0] = true;
+  blocked_plane[1][1] = true;
+  blocked_plane[1][2] = true;
   assert(!fast_planner::task_search::hasNineGridObstacleBypass(blocked_plane));
   // A* 搜索阶段允许纯横移和向前斜移，但不能先向旧通道退一步再绕障。
   assert(fast_planner::directional_progress::isAllowed(
