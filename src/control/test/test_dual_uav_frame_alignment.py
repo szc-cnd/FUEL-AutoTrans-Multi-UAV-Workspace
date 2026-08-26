@@ -33,6 +33,7 @@ UAV1_DETECTION_LAUNCH = (
 
 def test_uav1_seven_uses_local_master_and_standalone_diff():
     script = UAV1_SEVEN_SCRIPT.read_text(encoding="utf-8")
+    rviz = UAV1_DIFF_RVIZ.read_text(encoding="utf-8")
 
     assert 'LOCAL_MASTER_IP="${UAV1_SINGLE_ROS_MASTER_IP:-10.54.87.232}"' in script
     assert 'export ROS_MASTER_URI="http://${LOCAL_MASTER_IP}:11311"' in script
@@ -40,10 +41,25 @@ def test_uav1_seven_uses_local_master_and_standalone_diff():
     assert "start_or_reuse_local_master" in script
     assert "roscore" in script
     assert "roslaunch diff_planner run_swarm.launch" in script
+    assert "run_swarm.launch enable_rviz:=false" in script
+    assert "launch/include/uav1_lite.rviz" in script
+    assert 'PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"' in script
+    assert 'run_uav1_sensor_stack.sh" landing &' in script
+    assert 'wait_for_topic_message "${DOWN_CAMERA_TOPIC}"' in script
+    assert "stop_owned_down_camera" in script
     assert "leader_safe_path_follower.launch" not in script
     assert "/UAV0/" not in script
     assert "/UAV1/landing/control_owner" not in script
     assert "setpoint_topic:=/UAV1/mavros/setpoint_raw/attitude" in script
+    for topic in (
+        "/UAV1/target_reporting/markers",
+        "/UAV1/color_tag_detector/debug_image",
+        "/UAV1/vision/qr_debug_image",
+        "/UAV1/thermal/debug_image",
+        "/UAV1/landing/front/debug_image",
+        "/UAV1/landing/combined_debug_image",
+    ):
+        assert topic in rviz
 
 
 def test_single_alignment_config_is_used_by_tf_and_follower():

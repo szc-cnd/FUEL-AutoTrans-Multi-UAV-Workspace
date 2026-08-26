@@ -31,7 +31,8 @@ LIDAR_IMU_TOPIC="/UAV1/livox/imu"
 HIGH_FREQ_ODOM_TOPIC="/UAV1/fast_lio/Odom_high_freq"
 ODOM_TOPIC="${HIGH_FREQ_ODOM_TOPIC}"
 CLOUD_TOPIC="/UAV1/fast_lio/cloud_registered"
-PLANNER_HEARTBEAT_TOPIC="/drone_1_planning/heartbeat"
+DOWN_CAMERA_TOPIC="/UAV1/down_camera/image_raw"
+PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"
 VISION_POSE_TOPIC="/UAV1/mavros/vision_pose/pose"
 VISION_STABILIZE_SECONDS="${UAV1_SINGLE_VISION_STABILIZE_SECONDS:-4}"
 
@@ -59,7 +60,7 @@ usage() {
 说明：
   - ROS master 固定使用 UAV1 本机 10.54.87.232:11311，不依赖 UAV0。
   - 第 6 屏执行 run_swarm.launch 中当前配置的单机预设航点。
-  - 不启动双机接力、坐标对齐、下视相机、搜索精降或降落仲裁节点。
+  - 第 6 屏启动下视相机，但不启动双机接力、坐标对齐、搜索精降或降落仲裁节点。
   - AutoTrans 直接向 /UAV1/mavros/setpoint_raw/attitude 发布控制量。
   - 不自动解锁、不切换 OFFBOARD、不额外发送目标点。
 
@@ -310,13 +311,58 @@ run_detection_pane() {
 }
 
 run_planner_pane() {
+  local down_camera_pid="" planner_pid="" rviz_status
+
+  stop_owned_down_camera() {
+    if [[ -n "${down_camera_pid}" ]] && kill -0 "${down_camera_pid}" 2>/dev/null; then
+      printf '[停止] 关闭本分屏启动的 UAV1 下视相机（PID %s）\n' "${down_camera_pid}"
+      kill -INT "${down_camera_pid}" 2>/dev/null || true
+      wait "${down_camera_pid}" 2>/dev/null || true
+    fi
+  }
+
+  stop_owned_planner() {
+    if [[ -n "${planner_pid}" ]] && kill -0 "${planner_pid}" 2>/dev/null; then
+      kill -INT "${planner_pid}" 2>/dev/null || true
+      wait "${planner_pid}" 2>/dev/null || true
+    fi
+  }
+
+  stop_owned_planner_and_camera() {
+    stop_owned_planner
+    stop_owned_down_camera
+  }
+
   pane_init 6 单机Diff与RViz
   wait_for_topic_message "${ODOM_TOPIC}" || keep_pane_open
   wait_for_topic_message "${CLOUD_TOPIC}" || keep_pane_open
-  printf '[启动] diff_planner run_swarm.launch，执行当前配置的单机预设航点\n'
-  printf '[隔离] 不启动前机接力、双机坐标对齐、搜索精降或下视相机\n'
-  roslaunch diff_planner run_swarm.launch
-  printf '[退出] 单机 Diff 分屏，返回码=%s\n' "$?"
+  if timeout 2 rostopic echo -n 1 "${DOWN_CAMERA_TOPIC}" >/dev/null 2>&1; then
+    printf '[复用] UAV1 下视相机已经发布：%s\n' "${DOWN_CAMERA_TOPIC}"
+  else
+    printf '[启动] UAV1 下视相机；合并标注画面将在综合 RViz 中显示\n'
+    sh "${MATCH_WS}/shfiles/run_uav1_sensor_stack.sh" landing &
+    down_camera_pid=$!
+  fi
+  trap stop_owned_planner_and_camera EXIT INT TERM
+  if ! wait_for_topic_message "${DOWN_CAMERA_TOPIC}"; then
+    stop_owned_planner_and_camera
+    trap - EXIT INT TERM
+    keep_pane_open
+  fi
+  printf '[启动] diff_planner run_swarm.launch 和 UAV1 综合检测 RViz\n'
+  printf '[隔离] 不启动前机接力、双机坐标对齐或搜索精降\n'
+  roslaunch diff_planner run_swarm.launch enable_rviz:=false &
+  planner_pid=$!
+  rosrun rviz rviz \
+    -d "${MATCH_WS}/src/Diff-Planner/src/diff_planner/plan_manage/launch/include/uav1_lite.rviz" \
+    /move_base_simple/goal:=/UAV1/planning/goal \
+    /drone__diff_planner_node/goal_point:=/drone_1_diff_planner_node/goal_point \
+    /diff_planner_node/global_list:=/drone_1_diff_planner_node/global_list \
+    /diff_planner_node/a_star_list:=/drone_1_diff_planner_node/a_star_list
+  rviz_status=$?
+  stop_owned_planner_and_camera
+  trap - EXIT INT TERM
+  printf '[退出] UAV1 综合检测 RViz，返回码=%s\n' "${rviz_status}"
   keep_pane_open
 }
 
