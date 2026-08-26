@@ -198,6 +198,10 @@ def test_simple_mode_gives_diff_only_the_fifo_front_and_consumes_on_arrival():
         "const bool waypoint_arrival", maxsplit=1
     )[1].split("const bool terminal_arrival", maxsplit=1)[0]
     assert "horizontal_error <= relay_arrive_radius_" in ordinary_arrival
+    waypoint_passed = ordinary_arrival.split(
+        "const bool waypoint_passed", maxsplit=1
+    )[1].split("// 已到达或越过", maxsplit=1)[0]
+    assert "vertical_error" not in waypoint_passed
     assert "follower_horizontal_speed_" not in ordinary_arrival
     assert "diff_endpoint_capture_radius_" not in ordinary_arrival
     terminal_arrival = execution.split(

@@ -1889,8 +1889,7 @@ class LeaderSafePathFollower {
         horizontal_error <= relay_arrive_radius_ &&
         vertical_error <= relay_arrive_z_tolerance_;
     const bool waypoint_passed = !terminal_relay &&
-        std::isfinite(desired_world.yaw) && pass_projection >= 0.0 &&
-        vertical_error <= relay_arrive_z_tolerance_;
+        std::isfinite(desired_world.yaw) && pass_projection >= 0.0;
 
     // 已到达或越过当前普通点时直接消费，不能再被旧点的间距保护拉回。
     if (!terminal_relay && !waypoint_arrival && !waypoint_passed &&
