@@ -67,21 +67,6 @@ int main() {
           Eigen::Vector2d(1.0, 0.0));
   assert((grid_center - Eigen::Vector2d(3.75, 0.01)).norm() < 1e-9);
 
-  // 中间或一侧的局部障碍没有横向封死通道，应留给A*做膨胀足迹复核。
-  std::array<std::array<bool, 3>, 3> center_obstacle{};
-  center_obstacle[1][1] = true;
-  assert(fast_planner::task_search::hasNineGridObstacleBypass(center_obstacle));
-  std::array<std::array<bool, 3>, 3> side_obstacle{};
-  side_obstacle[1][0] = true;
-  side_obstacle[2][0] = true;
-  assert(fast_planner::task_search::hasNineGridObstacleBypass(side_obstacle));
-
-  // 障碍横跨整个通道截面时不存在九宫格旁路，才继续测试真实拐弯。
-  std::array<std::array<bool, 3>, 3> blocked_plane{};
-  blocked_plane[1][0] = true;
-  blocked_plane[1][1] = true;
-  blocked_plane[1][2] = true;
-  assert(!fast_planner::task_search::hasNineGridObstacleBypass(blocked_plane));
   // A* 搜索阶段允许纯横移和向前斜移，但不能先向旧通道退一步再绕障。
   assert(fast_planner::directional_progress::isAllowed(
       Eigen::Vector3d(3.2, 0.3, 0.5), Eigen::Vector3d(3.2, 1.1, 0.5),

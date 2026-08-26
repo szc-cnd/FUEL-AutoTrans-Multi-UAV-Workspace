@@ -2,7 +2,6 @@
 
 #include <Eigen/Eigen>
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace fast_planner {
@@ -129,40 +128,6 @@ inline Eigen::Vector2d corridorGridCenter(
   const Eigen::Vector2d direction = corridor_direction.normalized();
   return corridor_origin +
          (obstacle_station - corridor_origin).dot(direction) * direction;
-}
-
-// 将通道内障碍物所在的水平区域划成固定九宫格，每格记录是否含有占据，而不是
-// 以命中的障碍点为中心寻找九个“完全FREE”的窗口。只要非占据格能从前排连到
-// 后排，障碍就只封住了局部区域，应交给A*结合膨胀地图做最终安全复核。
-inline bool hasNineGridObstacleBypass(
-    const std::array<std::array<bool, 3>, 3>& occupied_cells) {
-  std::array<std::array<bool, 3>, 3> reachable{};
-  for (int lateral = 0; lateral < 3; ++lateral)
-    reachable[0][lateral] = !occupied_cells[0][lateral];
-
-  for (int iteration = 0; iteration < 9; ++iteration) {
-    auto next = reachable;
-    for (int forward = 0; forward < 3; ++forward) {
-      for (int lateral = 0; lateral < 3; ++lateral) {
-        if (occupied_cells[forward][lateral] || reachable[forward][lateral])
-          continue;
-        for (int df = -1; df <= 1; ++df) {
-          for (int dl = -1; dl <= 1; ++dl) {
-            if (df == 0 && dl == 0) continue;
-            const int neighbor_forward = forward + df;
-            const int neighbor_lateral = lateral + dl;
-            if (neighbor_forward < 0 || neighbor_forward >= 3 ||
-                neighbor_lateral < 0 || neighbor_lateral >= 3)
-              continue;
-            if (reachable[neighbor_forward][neighbor_lateral])
-              next[forward][lateral] = true;
-          }
-        }
-      }
-    }
-    reachable = next;
-  }
-  return reachable[2][0] || reachable[2][1] || reachable[2][2];
 }
 
 inline bool passesLatestTurnNoReturn(const Eigen::Vector2d& candidate,

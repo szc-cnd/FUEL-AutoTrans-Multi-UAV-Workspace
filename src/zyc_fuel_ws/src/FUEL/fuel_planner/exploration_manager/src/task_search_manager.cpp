@@ -10,6 +10,7 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <iomanip>
@@ -1379,30 +1380,30 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       mapRelativeColumnOccupied(forward_end, origin.z());
   if (!old_direction_blocked) return false;
 
-  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。把障碍所在
-  // 的通道水平区域划成九宫格，统计障碍落在哪些格子；九宫格横向中心始终投影到
-  // 当前通道轴线，不能跟着偏到通道一侧的无人机或瞬时目标移动。
+  // 中心射线第一次碰到占据只说明前方有障碍，不等于旧通道已经结束。
+  // 九宫格只用来把障碍水平面分区；真正判定在整个平面上搜索能容纳
+  // 0.5m×0.5m足迹的连续路径，并对相邻采样中点再做足迹检查。
   const Eigen::Vector2d lateral(-travel.y(), travel.x());
-  constexpr double kBypassCellSize = 0.50;
+  constexpr double kBypassWindowSize = 0.50;
+  constexpr double kAuditPlaneSize = 1.50;
   const double map_resolution = std::max(0.01, sdf_map_->getResolution());
-  const double cell_sample_step = std::min(kBypassCellSize, map_resolution);
-  auto cellOccupied = [&](const Eigen::Vector3d& center) {
-    const double half = 0.5 * kBypassCellSize;
-    for (double forward_offset = -half + 0.5 * cell_sample_step;
-         forward_offset < half - 1e-6;
-         forward_offset += cell_sample_step) {
-      for (double lateral_offset = -half + 0.5 * cell_sample_step;
-           lateral_offset < half - 1e-6;
-           lateral_offset += cell_sample_step) {
+  auto knownFreeWindow = [&](const Eigen::Vector3d& center) {
+    const double half = 0.5 * kBypassWindowSize;
+    const int samples = std::max(
+        1, static_cast<int>(std::ceil(kBypassWindowSize / map_resolution)));
+    const double sample_step = kBypassWindowSize / samples;
+    for (int forward_sample = 0; forward_sample <= samples; ++forward_sample) {
+      for (int lateral_sample = 0; lateral_sample <= samples; ++lateral_sample) {
         Eigen::Vector3d sample = center;
         sample.head<2>() +=
-            forward_offset * travel + lateral_offset * lateral;
-        if (sdf_map_->isInMap(sample) &&
-            sdf_map_->getOccupancy(sample) == SDFMap::OCCUPIED)
-          return true;
+            (-half + forward_sample * sample_step) * travel +
+            (-half + lateral_sample * sample_step) * lateral;
+        if (!sdf_map_->isInMap(sample) ||
+            sdf_map_->getOccupancy(sample) != SDFMap::FREE)
+          return false;
       }
     }
-    return false;
+    return true;
   };
 
   Eigen::Vector3d grid_center = forward_end;
@@ -1411,18 +1412,68 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   grid_center.head<2>() = task_search::corridorGridCenter(
       forward_end.head<2>(), corridor_axis_origin, travel);
 
-  std::array<std::array<bool, 3>, 3> occupied_cells{};
-  for (int forward_index = 0; forward_index < 3; ++forward_index) {
-    for (int lateral_index = 0; lateral_index < 3; ++lateral_index) {
-      Eigen::Vector3d center = grid_center;
-      center.head<2>() +=
-          (forward_index - 1) * kBypassCellSize * travel +
-          (lateral_index - 1) * kBypassCellSize * lateral;
-      occupied_cells[forward_index][lateral_index] = cellOccupied(center);
+  const int lattice_steps = std::max(
+      3, static_cast<int>(std::ceil(kAuditPlaneSize / map_resolution)));
+  const int lattice_size = lattice_steps + 1;
+  const double lattice_step = kAuditPlaneSize / lattice_steps;
+  const double plane_half = 0.5 * kAuditPlaneSize;
+  std::vector<std::vector<uint8_t>> footprint_free(
+      lattice_size, std::vector<uint8_t>(lattice_size, 0));
+  std::array<std::array<bool, 3>, 3> region_has_free{};
+  auto latticeCenter = [&](int forward_index, int lateral_index) {
+    Eigen::Vector3d center = grid_center;
+    const double forward_offset = -plane_half + forward_index * lattice_step;
+    const double lateral_offset = -plane_half + lateral_index * lattice_step;
+    center.head<2>() += forward_offset * travel + lateral_offset * lateral;
+    return center;
+  };
+  for (int forward_index = 0; forward_index < lattice_size; ++forward_index) {
+    for (int lateral_index = 0; lateral_index < lattice_size; ++lateral_index) {
+      if (!knownFreeWindow(latticeCenter(forward_index, lateral_index))) continue;
+      footprint_free[forward_index][lateral_index] = 1;
+      const int region_forward = std::min(
+          2, static_cast<int>(forward_index * 3 / lattice_size));
+      const int region_lateral = std::min(
+          2, static_cast<int>(lateral_index * 3 / lattice_size));
+      region_has_free[region_forward][region_lateral] = true;
     }
   }
-  const bool has_bypass =
-      task_search::hasNineGridObstacleBypass(occupied_cells);
+
+  std::vector<std::vector<uint8_t>> reachable(
+      lattice_size, std::vector<uint8_t>(lattice_size, 0));
+  std::queue<std::pair<int, int>> open;
+  for (int lateral_index = 0; lateral_index < lattice_size; ++lateral_index) {
+    if (!footprint_free[0][lateral_index]) continue;
+    reachable[0][lateral_index] = 1;
+    open.emplace(0, lateral_index);
+  }
+  bool has_bypass = false;
+  while (!open.empty() && !has_bypass) {
+    const auto current = open.front();
+    open.pop();
+    if (current.first == lattice_size - 1) {
+      has_bypass = true;
+      break;
+    }
+    for (int df = -1; df <= 1; ++df) {
+      for (int dl = -1; dl <= 1; ++dl) {
+        if (df == 0 && dl == 0) continue;
+        const int next_forward = current.first + df;
+        const int next_lateral = current.second + dl;
+        if (next_forward < 0 || next_forward >= lattice_size ||
+            next_lateral < 0 || next_lateral >= lattice_size ||
+            reachable[next_forward][next_lateral] ||
+            !footprint_free[next_forward][next_lateral])
+          continue;
+        const Eigen::Vector3d connection_center =
+            0.5 * (latticeCenter(current.first, current.second) +
+                   latticeCenter(next_forward, next_lateral));
+        if (!knownFreeWindow(connection_center)) continue;
+        reachable[next_forward][next_lateral] = 1;
+        open.emplace(next_forward, next_lateral);
+      }
+    }
+  }
   Eigen::Vector3d robot_pos;
   {
     std::lock_guard<std::mutex> lock(body_cloud_mutex_);
@@ -1438,19 +1489,20 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       0.5,
       "[task_search] obstacle-plane audit robot=(%.2f,%.2f) origin=(%.2f,%.2f) "
       "ray_hit=(%.2f,%.2f) grid_center=(%.2f,%.2f) active_goal=(%.2f,%.2f) "
-      "occupied=[%d%d%d/%d%d%d/%d%d%d] decision=%s.",
+      "free_regions=[%d%d%d/%d%d%d/%d%d%d] connected=%d decision=%s.",
       robot_pos.x(), robot_pos.y(), origin.x(), origin.y(),
       forward_end.x(), forward_end.y(), grid_center.x(), grid_center.y(),
       goal_x, goal_y,
-      static_cast<int>(occupied_cells[0][0]),
-      static_cast<int>(occupied_cells[0][1]),
-      static_cast<int>(occupied_cells[0][2]),
-      static_cast<int>(occupied_cells[1][0]),
-      static_cast<int>(occupied_cells[1][1]),
-      static_cast<int>(occupied_cells[1][2]),
-      static_cast<int>(occupied_cells[2][0]),
-      static_cast<int>(occupied_cells[2][1]),
-      static_cast<int>(occupied_cells[2][2]),
+      static_cast<int>(region_has_free[0][0]),
+      static_cast<int>(region_has_free[0][1]),
+      static_cast<int>(region_has_free[0][2]),
+      static_cast<int>(region_has_free[1][0]),
+      static_cast<int>(region_has_free[1][1]),
+      static_cast<int>(region_has_free[1][2]),
+      static_cast<int>(region_has_free[2][0]),
+      static_cast<int>(region_has_free[2][1]),
+      static_cast<int>(region_has_free[2][2]),
+      static_cast<int>(has_bypass),
       has_bypass ? "LOCAL_BYPASS" : "TEST_MAPPED_TURN");
   if (has_bypass) {
     return false;
@@ -1473,10 +1525,9 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
       // 入口方向；否则北向通道中的东南旧路仍会被误当成合法新分支。
       if (!task_search::insideForwardHalfPlane(direction, travel))
         continue;
-      // 已经拐过一次后，不能把新通道的侧向分支重新解释成初始入口方向的反向
-      // 回头。这个约束独立于当前travel，否则 +Y 通道会错误放行 -X。
-      if (corridor_frame_received_ && corridor_dir_.head<2>().norm() > 1e-3 &&
-          direction.dot(corridor_dir_.head<2>().normalized()) < -0.05)
+      // U形通道的新段可以与入口绝对航向相反；回头只按空间上是否
+      // 重新压回已飞历史轨迹判断，不再用初始入口航向一刀切。
+      if (turnDirectionRetracesVisitedRoute(origin.head<2>(), direction))
         continue;
       const double free_length = knownFreeLength(contour_origin, direction);
       if (free_length <= 1e-6) continue;
@@ -1500,6 +1551,36 @@ bool TaskSearchManager::inferOccupancyTurnDirection(
   return true;
 }
 
+bool TaskSearchManager::turnDirectionRetracesVisitedRoute(
+    const Eigen::Vector2d& anchor,
+    const Eigen::Vector2d& direction) const {
+  if (visited_positions_.size() < 4 || direction.norm() < 1e-3)
+    return false;
+  const Eigen::Vector2d unit_direction = direction.normalized();
+  constexpr double kRecentAnchorRadius = 0.70;
+  constexpr double kRouteOverlapRadius = 0.30;
+  constexpr double kProbeLength = 1.50;
+  constexpr double kProbeStep = 0.10;
+  for (double distance = kRecentAnchorRadius;
+       distance <= kProbeLength + 1e-6; distance += kProbeStep) {
+    const Eigen::Vector2d probe = anchor + distance * unit_direction;
+    for (const auto& visited : visited_positions_) {
+      const Eigen::Vector2d history = visited.head<2>();
+      if ((history - anchor).norm() <= kRecentAnchorRadius) continue;
+      if ((probe - history).norm() <= kRouteOverlapRadius) {
+        ROS_ERROR_THROTTLE(
+            0.5,
+            "[task_search] reject mapped branch yaw=%.1fdeg: probe=(%.2f,%.2f) "
+            "re-enters visited route near (%.2f,%.2f).",
+            std::atan2(unit_direction.y(), unit_direction.x()) * 180.0 / M_PI,
+            probe.x(), probe.y(), history.x(), history.y());
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void TaskSearchManager::commitCorridorTurn(
     const Eigen::Vector3d& turn_direction) {
   if (turn_direction.head<2>().norm() < 1e-3) return;
@@ -1521,6 +1602,11 @@ void TaskSearchManager::commitCorridorTurn(
   latest_turn_anchor_ = anchor;
   latest_turn_incoming_direction_ = incoming;
   latest_turn_anchor_valid_ = true;
+  transition_active_ = true;
+  transition_anchor_ = anchor;
+  transition_incoming_direction_ = incoming;
+  transition_outgoing_direction_ = outgoing;
+  transition_old_high_water_ = segment_high_water_;
   if (hybrid_constraints_enabled_) {
     CompletedGate gate;
     gate.sequence = next_gate_sequence_++;
@@ -1532,11 +1618,6 @@ void TaskSearchManager::commitCorridorTurn(
     completed_gates_.push_back(gate);
     if (completed_gates_.size() > 64)
       completed_gates_.erase(completed_gates_.begin());
-    transition_active_ = true;
-    transition_anchor_ = anchor;
-    transition_incoming_direction_ = incoming;
-    transition_outgoing_direction_ = outgoing;
-    transition_old_high_water_ = segment_high_water_;
   }
   // Native FUEL同样按已确认的通道段记录前进进度。它不使用混合模式的历史门，
   // 但必须防止恢复轨迹沿当前段长距离倒退。
@@ -1627,19 +1708,12 @@ Eigen::Vector3d TaskSearchManager::recoveryForwardDirection(double cur_yaw) {
   Eigen::Vector2d stable = stableProgressDirection();
   if (stable.norm() < 1e-3)
     stable = Eigen::Vector2d(std::cos(cur_yaw), std::sin(cur_yaw));
-  if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
-      !task_search::insideForwardHalfPlane(stable, corridor_dir_.head<2>()))
-    stable = corridor_dir_.head<2>().normalized();
   return Eigen::Vector3d(stable.x(), stable.y(), 0.0);
 }
 
 // 2026-07-28: 与普通候选使用相同角度阈值，避免恢复器和frontier对“后退”的定义不一致。
 bool TaskSearchManager::isRecoveryDirectionBackward(
     const Eigen::Vector3d& direction, double cur_yaw) {
-  if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
-      !task_search::insideForwardHalfPlane(direction.head<2>(),
-                                           corridor_dir_.head<2>()))
-    return true;
   const Eigen::Vector3d forward = recoveryForwardDirection(cur_yaw);
   return direction.head<2>().norm() > 1e-3 &&
          direction.head<2>().normalized().dot(forward.head<2>()) <
@@ -1669,10 +1743,6 @@ std::vector<Eigen::Vector3d> TaskSearchManager::recoveryDirections(double cur_ya
   for (double offset : offsets) {
     const double yaw = wrapYaw(travel_yaw + offset);
     Eigen::Vector3d dir(std::cos(yaw), std::sin(yaw), 0.0);
-    if (!hybrid_constraints_enabled_ && corridor_frame_received_ &&
-        !task_search::insideForwardHalfPlane(dir.head<2>(),
-                                             corridor_dir_.head<2>()))
-      continue;
     const Eigen::Vector3d probe =
         visited_positions_.empty() ? dir : visited_positions_.back() + 1.2 * dir;
     const double novelty = minDistance2D(probe, visited_positions_);

@@ -178,6 +178,9 @@ private:
                                    Eigen::Vector3d& turn_direction,
                                    double& forward_free_length,
                                    double& turn_free_length) const;
+  bool turnDirectionRetracesVisitedRoute(
+      const Eigen::Vector2d& anchor,
+      const Eigen::Vector2d& direction) const;
   bool entryForwardPhaseActive() const;
   void commitCorridorTurn(const Eigen::Vector3d& turn_direction);
   bool confirmCorridorTurnEvidence(const Eigen::Vector3d& turn_direction);
