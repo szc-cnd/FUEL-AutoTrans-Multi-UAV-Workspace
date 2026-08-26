@@ -1191,34 +1191,6 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   const Vector3d recovery_forward = task_search_manager_
                                         ? task_search_manager_->recoveryForwardDirection(cur_yaw)
                                         : Vector3d(std::cos(cur_yaw), std::sin(cur_yaw), 0.0);
-  // 远端frontier暂时不连通时，先确认当前通道能否继续走一个最短前向步。
-  // 能向前就交给下面原有恢复搜索选择更远的前向点，不能仅因侧面扫到墙/障碍边缘而横移。
-  const double recovery_z =
-      task_search_manager_ ? task_search_manager_->preferredSearchHeight() : pos.z();
-  Vector3d short_forward_target = pos;
-  const bool valid_recovery_forward = recovery_forward.head<2>().norm() >= 1e-3;
-  if (valid_recovery_forward)
-    short_forward_target += step * recovery_forward.normalized();
-  short_forward_target.z() = recovery_z;
-  bool short_forward_safe =
-      valid_recovery_forward && pointInsideWorkspaceLock(short_forward_target) &&
-      planner_manager_->isPositionSafe(short_forward_target) &&
-      sdf_map_->getOccupancy(short_forward_target) != SDFMap::UNKNOWN &&
-      (!task_search_manager_ ||
-       task_search_manager_->isRecoveryCandidateUseful(short_forward_target));
-  if (short_forward_safe) {
-    planner_manager_->path_finder_->reset();
-    short_forward_safe =
-        planner_manager_->path_finder_->search(pos, short_forward_target) == Astar::REACH_END;
-    if (short_forward_safe) {
-      const auto short_forward_path = planner_manager_->path_finder_->getPath();
-      short_forward_safe =
-          pathInsideWorkspaceLock(short_forward_path) &&
-          planner_manager_->isPathSafe(short_forward_path) &&
-          (!task_search_manager_ ||
-           task_search_manager_->isRecoveryPathAllowed(short_forward_path, false));
-    }
-  }
   // 竖直障碍物把通道切成左右两路时，先直接去占据地图中净宽更大的一侧。
   // 该场景不参与普通frontier总分，也不等待上下绕行接管。
   bool split_obstacle_detected = false;
@@ -1243,8 +1215,7 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
         "keep horizontal/updated-map fallback.");
   }
 
-  if (!short_forward_safe &&
-      buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
+  if (buildWideSideBypass(pos, cur_yaw, recovery_forward, next_pos, next_yaw,
                           split_obstacle_detected))
     return true;
   if (recovery_side_latched_ &&
@@ -1299,6 +1270,8 @@ bool FastExplorationManager::buildMissionForwardFallback(const Vector3d& pos, do
   int rejected_path = 0;
   // 普通水平恢复始终回到任务巡航高度，不能把转弯期间的实际掉高固化成新目标。
   // 明确的上下避障仍由 vertical_detour 独立选择临时高度。
+  const double recovery_z =
+      task_search_manager_ ? task_search_manager_->preferredSearchHeight() : pos.z();
   struct RecoveryChoice {
     bool valid{false};
     Vector3d position{0.0, 0.0, 0.0};
