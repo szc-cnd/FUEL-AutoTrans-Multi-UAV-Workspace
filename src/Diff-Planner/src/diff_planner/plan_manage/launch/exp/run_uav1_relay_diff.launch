@@ -85,12 +85,12 @@
         <remap from="/position_cmd" to="$(arg position_cmd_topic)"/>
         <remap from="~planning/trajectory" to="/drone_1_planning/trajectory"/>
         <remap from="/planning/yaw" to="/UAV1/planning/yaw"/>
-        <!-- traj_server只订阅规划器心跳；超时保护固定为2秒。 -->
+        <!-- traj_server只订阅规划器心跳；允许单次困难规划最长阻塞180秒。 -->
         <remap from="~heartbeat" to="/drone_1_planning/heartbeat"/>
         <remap from="~safety_hold" to="/UAV1/planning/safety_hold"/>
         <remap from="/planning/traj_started" to="/UAV1/planning/traj_started"/>
         <param name="traj_server/time_forward" value="0.35" type="double"/>
-        <param name="traj_server/heartbeat_timeout" value="2.0" type="double"/>
+        <param name="traj_server/heartbeat_timeout" value="180.0" type="double"/>
         <param name="traj_server/yaw_dot_max" value="1.57" type="double"/>
         <param name="traj_server/yaw_dot_dot_max" value="6.28" type="double"/>
     </node>

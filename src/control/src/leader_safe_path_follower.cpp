@@ -438,10 +438,6 @@ class LeaderSafePathFollower {
         nh_.advertise<std_msgs::Bool>(follower_detection_enable_topic_, 2, true);
     follower_safety_hold_pub_ =
         nh_.advertise<std_msgs::Bool>("/UAV1/planning/safety_hold", 1, true);
-    diff_mandatory_stop_pub_ =
-        nh_.advertise<std_msgs::Empty>("/mandatory_stop_to_planner", 1);
-    diff_planning_restart_pub_ =
-        nh_.advertise<std_msgs::Empty>("/planning_restart_trigger", 1);
     route_pub_ = pnh_.advertise<nav_msgs::Path>("leader_safe_route", 1, true);
     relay_path_pub_ = nh_.advertise<nav_msgs::Path>(relay_path_topic_, 1, true);
     target_pub_ = pnh_.advertise<visualization_msgs::Marker>("target_marker", 1);
@@ -1566,31 +1562,6 @@ class LeaderSafePathFollower {
               active ? "ACTIVE" : "RELEASED", reason.c_str());
   }
 
-  void setDiffSeparationPlanningPaused(bool paused) {
-    if (diff_separation_planning_paused_ == paused) return;
-
-    std_msgs::Empty signal;
-    if (paused) {
-      diff_mandatory_stop_pub_.publish(signal);
-      diff_separation_planning_paused_ = true;
-      ROS_ERROR("[safe_follower] PAUSE UAV1 Diff while separation hold is active; "
-                "keep the current FIFO endpoint.");
-      return;
-    }
-
-    diff_planning_restart_pub_.publish(signal);
-    diff_separation_planning_paused_ = false;
-    diff_plan_response_received_ = false;
-    diff_accepted_goal_valid_ = false;
-    diff_command_seen_for_goal_ = false;
-    diff_goal_publish_stamp_ = ros::Time::now();
-    diff_goal_first_publish_stamp_ = diff_goal_publish_stamp_;
-    diff_goal_published_ = diff_goal_index_ == active_relay_index_;
-    simple_diff_retry_not_before_ = ros::Time::now();
-    ROS_ERROR("[safe_follower] RESUME UAV1 Diff after separation hold; continue FIFO "
-              "endpoint %zu.", active_relay_index_ + 1);
-  }
-
   void stampDiffGoalId(geometry_msgs::PoseStamped* goal) {
     // roscpp 会在发布时重写 Header.seq，不能用它关联规划回执。时间戳由消息
     // 原样传到规划器，同时纳秒值足以过滤锁存状态和上一进程的延迟回执。
@@ -1782,13 +1753,6 @@ class LeaderSafePathFollower {
     diff_plan_response_received_ = true;
     diff_goal_first_publish_stamp_ = ros::Time(0);
     if (simple_segment_endpoint_following_) {
-      if (diff_separation_planning_paused_) {
-        ROS_WARN_THROTTLE(1.0,
-                          "[safe_follower] ignore UAV1 Diff status=%s during separation "
-                          "hold; current FIFO endpoint remains unchanged.",
-                          status.c_str());
-        return;
-      }
       if (status == "PLANNING_FAILED" || status == "GOAL_REJECTED_OUTSIDE_MAP") {
         setDiffWaitPositionHold(true, "retry same FIFO endpoint after Diff failure");
         ++diff_planning_failure_events_;
@@ -1919,7 +1883,6 @@ class LeaderSafePathFollower {
       if (!leaderOdomFresh(now)) {
         simple_waypoint_clearance_hold_active_ = true;
         setDiffWaitPositionHold(true, "waiting for fresh UAV0 odometry before FIFO release");
-        setDiffSeparationPlanningPaused(true);
         diff_goal_published_ = false;
         publishState("DIFF_FIFO_WAIT_LEADER_CLEAR_NEXT_POINT", 1.0, 0.3, 0.0);
         return true;
@@ -1933,7 +1896,6 @@ class LeaderSafePathFollower {
         if (!simple_waypoint_clearance_hold_active_) {
           simple_waypoint_clearance_hold_active_ = true;
           setDiffWaitPositionHold(true, "UAV0 has not cleared next FIFO endpoint");
-          setDiffSeparationPlanningPaused(true);
           diff_goal_published_ = false;
           diff_accepted_goal_valid_ = false;
           diff_command_seen_for_goal_ = false;
@@ -1961,7 +1923,6 @@ class LeaderSafePathFollower {
         if (!simple_separation_hold_active_) {
           simple_separation_hold_active_ = true;
           setDiffWaitPositionHold(true, "FIFO spacing hold");
-          setDiffSeparationPlanningPaused(true);
           diff_goal_published_ = false;
           diff_accepted_goal_valid_ = false;
           diff_command_seen_for_goal_ = false;
@@ -1979,8 +1940,6 @@ class LeaderSafePathFollower {
                  separation);
       }
     }
-    if (diff_separation_planning_paused_)
-      setDiffSeparationPlanningPaused(false);
 
     const double horizontal_error =
         std::hypot(desired_local.x - current_local.x,
@@ -4024,7 +3983,6 @@ class LeaderSafePathFollower {
   ros::Publisher follower_landing_target_pub_, follower_landing_request_pub_;
   ros::Publisher follower_detection_enable_pub_;  // UAV1独立LDOP阶段状态。
   ros::Publisher follower_safety_hold_pub_;  // 2026-07-28: LIO跳变时请求控制器按MAVROS坐标锁点。
-  ros::Publisher diff_mandatory_stop_pub_, diff_planning_restart_pub_;
   ros::Timer timer_;
   nav_msgs::Odometry leader_odom_, follower_odom_;
   geometry_msgs::PoseStamped leader_landing_target_;
@@ -4063,7 +4021,6 @@ class LeaderSafePathFollower {
   bool use_diff_planner_{true};  // 2026-07-28: 默认启用UAV1独立Diff规划，旧直控仅作显式回退。
   bool simple_segment_endpoint_following_{false};
   bool simple_occupied_recovery_active_{false};
-  bool diff_separation_planning_paused_{false};
   bool simple_waypoint_clearance_hold_active_{false};
   bool leader_started_{false}, follower_started_{false}, traj_started_sent_{false};
   bool have_leader_landing_target_{false}, terminal_mode_active_{false};
