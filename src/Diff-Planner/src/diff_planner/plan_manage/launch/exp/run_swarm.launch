@@ -10,7 +10,7 @@
     <arg name="flight_type" default="2"/>
     <arg name="point_num" default="4"/>
     <arg name="max_tracking_error" default="0.20"/>
-    <arg name="enable_occupied_recovery" default="true"/>
+    <arg name="enable_occupied_recovery" default="false"/>
     <arg name="enable_swing_obstacle_guard" default="false"/>
     <arg name="enable_swing_harmonic_prediction" default="true"/>
     <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
