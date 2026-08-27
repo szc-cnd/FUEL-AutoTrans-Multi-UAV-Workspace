@@ -44,6 +44,27 @@ TEST(SuspendedObstacleUnderpass, RejectsNonFinitePath)
       path, start, end, 0.10));
 }
 
+TEST(SuspendedObstacleUnderpass, ClassifiesFreeSpaceBelowSuspendedObstacle)
+{
+  const std::vector<int> downward_occupancy = {1, 1, 0, 0, 0, 0, 0, 1};
+  EXPECT_TRUE(SuspendedObstacleUnderpass::hasVerticalGap(
+      downward_occupancy, 0.10, 0.35));
+}
+
+TEST(SuspendedObstacleUnderpass, RejectsGroundConnectedObstacle)
+{
+  const std::vector<int> downward_occupancy = {1, 1, 1, 1, 1, 1, 1, -1};
+  EXPECT_FALSE(SuspendedObstacleUnderpass::hasVerticalGap(
+      downward_occupancy, 0.10, 0.35));
+}
+
+TEST(SuspendedObstacleUnderpass, RejectsGapThatIsTooLow)
+{
+  const std::vector<int> downward_occupancy = {1, 0, 0, 0, 1};
+  EXPECT_FALSE(SuspendedObstacleUnderpass::hasVerticalGap(
+      downward_occupancy, 0.10, 0.35));
+}
+
 } // namespace
 } // namespace diff_planner
 

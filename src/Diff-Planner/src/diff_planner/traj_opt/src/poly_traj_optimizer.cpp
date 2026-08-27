@@ -777,7 +777,8 @@ namespace diff_planner
   {
     path.clear();
     const double resolution = grid_map_->getResolution();
-    if (suspended_underpass_.trySearch(*a_star_, resolution, start, end, path))
+    if (suspended_underpass_.trySearch(*a_star_, grid_map_, resolution,
+                                       start, end, path))
     {
       const auto minimum = std::min_element(
           path.begin(), path.end(),
@@ -1887,6 +1888,8 @@ namespace diff_planner
              underpass_config.corridor_half_width, 0.12);
     nh.param("optimization/underpass_min_descent",
              underpass_config.min_descent, 0.10);
+    nh.param("optimization/underpass_min_vertical_gap",
+             underpass_config.min_vertical_gap, 0.35);
     nh.param("optimization/underpass_search_timeout",
              underpass_config.search_timeout, 0.05);
     suspended_underpass_.setConfig(underpass_config);

@@ -76,6 +76,7 @@
     <arg name="enable_suspended_obstacle_underpass" default="false"/>
     <arg name="underpass_corridor_half_width" default="0.12"/>
     <arg name="underpass_min_descent" default="0.10"/>
+    <arg name="underpass_min_vertical_gap" default="0.35"/>
     <arg name="underpass_search_timeout" default="0.05"/>
     <!-- 单次局部规划的墙钟上限；防止困难障碍场景阻塞单线程ROS回调和心跳。 -->
     <arg name="planning_timeout" default="0.8"/>
@@ -292,6 +293,7 @@
         <param name="optimization/enable_suspended_obstacle_underpass" value="$(arg enable_suspended_obstacle_underpass)" type="bool"/>
         <param name="optimization/underpass_corridor_half_width" value="$(arg underpass_corridor_half_width)" type="double"/>
         <param name="optimization/underpass_min_descent" value="$(arg underpass_min_descent)" type="double"/>
+        <param name="optimization/underpass_min_vertical_gap" value="$(arg underpass_min_vertical_gap)" type="double"/>
         <param name="optimization/underpass_search_timeout" value="$(arg underpass_search_timeout)" type="double"/>
         <param name="optimization/obstacle_clearance_soft" value="0.46" type="double"/>
         <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->

@@ -17,6 +17,7 @@
     <arg name="enable_suspended_obstacle_underpass" default="true"/>
     <arg name="underpass_corridor_half_width" default="0.12"/>
     <arg name="underpass_min_descent" default="0.10"/>
+    <arg name="underpass_min_vertical_gap" default="0.35"/>
     <arg name="underpass_search_timeout" default="0.05"/>
     <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
     <arg name="record_dynamic_debug" default="false"/>
@@ -32,6 +33,7 @@
         <arg name="enable_suspended_obstacle_underpass" value="$(arg enable_suspended_obstacle_underpass)"/>
         <arg name="underpass_corridor_half_width" value="$(arg underpass_corridor_half_width)"/>
         <arg name="underpass_min_descent" value="$(arg underpass_min_descent)"/>
+        <arg name="underpass_min_vertical_gap" value="$(arg underpass_min_vertical_gap)"/>
         <arg name="underpass_search_timeout" value="$(arg underpass_search_timeout)"/>
         <!-- 1.5m通道摆球：优先校验球底净空，否则学习左右端点和周期并停车等待穿越窗口。 -->
         <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
