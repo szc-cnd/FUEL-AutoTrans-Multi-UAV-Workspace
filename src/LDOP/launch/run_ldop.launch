@@ -3,6 +3,7 @@
   <arg name="vehicle_ns" default="UAV1" />
   <arg name="rviz" default="true" />
   <arg name="ufomap_resolution" default="0.2" />
+  <arg name="ufomap_inflate_hits_dist" default="0.4" />
   <arg name="corridor_min_lateral_span" default="0.15" />
   <arg name="corridor_min_cluster_points" default="4" />
   <arg name="corridor_max_cluster_extent" default="0.60" />
@@ -17,6 +18,7 @@
       <env name="ROSCONSOLE_FORMAT" value="[${severity}] [LDOP]: ${message}" />
       <rosparam command="load" file="$(arg config_file)" />
       <param name="ufomap_resolution" value="$(arg ufomap_resolution)" type="double" />
+      <param name="ufomap_inflate_hits_dist" value="$(arg ufomap_inflate_hits_dist)" type="double" />
       <param name="corridor_min_lateral_span" value="$(arg corridor_min_lateral_span)" type="double" />
       <param name="corridor_min_cluster_points" value="$(arg corridor_min_cluster_points)" type="int" />
       <param name="corridor_max_cluster_extent" value="$(arg corridor_max_cluster_extent)" type="double" />
