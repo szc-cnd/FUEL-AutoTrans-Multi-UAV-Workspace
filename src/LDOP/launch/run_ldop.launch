@@ -4,6 +4,7 @@
   <arg name="rviz" default="true" />
   <arg name="corridor_min_lateral_span" default="0.15" />
   <arg name="corridor_min_cluster_points" default="4" />
+  <arg name="corridor_max_cluster_extent" default="0.60" />
   <arg name="corridor_oversized_split_enabled" default="false" />
   <arg name="corridor_split_min_cluster_points" default="4" />
   <arg name="corridor_split_max_subclusters" default="8" />
@@ -16,6 +17,7 @@
       <rosparam command="load" file="$(arg config_file)" />
       <param name="corridor_min_lateral_span" value="$(arg corridor_min_lateral_span)" type="double" />
       <param name="corridor_min_cluster_points" value="$(arg corridor_min_cluster_points)" type="int" />
+      <param name="corridor_max_cluster_extent" value="$(arg corridor_max_cluster_extent)" type="double" />
       <param name="corridor_oversized_split_enabled" value="$(arg corridor_oversized_split_enabled)" type="bool" />
       <param name="corridor_split_min_cluster_points" value="$(arg corridor_split_min_cluster_points)" type="int" />
       <param name="corridor_split_max_subclusters" value="$(arg corridor_split_max_subclusters)" type="int" />
