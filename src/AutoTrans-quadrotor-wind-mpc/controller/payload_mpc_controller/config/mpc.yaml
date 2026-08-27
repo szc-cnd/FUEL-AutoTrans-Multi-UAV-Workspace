@@ -101,7 +101,7 @@ filter:
 
 force_estimator: # *
     # kf 将当前 CAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.817 kg 实机稳定悬停日志标定。
-    kf: 1.790e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
+    kf: 1.745e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
 
     # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
     sample_freq_fq: 100.0
@@ -232,7 +232,7 @@ thrust_model: # 将 NMPC 物理总推力 T（N）转换为 MAVROS/PX4 归一化 
     # 原工程模式 2 依赖负载/电缆动力学；普通四旋翼版本已禁止该模式，配置为 2 时节点拒绝启动。
     # approximate thrust mapping parameters
     # CAV0 在实际起飞质量 1.817 kg 下的实测归一化悬停推力；模式 0 固定使用，模式 1 作为在线学习初值。
-    hover_percentage: 0.54
+    hover_percentage: 0.52
     # RLS 新估计对 thrustscale 的更新比例；0.2 已通过约 22.7 V 和 24.0 V 实飞验证。
     filter_factor: 0.2
     # 模式 1 学习门限，单位 rpm；只影响在线推力映射，不改变外力估计器的 1000 rpm 门限。
