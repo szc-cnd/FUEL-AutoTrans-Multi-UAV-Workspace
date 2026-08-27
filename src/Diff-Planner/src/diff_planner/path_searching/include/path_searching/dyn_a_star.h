@@ -16,7 +16,8 @@ enum ASTAR_RET
 {
 	SUCCESS,
 	INIT_ERR,
-	SEARCH_ERR
+	SEARCH_ERR,
+	POLICY_ERR
 };
 
 struct AStarSearchRegion

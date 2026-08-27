@@ -14,6 +14,13 @@ namespace diff_planner
 class SuspendedObstacleUnderpass
 {
 public:
+  enum class SearchResult
+  {
+    NOT_APPLICABLE,
+    SUCCESS,
+    SEARCH_FAILED
+  };
+
   struct Config
   {
     bool enabled{false};
@@ -26,9 +33,10 @@ public:
   void setConfig(const Config &config);
   const Config &config() const;
 
-  bool trySearch(AStar &a_star, const GridMap::Ptr &grid_map, double step_size,
-                 const Eigen::Vector3d &start, const Eigen::Vector3d &end,
-                 std::vector<Eigen::Vector3d> &path) const;
+  SearchResult trySearch(AStar &a_star, const GridMap::Ptr &grid_map,
+                         double step_size, const Eigen::Vector3d &start,
+                         const Eigen::Vector3d &end,
+                         std::vector<Eigen::Vector3d> &path) const;
 
   static bool hasRequiredDescent(const std::vector<Eigen::Vector3d> &path,
                                  const Eigen::Vector3d &start,

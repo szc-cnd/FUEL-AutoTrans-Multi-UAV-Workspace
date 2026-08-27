@@ -777,8 +777,10 @@ namespace diff_planner
   {
     path.clear();
     const double resolution = grid_map_->getResolution();
-    if (suspended_underpass_.trySearch(*a_star_, grid_map_, resolution,
-                                       start, end, path))
+    const SuspendedObstacleUnderpass::SearchResult underpass_result =
+        suspended_underpass_.trySearch(*a_star_, grid_map_, resolution,
+                                       start, end, path);
+    if (underpass_result == SuspendedObstacleUnderpass::SearchResult::SUCCESS)
     {
       const auto minimum = std::min_element(
           path.begin(), path.end(),
@@ -788,6 +790,14 @@ namespace diff_planner
       ROS_INFO("[悬空障碍下穿] 找到下方通路，最低轨迹高度 %.3fm。",
                minimum->z());
       return ASTAR_RET::SUCCESS;
+    }
+    if (underpass_result ==
+        SuspendedObstacleUnderpass::SearchResult::SEARCH_FAILED)
+    {
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[悬空障碍下穿] 下方通道已经确认，本轮禁止回退到普通上绕路径。");
+      return ASTAR_RET::POLICY_ERR;
     }
 
     const ASTAR_RET result = a_star_->AstarSearch(resolution, start, end);
@@ -888,6 +898,12 @@ namespace diff_planner
         if (ret == ASTAR_RET::SUCCESS)
         {
           a_star_pathes.push_back(std::move(search_path));
+        }
+        else if (ret == ASTAR_RET::POLICY_ERR)
+        {
+          ROS_WARN("悬空障碍下穿搜索失败，保持当前轨迹并等待下一轮重规划。");
+          force_stop_type_ = STOP_FOR_ERROR;
+          return false;
         }
         else if (ret == ASTAR_RET::SEARCH_ERR && i + 1 < segment_ids.size()) // connect the next segment
         {

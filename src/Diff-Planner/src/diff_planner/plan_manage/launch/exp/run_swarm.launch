@@ -15,10 +15,10 @@
     <arg name="enable_swing_obstacle_guard" default="false"/>
     <arg name="enable_swing_harmonic_prediction" default="true"/>
     <arg name="enable_suspended_obstacle_underpass" default="true"/>
-    <arg name="underpass_corridor_half_width" default="0.12"/>
+    <arg name="underpass_corridor_half_width" default="0.25"/>
     <arg name="underpass_min_descent" default="0.10"/>
     <arg name="underpass_min_vertical_gap" default="0.35"/>
-    <arg name="underpass_search_timeout" default="0.05"/>
+    <arg name="underpass_search_timeout" default="0.15"/>
     <arg name="enable_vertical_obstacle_side_lock" default="true"/>
     <arg name="side_lock_corridor_half_width" default="0.75"/>
     <arg name="side_lock_width_similarity_tolerance" default="0.15"/>

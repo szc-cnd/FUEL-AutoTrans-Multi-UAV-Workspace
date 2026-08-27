@@ -43,6 +43,14 @@ public:
       double left_width, double right_width);
   static double computePassageCenter(double obstacle_boundary_offset,
                                      double wall_boundary_offset);
+  static bool isSameObstacle(const Eigen::Vector3d &locked_center,
+                             const Eigen::Vector3d &locked_axis,
+                             const Eigen::Vector3d &locked_normal,
+                             double locked_half_length,
+                             const Eigen::Vector3d &candidate_center,
+                             double candidate_half_length,
+                             double association_distance,
+                             double longitudinal_margin);
 
 private:
   struct Candidate
@@ -63,6 +71,7 @@ private:
     Eigen::Vector3d center{Eigen::Vector3d::Zero()};
     Eigen::Vector3d axis{Eigen::Vector3d::Zero()};
     Eigen::Vector3d normal{Eigen::Vector3d::Zero()};
+    double half_length{0.0};
     double passage_center_offset{0.0};
   };
 

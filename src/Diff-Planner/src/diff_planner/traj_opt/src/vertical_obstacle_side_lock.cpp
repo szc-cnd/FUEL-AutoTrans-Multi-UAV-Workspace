@@ -77,6 +77,26 @@ double VerticalObstacleSideLock::computePassageCenter(
   return 0.5 * (obstacle_boundary_offset + wall_boundary_offset);
 }
 
+bool VerticalObstacleSideLock::isSameObstacle(
+    const Eigen::Vector3d &locked_center, const Eigen::Vector3d &locked_axis,
+    const Eigen::Vector3d &locked_normal, const double locked_half_length,
+    const Eigen::Vector3d &candidate_center,
+    const double candidate_half_length, const double association_distance,
+    const double longitudinal_margin)
+{
+  if (!locked_center.allFinite() || !locked_axis.allFinite() ||
+      !locked_normal.allFinite() || !candidate_center.allFinite() ||
+      locked_axis.norm() <= 1.0e-6 || locked_normal.norm() <= 1.0e-6)
+    return false;
+
+  const Eigen::Vector3d delta = candidate_center - locked_center;
+  const double lateral_distance = std::abs(delta.dot(locked_normal.normalized()));
+  const double longitudinal_distance = std::abs(delta.dot(locked_axis.normalized()));
+  return lateral_distance <= association_distance + 1.0e-6 &&
+         longitudinal_distance <= locked_half_length + candidate_half_length +
+                                      longitudinal_margin + 1.0e-6;
+}
+
 bool VerticalObstacleSideLock::isGroundConnected(
     const GridMap::Ptr &grid_map, const double step_size,
     const Eigen::Vector3d &point) const
@@ -161,13 +181,16 @@ bool VerticalObstacleSideLock::detectCandidate(
   if (occupied_points.empty())
     return false;
 
+  for (const Eigen::Vector3d &point : occupied_points)
+  {
+    if (!isGroundConnected(grid_map, step_size, point))
+      return false;
+  }
+
   candidate.center.setZero();
   for (const Eigen::Vector3d &point : occupied_points)
     candidate.center += point;
   candidate.center /= occupied_points.size();
-  if (!isGroundConnected(grid_map, step_size, candidate.center))
-    return false;
-
   candidate.half_length = 0.0;
   for (const Eigen::Vector3d &point : occupied_points)
   {
@@ -198,11 +221,63 @@ bool VerticalObstacleSideLock::trySearch(
 
   Candidate candidate;
   if (!detectCandidate(grid_map, step_size, start, end, candidate))
-    return false;
+  {
+    if (!lock_.active)
+      return false;
 
-  const bool same_obstacle = lock_.active &&
-      (candidate.center - lock_.center).head<2>().norm() <=
-          config_.association_distance;
+    const Eigen::Vector3d segment = end - start;
+    const double segment_length = segment.norm();
+    if (segment_length <= 1.0e-3)
+      return false;
+    const Eigen::Vector3d segment_direction = segment / segment_length;
+    const double projection = std::max(
+        0.0, std::min(segment_length,
+                      (lock_.center - start).dot(segment_direction)));
+    const Eigen::Vector3d nearest = start + projection * segment_direction;
+    if ((nearest - lock_.center).head<2>().norm() >
+        config_.association_distance + lock_.half_length +
+            config_.longitudinal_margin)
+    {
+      lock_.active = false;
+      return false;
+    }
+
+    AStarSearchRegion locked_region;
+    locked_region.enabled = true;
+    locked_region.limit_corridor = true;
+    locked_region.limit_side = true;
+    locked_region.prefer_side_center = true;
+    locked_region.corridor_half_width = config_.corridor_half_width;
+    locked_region.side_half_length = lock_.half_length +
+                                     config_.longitudinal_margin;
+    locked_region.time_limit = config_.search_timeout;
+    locked_region.report_timeout = true;
+    locked_region.line_start = start;
+    locked_region.line_end = end;
+    locked_region.side_origin = lock_.center;
+    locked_region.side_normal = lock_.normal;
+    locked_region.side_axis = lock_.axis;
+    locked_region.side_center_offset = lock_.passage_center_offset;
+
+    path.clear();
+    if (a_star.AstarSearch(step_size, start, end, &locked_region) !=
+        ASTAR_RET::SUCCESS)
+    {
+      locked_region.prefer_side_center = false;
+      if (a_star.AstarSearch(step_size, start, end, &locked_region) !=
+          ASTAR_RET::SUCCESS)
+        return true;
+    }
+    path = a_star.getPath();
+    ROS_INFO_THROTTLE(1.0,
+                      "[接地障碍侧锁] 当前帧候选不完整，继续保持上次选定侧。");
+    return true;
+  }
+
+  const bool same_obstacle = lock_.active && isSameObstacle(
+      lock_.center, lock_.axis, lock_.normal, lock_.half_length,
+      candidate.center, candidate.half_length, config_.association_distance,
+      config_.longitudinal_margin);
   if (!same_obstacle)
   {
     lock_.active = true;
@@ -211,6 +286,7 @@ bool VerticalObstacleSideLock::trySearch(
     lock_.normal = chooseSideNormal(
         unconstrained_path, candidate.center, candidate.lateral,
         candidate.left_width, candidate.right_width);
+    lock_.half_length = candidate.half_length;
     ROS_INFO("[接地障碍侧锁] 左右净宽 %.2fm / %.2fm，锁定%s侧，通过中心偏移 %.2fm。",
              candidate.left_width, candidate.right_width,
              lock_.normal.dot(candidate.lateral) >= 0.0 ? "左" : "右",
@@ -220,6 +296,7 @@ bool VerticalObstacleSideLock::trySearch(
   else
   {
     lock_.center = candidate.center;
+    lock_.half_length = std::max(lock_.half_length, candidate.half_length);
   }
   const bool selected_left = lock_.normal.dot(candidate.lateral) >= 0.0;
   lock_.passage_center_offset = selected_left

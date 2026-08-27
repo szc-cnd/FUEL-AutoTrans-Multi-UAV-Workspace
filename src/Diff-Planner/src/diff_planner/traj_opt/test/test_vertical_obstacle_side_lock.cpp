@@ -56,6 +56,22 @@ TEST(VerticalObstacleSideLock, UsesMidpointOfObstacleAndWallBoundaries)
       VerticalObstacleSideLock::computePassageCenter(0.10, 0.75), 0.425);
 }
 
+TEST(VerticalObstacleSideLock, KeepsLockAcrossLongitudinalCenterDrift)
+{
+  EXPECT_TRUE(VerticalObstacleSideLock::isSameObstacle(
+      Eigen::Vector3d(1.0, 0.0, 0.6), Eigen::Vector3d::UnitX(),
+      Eigen::Vector3d::UnitY(), 0.40,
+      Eigen::Vector3d(1.9, 0.05, 0.6), 0.30, 0.75, 0.30));
+}
+
+TEST(VerticalObstacleSideLock, RejectsDifferentLateralObstacle)
+{
+  EXPECT_FALSE(VerticalObstacleSideLock::isSameObstacle(
+      Eigen::Vector3d(1.0, 0.0, 0.6), Eigen::Vector3d::UnitX(),
+      Eigen::Vector3d::UnitY(), 0.40,
+      Eigen::Vector3d(1.1, 0.80, 0.6), 0.30, 0.75, 0.30));
+}
+
 } // namespace
 } // namespace diff_planner
 

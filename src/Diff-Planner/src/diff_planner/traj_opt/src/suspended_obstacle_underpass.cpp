@@ -175,7 +175,7 @@ bool SuspendedObstacleUnderpass::findSuspendedPassage(
                              passage.target_z);
 }
 
-bool SuspendedObstacleUnderpass::trySearch(
+SuspendedObstacleUnderpass::SearchResult SuspendedObstacleUnderpass::trySearch(
     AStar &a_star, const GridMap::Ptr &grid_map, const double step_size,
     const Eigen::Vector3d &start, const Eigen::Vector3d &end,
     std::vector<Eigen::Vector3d> &path) const
@@ -184,10 +184,10 @@ bool SuspendedObstacleUnderpass::trySearch(
   if (!config_.enabled || !start.allFinite() || !end.allFinite() ||
       !std::isfinite(step_size) || step_size <= 0.0 ||
       (end - start).head<2>().norm() <= 1.0e-3)
-    return false;
+    return SearchResult::NOT_APPLICABLE;
   Passage passage;
   if (!findSuspendedPassage(grid_map, step_size, start, end, passage))
-    return false;
+    return SearchResult::NOT_APPLICABLE;
 
   AStarSearchRegion region;
   region.enabled = true;
@@ -207,15 +207,15 @@ bool SuspendedObstacleUnderpass::trySearch(
   {
     ROS_WARN_THROTTLE(1.0,
                       "[悬空障碍下穿] 已找到下方空间，但指定高度内搜索失败。");
-    return false;
+    return SearchResult::SEARCH_FAILED;
   }
 
   std::vector<Eigen::Vector3d> candidate = a_star.getPath();
   if (!hasRequiredDescent(candidate, start, end, config_.min_descent))
-    return false;
+    return SearchResult::SEARCH_FAILED;
 
   path = std::move(candidate);
-  return true;
+  return SearchResult::SUCCESS;
 }
 
 } // namespace diff_planner
