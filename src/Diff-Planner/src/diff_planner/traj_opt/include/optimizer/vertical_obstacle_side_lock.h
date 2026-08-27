@@ -41,11 +41,8 @@ public:
       const Eigen::Vector3d &obstacle_center,
       const Eigen::Vector3d &lateral,
       double left_width, double right_width);
-  static void computeCenterBand(double first_free_offset,
-                                double last_free_offset,
-                                double step_size,
-                                double &center_offset,
-                                double &band_half_width);
+  static double computePassageCenter(double obstacle_boundary_offset,
+                                     double wall_boundary_offset);
 
 private:
   struct Candidate
@@ -58,8 +55,6 @@ private:
     double right_width{0.0};
     double left_center_offset{0.0};
     double right_center_offset{0.0};
-    double left_band_half_width{0.0};
-    double right_band_half_width{0.0};
   };
 
   struct Lock
@@ -69,7 +64,6 @@ private:
     Eigen::Vector3d axis{Eigen::Vector3d::Zero()};
     Eigen::Vector3d normal{Eigen::Vector3d::Zero()};
     double passage_center_offset{0.0};
-    double passage_band_half_width{0.0};
   };
 
   bool detectCandidate(const GridMap::Ptr &grid_map, double step_size,
@@ -81,8 +75,7 @@ private:
   double measureSideWidth(const GridMap::Ptr &grid_map, double step_size,
                           const Eigen::Vector3d &center,
                           const Eigen::Vector3d &direction,
-                          double &center_offset,
-                          double &band_half_width) const;
+                          double &center_offset) const;
 
   Config config_;
   Lock lock_;

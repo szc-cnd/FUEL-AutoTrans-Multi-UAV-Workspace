@@ -71,13 +71,10 @@ Eigen::Vector3d VerticalObstacleSideLock::chooseSideNormal(
   return strongest_offset >= 0.0 ? lateral : -lateral;
 }
 
-void VerticalObstacleSideLock::computeCenterBand(
-    const double first_free_offset, const double last_free_offset,
-    const double step_size, double &center_offset, double &band_half_width)
+double VerticalObstacleSideLock::computePassageCenter(
+    const double obstacle_boundary_offset, const double wall_boundary_offset)
 {
-  center_offset = 0.5 * (first_free_offset + last_free_offset);
-  const double free_width = last_free_offset - first_free_offset + step_size;
-  band_half_width = std::max(0.5 * step_size, 0.25 * free_width);
+  return 0.5 * (obstacle_boundary_offset + wall_boundary_offset);
 }
 
 bool VerticalObstacleSideLock::isGroundConnected(
@@ -101,7 +98,7 @@ bool VerticalObstacleSideLock::isGroundConnected(
 double VerticalObstacleSideLock::measureSideWidth(
     const GridMap::Ptr &grid_map, const double step_size,
     const Eigen::Vector3d &center, const Eigen::Vector3d &direction,
-    double &center_offset, double &band_half_width) const
+    double &center_offset) const
 {
   bool reached_free_space = false;
   double free_width = 0.0;
@@ -129,8 +126,10 @@ double VerticalObstacleSideLock::measureSideWidth(
     last_free_offset = index * step_size;
     free_width += step_size;
   }
-  computeCenterBand(first_free_offset, last_free_offset, step_size,
-                    center_offset, band_half_width);
+  const double obstacle_boundary_offset = first_free_offset - 0.5 * step_size;
+  const double wall_boundary_offset = last_free_offset + 0.5 * step_size;
+  center_offset = computePassageCenter(obstacle_boundary_offset,
+                                      wall_boundary_offset);
   return free_width;
 }
 
@@ -178,10 +177,10 @@ bool VerticalObstacleSideLock::detectCandidate(
   }
   candidate.left_width = measureSideWidth(
       grid_map, step_size, candidate.center, candidate.lateral,
-      candidate.left_center_offset, candidate.left_band_half_width);
+      candidate.left_center_offset);
   candidate.right_width = measureSideWidth(
       grid_map, step_size, candidate.center, -candidate.lateral,
-      candidate.right_center_offset, candidate.right_band_half_width);
+      candidate.right_center_offset);
   return widthsAreComparable(
       candidate.left_width, candidate.right_width,
       config_.min_side_width, config_.width_similarity_tolerance);
@@ -212,9 +211,11 @@ bool VerticalObstacleSideLock::trySearch(
     lock_.normal = chooseSideNormal(
         unconstrained_path, candidate.center, candidate.lateral,
         candidate.left_width, candidate.right_width);
-    ROS_INFO("[接地障碍侧锁] 左右净宽 %.2fm / %.2fm，锁定%s侧中心带。",
+    ROS_INFO("[接地障碍侧锁] 左右净宽 %.2fm / %.2fm，锁定%s侧，通过中心偏移 %.2fm。",
              candidate.left_width, candidate.right_width,
-             lock_.normal.dot(candidate.lateral) >= 0.0 ? "左" : "右");
+             lock_.normal.dot(candidate.lateral) >= 0.0 ? "左" : "右",
+             lock_.normal.dot(candidate.lateral) >= 0.0
+                 ? candidate.left_center_offset : candidate.right_center_offset);
   }
   else
   {
@@ -223,14 +224,12 @@ bool VerticalObstacleSideLock::trySearch(
   const bool selected_left = lock_.normal.dot(candidate.lateral) >= 0.0;
   lock_.passage_center_offset = selected_left
       ? candidate.left_center_offset : candidate.right_center_offset;
-  lock_.passage_band_half_width = selected_left
-      ? candidate.left_band_half_width : candidate.right_band_half_width;
 
   AStarSearchRegion region;
   region.enabled = true;
   region.limit_corridor = true;
   region.limit_side = true;
-  region.limit_side_band = true;
+  region.prefer_side_center = true;
   region.corridor_half_width = config_.corridor_half_width;
   region.side_half_length = candidate.half_length + config_.longitudinal_margin;
   region.time_limit = config_.search_timeout;
@@ -240,14 +239,16 @@ bool VerticalObstacleSideLock::trySearch(
   region.side_origin = lock_.center;
   region.side_normal = lock_.normal;
   region.side_axis = lock_.axis;
-  region.side_band_center = lock_.passage_center_offset;
-  region.side_band_half_width = lock_.passage_band_half_width;
+  region.side_center_offset = lock_.passage_center_offset;
 
   path.clear();
   if (a_star.AstarSearch(step_size, start, end, &region) != ASTAR_RET::SUCCESS)
   {
-    ROS_WARN_THROTTLE(1.0, "[接地障碍侧锁] 已选侧，但中心带内未找到路径。");
-    return true;
+    region.prefer_side_center = false;
+    ROS_WARN_THROTTLE(1.0,
+                      "[接地障碍侧锁] 中心参考搜索失败，保持选定侧重试。");
+    if (a_star.AstarSearch(step_size, start, end, &region) != ASTAR_RET::SUCCESS)
+      return true;
   }
   path = a_star.getPath();
   return true;

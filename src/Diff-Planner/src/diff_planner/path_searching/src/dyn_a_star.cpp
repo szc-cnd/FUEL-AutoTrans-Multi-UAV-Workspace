@@ -170,19 +170,6 @@ bool AStar::insideSearchRegion(const Vector3d &point,
             return false;
     }
 
-    if (region->limit_side_band)
-    {
-        const Vector3d relative = point - region->side_origin;
-        if (std::abs(relative.dot(region->side_axis)) <=
-            region->side_half_length + 1.0e-6)
-        {
-            const double lateral = relative.dot(region->side_normal);
-            if (std::abs(lateral - region->side_band_center) >
-                region->side_band_half_width + 1.0e-6)
-                return false;
-        }
-    }
-
     if (region->limit_local_max_z)
     {
         const Vector3d relative = point - region->height_origin;
@@ -295,6 +282,21 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt,
                     }
 
                     double static_cost = sqrt(dx * dx + dy * dy + dz * dz);
+                    if (region != nullptr && region->enabled &&
+                        region->prefer_side_center)
+                    {
+                        const Vector3d relative = neighbor_coord - region->side_origin;
+                        if (std::abs(relative.dot(region->side_axis)) <=
+                            region->side_half_length + 1.0e-6)
+                        {
+                            const double center_error = std::abs(
+                                relative.dot(region->side_normal) -
+                                region->side_center_offset);
+                            const double normalization = std::max(
+                                region->corridor_half_width, step_size_);
+                            static_cost *= 1.0 + center_error / normalization;
+                        }
+                    }
                     tentative_gScore = current->gScore + static_cost;
 
                     if (!flag_explored)
