@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <optimizer/suspended_obstacle_underpass.h>
+#include <optimizer/vertical_obstacle_side_lock.h>
 #include <path_searching/dyn_a_star.h>
 #include <plan_env/grid_map.h>
 #include <ros/ros.h>
@@ -69,6 +70,7 @@ namespace diff_planner
     GridMap::Ptr grid_map_;
     AStar::Ptr a_star_;
     SuspendedObstacleUnderpass suspended_underpass_;
+    VerticalObstacleSideLock vertical_obstacle_side_lock_;
     poly_traj::MinJerkOpt jerkOpt_;
     SwarmTrajData *swarm_trajs_{NULL}; // Can not use shared_ptr and no need to free
     ConstraintPoints cps_;

@@ -67,14 +67,18 @@ bool SuspendedObstacleUnderpass::hasVerticalGap(
       {
         below_obstacle = true;
         free_height = step_size;
+        if (free_height + 1.0e-6 >= min_vertical_gap)
+          return true;
       }
       continue;
     }
     if (occupancy != 0)
       break;
     free_height += step_size;
+    if (free_height + 1.0e-6 >= min_vertical_gap)
+      return true;
   }
-  return free_height + 1.0e-6 >= min_vertical_gap;
+  return false;
 }
 
 bool SuspendedObstacleUnderpass::isSuspendedObstacle(
@@ -130,6 +134,8 @@ bool SuspendedObstacleUnderpass::trySearch(
 
   AStarSearchRegion region;
   region.enabled = true;
+  region.limit_max_z = true;
+  region.limit_corridor = true;
   region.max_z = std::max(start.z(), end.z());
   region.corridor_half_width = config_.corridor_half_width;
   region.time_limit = config_.search_timeout;

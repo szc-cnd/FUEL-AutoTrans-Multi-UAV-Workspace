@@ -65,6 +65,13 @@ TEST(SuspendedObstacleUnderpass, RejectsGapThatIsTooLow)
       downward_occupancy, 0.10, 0.35));
 }
 
+TEST(SuspendedObstacleUnderpass, AcceptsEnoughGapBeforeVirtualGround)
+{
+  const std::vector<int> downward_occupancy = {1, 0, 0, 0, 0, -1};
+  EXPECT_TRUE(SuspendedObstacleUnderpass::hasVerticalGap(
+      downward_occupancy, 0.10, 0.35));
+}
+
 } // namespace
 } // namespace diff_planner
 

@@ -38,6 +38,7 @@ include_directories(
 add_library( traj_opt 
     src/poly_traj_optimizer.cpp
     src/suspended_obstacle_underpass.cpp
+    src/vertical_obstacle_side_lock.cpp
     )
 target_link_libraries( traj_opt
     ${catkin_LIBRARIES} 
@@ -50,5 +51,14 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_suspended_obstacle_underpass)
     target_link_libraries(test_suspended_obstacle_underpass ${catkin_LIBRARIES})
+  endif()
+
+  catkin_add_gtest(test_vertical_obstacle_side_lock
+    test/test_vertical_obstacle_side_lock.cpp
+    src/vertical_obstacle_side_lock.cpp
+    src/suspended_obstacle_underpass.cpp
+  )
+  if(TARGET test_vertical_obstacle_side_lock)
+    target_link_libraries(test_vertical_obstacle_side_lock ${catkin_LIBRARIES})
   endif()
 endif()

@@ -791,9 +791,17 @@ namespace diff_planner
     }
 
     const ASTAR_RET result = a_star_->AstarSearch(resolution, start, end);
-    if (result == ASTAR_RET::SUCCESS)
-      path = a_star_->getPath();
-    return result;
+    if (result != ASTAR_RET::SUCCESS)
+      return result;
+
+    std::vector<Eigen::Vector3d> unconstrained_path = a_star_->getPath();
+    if (vertical_obstacle_side_lock_.trySearch(
+            *a_star_, grid_map_, resolution, start, end,
+            unconstrained_path, path))
+      return path.empty() ? ASTAR_RET::SEARCH_ERR : ASTAR_RET::SUCCESS;
+
+    path = std::move(unconstrained_path);
+    return ASTAR_RET::SUCCESS;
   }
 
   bool PolyTrajOptimizer::roughlyCheckConstraintPoints(void)
@@ -1893,6 +1901,16 @@ namespace diff_planner
     nh.param("optimization/underpass_search_timeout",
              underpass_config.search_timeout, 0.05);
     suspended_underpass_.setConfig(underpass_config);
+    VerticalObstacleSideLock::Config side_lock_config;
+    nh.param("optimization/enable_vertical_obstacle_side_lock",
+             side_lock_config.enabled, false);
+    nh.param("optimization/side_lock_corridor_half_width",
+             side_lock_config.corridor_half_width, 0.75);
+    nh.param("optimization/side_lock_width_similarity_tolerance",
+             side_lock_config.width_similarity_tolerance, 0.15);
+    nh.param("optimization/underpass_min_vertical_gap",
+             side_lock_config.min_vertical_gap, 0.35);
+    vertical_obstacle_side_lock_.setConfig(side_lock_config);
     nh.param("optimization/swarm_clearance", swarm_clearance_, -1.0);
     nh.param("optimization/max_vel", max_vel_, -1.0);
     nh.param("optimization/vel_tolerance", vel_tolerance_, -1.0);

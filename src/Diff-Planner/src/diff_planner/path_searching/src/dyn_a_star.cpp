@@ -145,17 +145,32 @@ bool AStar::insideSearchRegion(const Vector3d &point,
 {
     if (region == nullptr || !region->enabled)
         return true;
-    if (point.z() > region->max_z + 1.0e-6)
+    if (region->limit_max_z && point.z() > region->max_z + 1.0e-6)
         return false;
 
-    const Vector2d line = (region->line_end - region->line_start).head<2>();
-    const double line_length = line.norm();
-    if (line_length <= 1.0e-6)
-        return false;
-    const Vector2d relative = (point - region->line_start).head<2>();
-    const double lateral_distance =
-        std::abs(line.x() * relative.y() - line.y() * relative.x()) / line_length;
-    return lateral_distance <= region->corridor_half_width + 1.0e-6;
+    if (region->limit_corridor)
+    {
+        const Vector2d line = (region->line_end - region->line_start).head<2>();
+        const double line_length = line.norm();
+        if (line_length <= 1.0e-6)
+            return false;
+        const Vector2d relative = (point - region->line_start).head<2>();
+        const double lateral_distance =
+            std::abs(line.x() * relative.y() - line.y() * relative.x()) / line_length;
+        if (lateral_distance > region->corridor_half_width + 1.0e-6)
+            return false;
+    }
+
+    if (region->limit_side)
+    {
+        const Vector3d relative = point - region->side_origin;
+        if (std::abs(relative.dot(region->side_axis)) <=
+                region->side_half_length + 1.0e-6 &&
+            relative.dot(region->side_normal) < -1.0e-6)
+            return false;
+    }
+
+    return true;
 }
 
 ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt,
