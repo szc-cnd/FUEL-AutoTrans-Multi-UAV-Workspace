@@ -103,8 +103,8 @@ force_estimator: # *
     # kf 将当前 CAV0 四个电机的机械转速平方和换算为总推力，单位 N/rpm^2；由 1.817 kg 实机稳定悬停日志标定。
     kf: 1.745e-8 # 用于世界系外力估计和 thrust_model 模式 1 的 RPM 推力反馈。
 
-    # f_Q 由外力观察器以 100 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
-    sample_freq_fq: 100.0
+    # f_Q 由外力观察器以 150 Hz 更新；该频率用于最终 f_Q 二阶低通滤波器系数。
+    sample_freq_fq: 150.0
     sample_freq_fl: 400.0
     # 当前保留源码 0.0；若 f_Q 抖动，后续建议改为 5~10 Hz 低通。
     cutoff_freq_fq: 3.0  # 世界系外力估计 f_Q 的低通截止频率，单位 Hz；降低 IMU/RPM 噪声，但会增加估计延迟
@@ -112,7 +112,7 @@ force_estimator: # *
     imu_body_length: 0.66844507
     # 只估计模式：计算并记录世界系外力 f_Q（单位 N），但不把它传入 NMPC。
     enable_force_estimation: true
-    enable_disturbance_compensation: true
+    enable_disturbance_compensation: false
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
@@ -139,10 +139,10 @@ force_estimator: # *
     force_axis_gain_x: 1.0
     force_axis_gain_y: 1.0
     force_axis_gain_z: 1.0
-    # 外力观察器每 10 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
-    # max_queue/force_observer_freq 决定滑动窗口时长：20/100 = 0.2 s。
-    max_queue: 20
-    force_observer_freq: 100.0
+    # 外力观察器每约 6.67 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 150 Hz。
+    # max_queue/force_observer_freq 决定滑动窗口时长：30/150 = 0.2 s。
+    max_queue: 30
+    force_observer_freq: 150.0
     # 窗口内外力估计的平滑正则权重；源码值先保留。
     var_weight: 80.0
 
