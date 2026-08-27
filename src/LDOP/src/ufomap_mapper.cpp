@@ -366,6 +366,11 @@ UfomapMapperConfig buildUfomapConfig(const UfomapMapperParams& params) {
   config.corridor_min_cluster_points = std::max(2, params.corridor_min_cluster_points);
   config.corridor_max_cluster_extent = params.corridor_max_cluster_extent > 0.0
       ? params.corridor_max_cluster_extent : defaults.corridor_max_cluster_extent;
+  config.corridor_oversized_split_enabled = params.corridor_oversized_split_enabled;
+  config.corridor_split_min_cluster_points = std::max(
+      2, params.corridor_split_min_cluster_points);
+  config.corridor_split_max_subclusters = std::max(
+      1, params.corridor_split_max_subclusters);
   config.corridor_max_candidates = std::max(1, params.corridor_max_candidates);
   config.corridor_reject_candidate_count = std::max(
       config.corridor_max_candidates, params.corridor_reject_candidate_count);
@@ -569,6 +574,12 @@ void UfomapMapper::loadParameters() {
              defaults.corridor_min_cluster_points);
   pnh_.param("corridor_max_cluster_extent", params_.corridor_max_cluster_extent,
              defaults.corridor_max_cluster_extent);
+  pnh_.param("corridor_oversized_split_enabled", params_.corridor_oversized_split_enabled,
+             defaults.corridor_oversized_split_enabled);
+  pnh_.param("corridor_split_min_cluster_points", params_.corridor_split_min_cluster_points,
+             defaults.corridor_split_min_cluster_points);
+  pnh_.param("corridor_split_max_subclusters", params_.corridor_split_max_subclusters,
+             defaults.corridor_split_max_subclusters);
   pnh_.param("corridor_max_candidates", params_.corridor_max_candidates,
              defaults.corridor_max_candidates);
   pnh_.param("corridor_reject_candidate_count", params_.corridor_reject_candidate_count,
@@ -1306,8 +1317,10 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
 
   struct CorridorCluster {
     std::vector<std::size_t> indices;
+    std::vector<TemporalGridKey> keys;
     ufo::Point center{};
     ufo::Point size{};
+    double extent{0.0};
   };
   std::vector<CorridorCluster> clusters;
   std::unordered_set<TemporalGridKey, TemporalGridKeyHash> visited;
@@ -1326,6 +1339,48 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     }
     return values;
   }();
+  const std::array<std::array<int, 3>, 6> split_offsets = {{{-1, 0, 0}, {1, 0, 0},
+                                                              {0, -1, 0}, {0, 1, 0},
+                                                              {0, 0, -1}, {0, 0, 1}}};
+  std::size_t oversized_parent_count = 0U;
+  std::size_t accepted_split_count = 0U;
+  std::size_t oversized_holdout_point_count = 0U;
+
+  const auto finalizeCluster = [&](CorridorCluster* cluster) {
+    if (cluster == nullptr || cluster->indices.empty()) {
+      return false;
+    }
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double min_z = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    double max_z = -std::numeric_limits<double>::infinity();
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    for (const std::size_t index : cluster->indices) {
+      const auto& point = points[index];
+      min_x = std::min(min_x, static_cast<double>(point.x));
+      min_y = std::min(min_y, static_cast<double>(point.y));
+      min_z = std::min(min_z, static_cast<double>(point.z));
+      max_x = std::max(max_x, static_cast<double>(point.x));
+      max_y = std::max(max_y, static_cast<double>(point.y));
+      max_z = std::max(max_z, static_cast<double>(point.z));
+      sum_x += point.x;
+      sum_y += point.y;
+      sum_z += point.z;
+    }
+    cluster->extent = std::hypot(std::hypot(max_x - min_x, max_y - min_y), max_z - min_z);
+    const double count = static_cast<double>(cluster->indices.size());
+    cluster->center = ufo::Point(static_cast<float>(sum_x / count),
+                                 static_cast<float>(sum_y / count),
+                                 static_cast<float>(sum_z / count));
+    cluster->size = ufo::Point(static_cast<float>(std::max(max_x - min_x, detection_voxel)),
+                               static_cast<float>(std::max(max_y - min_y, detection_voxel)),
+                               static_cast<float>(std::max(max_z - min_z, detection_voxel)));
+    return true;
+  };
 
   for (const auto& bucket : candidate_buckets) {
     if (visited.count(bucket.first) != 0U) {
@@ -1342,6 +1397,7 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
       if (found == candidate_buckets.end()) {
         continue;
       }
+      cluster.keys.push_back(key);
       cluster.indices.insert(cluster.indices.end(), found->second.begin(), found->second.end());
       for (const auto& offset : offsets) {
         const TemporalGridKey neighbor{key.x + offset[0], key.y + offset[1], key.z + offset[2]};
@@ -1354,40 +1410,74 @@ UfomapMapper::CorridorCandidateResult UfomapMapper::detectCorridorCandidates(
     if (cluster.indices.size() < static_cast<std::size_t>(config_.corridor_min_cluster_points)) {
       continue;
     }
-    double min_x = std::numeric_limits<double>::infinity();
-    double min_y = std::numeric_limits<double>::infinity();
-    double min_z = std::numeric_limits<double>::infinity();
-    double max_x = -std::numeric_limits<double>::infinity();
-    double max_y = -std::numeric_limits<double>::infinity();
-    double max_z = -std::numeric_limits<double>::infinity();
-    double sum_x = 0.0;
-    double sum_y = 0.0;
-    double sum_z = 0.0;
-    for (const std::size_t index : cluster.indices) {
-      const auto& point = points[index];
-      min_x = std::min(min_x, static_cast<double>(point.x));
-      min_y = std::min(min_y, static_cast<double>(point.y));
-      min_z = std::min(min_z, static_cast<double>(point.z));
-      max_x = std::max(max_x, static_cast<double>(point.x));
-      max_y = std::max(max_y, static_cast<double>(point.y));
-      max_z = std::max(max_z, static_cast<double>(point.z));
-      sum_x += point.x;
-      sum_y += point.y;
-      sum_z += point.z;
-    }
-    const double extent = std::hypot(std::hypot(max_x - min_x, max_y - min_y), max_z - min_z);
-    if (config_.corridor_max_cluster_extent > 0.0 &&
-        extent > config_.corridor_max_cluster_extent) {
+    finalizeCluster(&cluster);
+    const bool oversized = config_.corridor_max_cluster_extent > 0.0 &&
+                           cluster.extent > config_.corridor_max_cluster_extent;
+    if (!oversized) {
+      clusters.push_back(std::move(cluster));
       continue;
     }
-    const double count = static_cast<double>(cluster.indices.size());
-    cluster.center = ufo::Point(static_cast<float>(sum_x / count),
-                                static_cast<float>(sum_y / count),
-                                static_cast<float>(sum_z / count));
-    cluster.size = ufo::Point(static_cast<float>(std::max(max_x - min_x, detection_voxel)),
-                              static_cast<float>(std::max(max_y - min_y, detection_voxel)),
-                              static_cast<float>(std::max(max_z - min_z, detection_voxel)));
-    clusters.push_back(std::move(cluster));
+    if (!config_.corridor_oversized_split_enabled) {
+      continue;
+    }
+
+    ++oversized_parent_count;
+    oversized_holdout_point_count += cluster.indices.size();
+    for (const std::size_t index : cluster.indices) {
+      result.holdout_indices[index] = true;
+    }
+
+    const std::unordered_set<TemporalGridKey, TemporalGridKeyHash> parent_keys(
+        cluster.keys.begin(), cluster.keys.end());
+    std::unordered_set<TemporalGridKey, TemporalGridKeyHash> split_visited;
+    std::size_t accepted_parent_subclusters = 0U;
+    for (const auto& start_key : cluster.keys) {
+      if (!split_visited.insert(start_key).second) {
+        continue;
+      }
+      std::queue<TemporalGridKey> split_queue;
+      split_queue.push(start_key);
+      CorridorCluster child;
+      while (!split_queue.empty()) {
+        const TemporalGridKey key = split_queue.front();
+        split_queue.pop();
+        const auto found = candidate_buckets.find(key);
+        if (found == candidate_buckets.end()) {
+          continue;
+        }
+        child.keys.push_back(key);
+        child.indices.insert(child.indices.end(), found->second.begin(), found->second.end());
+        for (const auto& offset : split_offsets) {
+          const TemporalGridKey neighbor{key.x + offset[0], key.y + offset[1], key.z + offset[2]};
+          if (parent_keys.count(neighbor) != 0U && split_visited.insert(neighbor).second) {
+            split_queue.push(neighbor);
+          }
+        }
+      }
+      if (child.indices.size() <
+          static_cast<std::size_t>(config_.corridor_split_min_cluster_points)) {
+        continue;
+      }
+      finalizeCluster(&child);
+      if (config_.corridor_max_cluster_extent > 0.0 &&
+          child.extent > config_.corridor_max_cluster_extent) {
+        continue;
+      }
+      clusters.push_back(std::move(child));
+      ++accepted_split_count;
+      ++accepted_parent_subclusters;
+      if (accepted_parent_subclusters >=
+          static_cast<std::size_t>(config_.corridor_split_max_subclusters)) {
+        break;
+      }
+    }
+  }
+
+  if (oversized_parent_count > 0U) {
+    ROS_INFO_STREAM_THROTTLE(1.0, "Corridor oversized split: parents="
+                                      << oversized_parent_count
+                                      << ", accepted_children=" << accepted_split_count
+                                      << ", heldout_points=" << oversized_holdout_point_count);
   }
 
   std::sort(clusters.begin(), clusters.end(), [](const CorridorCluster& lhs,

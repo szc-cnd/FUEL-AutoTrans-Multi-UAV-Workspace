@@ -57,6 +57,9 @@ corridor_association_gate: 0.45
 corridor_track_timeout: 0.40
 corridor_min_cluster_points: 4
 corridor_max_cluster_extent: 0.60
+corridor_oversized_split_enabled: false  # 默认兼容原行为；需要处理墙球粘连的场景单独开启
+corridor_split_min_cluster_points: 4
+corridor_split_max_subclusters: 8
 corridor_max_candidates: 1
 corridor_reject_candidate_count: 3
 corridor_min_wall_points: 12

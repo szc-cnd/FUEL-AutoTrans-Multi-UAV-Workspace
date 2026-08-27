@@ -69,6 +69,9 @@ struct UfomapMapperConfig {
   double corridor_track_timeout{0.4};
   int corridor_min_cluster_points{4};
   double corridor_max_cluster_extent{0.6};
+  bool corridor_oversized_split_enabled{false};
+  int corridor_split_min_cluster_points{4};
+  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};
@@ -128,6 +131,9 @@ struct UfomapMapperParams {
   double corridor_track_timeout{0.4};
   int corridor_min_cluster_points{4};
   double corridor_max_cluster_extent{0.6};
+  bool corridor_oversized_split_enabled{false};
+  int corridor_split_min_cluster_points{4};
+  int corridor_split_max_subclusters{8};
   int corridor_max_candidates{1};
   int corridor_reject_candidate_count{3};
   int corridor_min_wall_points{12};

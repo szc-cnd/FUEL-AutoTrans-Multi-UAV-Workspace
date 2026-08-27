@@ -59,7 +59,8 @@ nav_msgs::Odometry makeOdom(const geometry_msgs::Point& position,
 std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
                                          const bool corridor_enabled = false,
                                          const bool ground_filter_enabled = false,
-                                         const int warmup_frames = 0) {
+                                         const int warmup_frames = 0,
+                                         const bool oversized_split_enabled = false) {
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~" + test_namespace);
 
@@ -109,6 +110,9 @@ std::unique_ptr<UfomapMapper> makeMapper(const std::string& test_namespace,
     pnh.setParam("corridor_track_timeout", 0.40);
     pnh.setParam("corridor_min_cluster_points", 4);
     pnh.setParam("corridor_max_cluster_extent", 0.60);
+    pnh.setParam("corridor_oversized_split_enabled", oversized_split_enabled);
+    pnh.setParam("corridor_split_min_cluster_points", 4);
+    pnh.setParam("corridor_split_max_subclusters", 8);
     pnh.setParam("corridor_max_candidates", 1);
     pnh.setParam("corridor_reject_candidate_count", 3);
     pnh.setParam("corridor_min_wall_points", 4);
@@ -173,6 +177,28 @@ void appendCompactCluster(std::vector<geometry_msgs::Point>& points,
   points.push_back(makePoint(center_x + 0.02, center_y - 0.02, 0.58));
   points.push_back(makePoint(center_x - 0.02, center_y + 0.02, 0.62));
   points.push_back(makePoint(center_x + 0.02, center_y + 0.02, 0.62));
+}
+
+std::vector<geometry_msgs::Point> makeDiagonalOversizedCluster(
+    const bool include_compact_ends) {
+  std::vector<geometry_msgs::Point> points;
+  if (include_compact_ends) {
+    points.push_back(makePoint(0.41, -0.29, 0.61));
+    points.push_back(makePoint(0.42, -0.28, 0.62));
+    points.push_back(makePoint(0.43, -0.27, 0.63));
+    points.push_back(makePoint(0.44, -0.26, 0.64));
+  }
+  for (int index = 0; index < 6; ++index) {
+    points.push_back(makePoint(0.55 + 0.10 * index,
+                               -0.15 + 0.10 * index, 0.60));
+  }
+  if (include_compact_ends) {
+    points.push_back(makePoint(1.15, 0.45, 0.61));
+    points.push_back(makePoint(1.16, 0.46, 0.62));
+    points.push_back(makePoint(1.17, 0.47, 0.63));
+    points.push_back(makePoint(1.18, 0.48, 0.64));
+  }
+  return points;
 }
 
 TEST(UfomapMapperTest, QueryNodeReportsOccupiedUnknownAndOutOfMapSeparately) {
@@ -364,6 +390,29 @@ TEST(UfomapMapperTest, StaticCorridorWallsDoNotCreateCandidates) {
     EXPECT_EQ(result.runtime_stats.corridor_candidate_point_count, 0U);
     EXPECT_EQ(result.classification.dynamic_point_count, 0U);
   }
+}
+
+TEST(UfomapMapperTest, OversizedDiagonalBridgeSplitsIntoHeldOutChildren) {
+  auto mapper = makeMapper("ufomap_mapper_oversized_split", true, false, 0, true);
+  const auto result = mapper->processInputCloud(
+      makeCloud(makeDiagonalOversizedCluster(true), 45.0),
+      makeOdom(makePoint(0.0, 0.0, 0.0), 45.0));
+
+  EXPECT_GT(result.runtime_stats.corridor_candidate_point_count, 0U);
+  EXPECT_EQ(result.classification.dynamic_point_count, 0U);
+  EXPECT_FALSE(mapper->queryNode(ufo::Point(0.42F, -0.28F, 0.60F)).occupied);
+  EXPECT_FALSE(mapper->queryNode(ufo::Point(1.18F, 0.48F, 0.60F)).occupied);
+}
+
+TEST(UfomapMapperTest, UnresolvedOversizedClusterNeverFallsIntoStaticMap) {
+  auto mapper = makeMapper("ufomap_mapper_oversized_holdout", true, false, 0, true);
+  const auto result = mapper->processInputCloud(
+      makeCloud(makeDiagonalOversizedCluster(false), 46.0),
+      makeOdom(makePoint(0.0, 0.0, 0.0), 46.0));
+
+  EXPECT_EQ(result.runtime_stats.corridor_candidate_point_count, 0U);
+  EXPECT_EQ(result.classification.static_point_count, 0U);
+  EXPECT_FALSE(mapper->queryNode(ufo::Point(0.75F, 0.05F, 0.60F)).occupied);
 }
 
 TEST(UfomapMapperTest, StaticInternalClusterIsReleasedWithoutDynamicPublish) {

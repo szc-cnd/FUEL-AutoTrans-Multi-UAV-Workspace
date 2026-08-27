@@ -150,6 +150,7 @@
         <arg name="vehicle_ns" value="UAV1"/>
         <arg name="rviz" value="false"/>
         <arg name="corridor_min_lateral_span" value="0.0"/>
+        <arg name="corridor_oversized_split_enabled" value="true"/>
     </include>
 
     <node pkg="diff_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
