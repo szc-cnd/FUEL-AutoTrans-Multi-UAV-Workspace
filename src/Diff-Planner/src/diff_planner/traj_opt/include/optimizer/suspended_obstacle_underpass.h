@@ -36,11 +36,23 @@ public:
                                  double min_descent);
   static bool hasVerticalGap(const std::vector<int> &downward_occupancy,
                              double step_size, double min_vertical_gap);
+  static bool choosePassageHeight(double top_z, double bottom_z,
+                                  double start_z, double end_z,
+                                  double min_descent, double &target_z);
 
 private:
-  bool isSuspendedObstacle(const GridMap::Ptr &grid_map, double step_size,
-                           const Eigen::Vector3d &start,
-                           const Eigen::Vector3d &end) const;
+  struct Passage
+  {
+    Eigen::Vector3d center{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d axis{Eigen::Vector3d::Zero()};
+    double half_length{0.0};
+    double target_z{0.0};
+  };
+
+  bool findSuspendedPassage(const GridMap::Ptr &grid_map, double step_size,
+                            const Eigen::Vector3d &start,
+                            const Eigen::Vector3d &end,
+                            Passage &passage) const;
 
   Config config_;
 };

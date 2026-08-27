@@ -50,6 +50,19 @@ TEST(VerticalObstacleSideLock, UsesWiderSideForFlatPathFallback)
             0.0);
 }
 
+TEST(VerticalObstacleSideLock, UsesMiddleHalfOfFreePassage)
+{
+  double center_offset = 0.0;
+  double band_half_width = 0.0;
+  VerticalObstacleSideLock::computeCenterBand(
+      0.20, 0.55, 0.05, center_offset, band_half_width);
+
+  EXPECT_DOUBLE_EQ(center_offset, 0.375);
+  EXPECT_NEAR(band_half_width, 0.10, 1.0e-9);
+  EXPECT_GT(center_offset - band_half_width, 0.20);
+  EXPECT_LT(center_offset + band_half_width, 0.55);
+}
+
 } // namespace
 } // namespace diff_planner
 

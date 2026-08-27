@@ -25,9 +25,14 @@ struct AStarSearchRegion
 	bool limit_max_z{false};
 	bool limit_corridor{false};
 	bool limit_side{false};
+	bool limit_side_band{false};
+	bool limit_local_max_z{false};
 	double max_z{0.0};
 	double corridor_half_width{0.0};
 	double side_half_length{0.0};
+	double side_band_center{0.0};
+	double side_band_half_width{0.0};
+	double height_half_length{0.0};
 	double time_limit{0.2};
 	bool report_timeout{true};
 	Eigen::Vector3d line_start{Eigen::Vector3d::Zero()};
@@ -35,6 +40,8 @@ struct AStarSearchRegion
 	Eigen::Vector3d side_origin{Eigen::Vector3d::Zero()};
 	Eigen::Vector3d side_normal{Eigen::Vector3d::Zero()};
 	Eigen::Vector3d side_axis{Eigen::Vector3d::Zero()};
+	Eigen::Vector3d height_origin{Eigen::Vector3d::Zero()};
+	Eigen::Vector3d height_axis{Eigen::Vector3d::Zero()};
 };
 
 struct GridNode

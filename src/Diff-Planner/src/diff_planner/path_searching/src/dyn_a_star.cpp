@@ -170,6 +170,28 @@ bool AStar::insideSearchRegion(const Vector3d &point,
             return false;
     }
 
+    if (region->limit_side_band)
+    {
+        const Vector3d relative = point - region->side_origin;
+        if (std::abs(relative.dot(region->side_axis)) <=
+            region->side_half_length + 1.0e-6)
+        {
+            const double lateral = relative.dot(region->side_normal);
+            if (std::abs(lateral - region->side_band_center) >
+                region->side_band_half_width + 1.0e-6)
+                return false;
+        }
+    }
+
+    if (region->limit_local_max_z)
+    {
+        const Vector3d relative = point - region->height_origin;
+        if (std::abs(relative.dot(region->height_axis)) <=
+                region->height_half_length + 1.0e-6 &&
+            point.z() > region->max_z + 1.0e-6)
+            return false;
+    }
+
     return true;
 }
 

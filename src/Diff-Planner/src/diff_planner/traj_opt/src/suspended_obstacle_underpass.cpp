@@ -81,9 +81,23 @@ bool SuspendedObstacleUnderpass::hasVerticalGap(
   return false;
 }
 
-bool SuspendedObstacleUnderpass::isSuspendedObstacle(
+bool SuspendedObstacleUnderpass::choosePassageHeight(
+    const double top_z, const double bottom_z, const double start_z,
+    const double end_z, const double min_descent, double &target_z)
+{
+  if (!std::isfinite(top_z) || !std::isfinite(bottom_z) ||
+      !std::isfinite(start_z) || !std::isfinite(end_z) ||
+      !std::isfinite(min_descent) || top_z < bottom_z || min_descent <= 0.0)
+    return false;
+  target_z = std::min(0.5 * (top_z + bottom_z),
+                      std::min(start_z, end_z) - min_descent);
+  return target_z + 1.0e-6 >= bottom_z;
+}
+
+bool SuspendedObstacleUnderpass::findSuspendedPassage(
     const GridMap::Ptr &grid_map, const double step_size,
-    const Eigen::Vector3d &start, const Eigen::Vector3d &end) const
+    const Eigen::Vector3d &start, const Eigen::Vector3d &end,
+    Passage &passage) const
 {
   if (!grid_map)
     return false;
@@ -95,6 +109,9 @@ bool SuspendedObstacleUnderpass::isSuspendedObstacle(
   const int downward_samples =
       std::max(1, static_cast<int>(std::ceil(2.0 / step_size)));
   bool found_occupied_column = false;
+  double common_top_z = std::numeric_limits<double>::infinity();
+  double common_bottom_z = -std::numeric_limits<double>::infinity();
+  std::vector<Eigen::Vector3d> occupied_points;
 
   for (int sample = 0; sample <= sample_count; ++sample)
   {
@@ -104,6 +121,7 @@ bool SuspendedObstacleUnderpass::isSuspendedObstacle(
       continue;
 
     found_occupied_column = true;
+    occupied_points.push_back(point);
     std::vector<int> downward_occupancy;
     downward_occupancy.reserve(downward_samples);
     for (int index = 1; index <= downward_samples; ++index)
@@ -112,11 +130,49 @@ bool SuspendedObstacleUnderpass::isSuspendedObstacle(
       below.z() -= index * step_size;
       downward_occupancy.push_back(grid_map->getInflateOccupancy(below));
     }
-    if (!hasVerticalGap(downward_occupancy, step_size,
-                        config_.min_vertical_gap))
+    int first_free = -1;
+    int last_free = -1;
+    for (int index = 0; index < downward_samples; ++index)
+    {
+      if (downward_occupancy[index] == 0)
+      {
+        if (first_free < 0)
+          first_free = index;
+        last_free = index;
+      }
+      else if (first_free >= 0)
+      {
+        break;
+      }
+    }
+    if (first_free < 0 ||
+        (last_free - first_free + 1) * step_size + 1.0e-6 <
+            config_.min_vertical_gap)
       return false;
+    common_top_z = std::min(
+        common_top_z, point.z() - (first_free + 1) * step_size);
+    common_bottom_z = std::max(
+        common_bottom_z, point.z() - (last_free + 1) * step_size);
   }
-  return found_occupied_column;
+  if (!found_occupied_column ||
+      common_top_z - common_bottom_z + step_size + 1.0e-6 <
+          config_.min_vertical_gap)
+    return false;
+
+  passage.axis = Eigen::Vector3d(end.x() - start.x(), end.y() - start.y(), 0.0);
+  passage.axis.normalize();
+  passage.center.setZero();
+  for (const Eigen::Vector3d &point : occupied_points)
+    passage.center += point;
+  passage.center /= occupied_points.size();
+  passage.half_length = 0.0;
+  for (const Eigen::Vector3d &point : occupied_points)
+    passage.half_length = std::max(
+        passage.half_length,
+        std::abs((point - passage.center).dot(passage.axis)));
+  return choosePassageHeight(common_top_z, common_bottom_z,
+                             start.z(), end.z(), config_.min_descent,
+                             passage.target_z);
 }
 
 bool SuspendedObstacleUnderpass::trySearch(
@@ -129,22 +185,30 @@ bool SuspendedObstacleUnderpass::trySearch(
       !std::isfinite(step_size) || step_size <= 0.0 ||
       (end - start).head<2>().norm() <= 1.0e-3)
     return false;
-  if (!isSuspendedObstacle(grid_map, step_size, start, end))
+  Passage passage;
+  if (!findSuspendedPassage(grid_map, step_size, start, end, passage))
     return false;
 
   AStarSearchRegion region;
   region.enabled = true;
-  region.limit_max_z = true;
+  region.limit_local_max_z = true;
   region.limit_corridor = true;
-  region.max_z = std::max(start.z(), end.z());
+  region.max_z = passage.target_z;
   region.corridor_half_width = config_.corridor_half_width;
   region.time_limit = config_.search_timeout;
   region.report_timeout = false;
   region.line_start = start;
   region.line_end = end;
+  region.height_origin = passage.center;
+  region.height_axis = passage.axis;
+  region.height_half_length = passage.half_length + step_size;
 
   if (a_star.AstarSearch(step_size, start, end, &region) != ASTAR_RET::SUCCESS)
+  {
+    ROS_WARN_THROTTLE(1.0,
+                      "[悬空障碍下穿] 已找到下方空间，但指定高度内搜索失败。");
     return false;
+  }
 
   std::vector<Eigen::Vector3d> candidate = a_star.getPath();
   if (!hasRequiredDescent(candidate, start, end, config_.min_descent))
