@@ -1088,6 +1088,16 @@ namespace diff_planner
 
   bool DiffReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
+    const LocalTrajData &local_traj = planner_manager_->traj_.local_traj;
+    const double duration = local_traj.traj.getTotalDuration();
+    if (local_traj.traj.getPieceNum() > 0 && std::isfinite(duration) && duration > 0.0)
+    {
+      const double elapsed = ros::Time::now().toSec() - local_traj.start_time;
+      const double sample_time = std::max(0.0, std::min(elapsed, duration));
+      const double planned_height = local_traj.traj.getPos(sample_time).z();
+      if (std::isfinite(planned_height))
+        stop_pos.z() = planned_height;
+    }
 
     planner_manager_->EmergencyStop(stop_pos);
 
