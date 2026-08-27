@@ -52,7 +52,7 @@ set_message_interval() {
 }
 
 if wait_for_mavros_command; then
-    set_message_interval "HIGHRES_IMU" 105 4000 || echo "[UAV0 MAVROS][错误] HIGHRES_IMU 频率请求失败。"
+    set_message_interval "HIGHRES_IMU" 105 5000 || echo "[UAV0 MAVROS][错误] HIGHRES_IMU 频率请求失败。"
     set_message_interval "ATTITUDE_QUATERNION" 31 5000 || echo "[UAV0 MAVROS][错误] ATTITUDE_QUATERNION 频率请求失败。"
     set_message_interval "LOCAL_POSITION_NED" 32 10000 || echo "[UAV0 MAVROS][错误] LOCAL_POSITION_NED 频率请求失败。"
     set_message_interval "ESC_STATUS" 291 5000 || echo "[UAV0 MAVROS][错误] ESC_STATUS 频率请求失败。"
