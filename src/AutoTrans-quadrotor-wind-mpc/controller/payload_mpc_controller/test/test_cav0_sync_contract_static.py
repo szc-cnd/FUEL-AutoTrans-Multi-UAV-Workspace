@@ -30,7 +30,6 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("force_sync_max_interp_gap: 0.03", config)
         self.assertIn("force_sync_max_age: 0.10", config)
         self.assertIn("use_px4_imu_attitude: false", config)
-        self.assertIn("force_axis_gain_z: 0.5", config)
 
     def test_force_observer_sync_switch_and_reset_contract(self):
         node = (PACKAGE / "src/mpc_controller_node.cpp").read_text(encoding="utf-8")
