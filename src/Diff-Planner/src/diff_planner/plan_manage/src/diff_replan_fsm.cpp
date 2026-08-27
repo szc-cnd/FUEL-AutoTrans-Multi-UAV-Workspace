@@ -24,6 +24,7 @@ namespace diff_planner
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
     nh.param("fsm/max_tracking_error", max_tracking_error_, 0.30);
+    nh.param("fsm/replan_from_current_odom", replan_from_current_odom_, false);
     if (!std::isfinite(max_tracking_error_) || max_tracking_error_ <= 0.0)
     {
       ROS_WARN("fsm/max_tracking_error must be a positive finite value; using 0.30 m.");
@@ -1537,6 +1538,14 @@ namespace diff_planner
     {
       ROS_ERROR_THROTTLE(1.0, "Cannot replan: odometry position or velocity is non-finite.");
       return false;
+    }
+
+    if (replan_from_current_odom_)
+    {
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
+      return callReboundReplan(true, false);
     }
 
     const double tracking_error = prediction_finite

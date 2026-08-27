@@ -87,6 +87,7 @@ namespace diff_planner
     // Maximum allowed 3-D separation between the previous trajectory's
     // predicted state and the measured odometry before replanning from odom.
     double max_tracking_error_;
+    bool replan_from_current_odom_;
     double emergency_time_;
     bool enable_occupied_recovery_;
     double escape_max_distance_;
