@@ -19,6 +19,17 @@ enum ASTAR_RET
 	SEARCH_ERR
 };
 
+struct AStarSearchRegion
+{
+	bool enabled{false};
+	double max_z{0.0};
+	double corridor_half_width{0.0};
+	double time_limit{0.2};
+	bool report_timeout{true};
+	Eigen::Vector3d line_start{Eigen::Vector3d::Zero()};
+	Eigen::Vector3d line_end{Eigen::Vector3d::Zero()};
+};
+
 struct GridNode
 {
 	enum enum_state
@@ -70,6 +81,8 @@ private:
 	inline int checkOccupancy(const Eigen::Vector3d &pos) { return grid_map_->getInflateOccupancy(pos); }
 
 	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
+	bool insideSearchRegion(const Eigen::Vector3d &point,
+							const AStarSearchRegion *region) const;
 
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;
@@ -91,7 +104,9 @@ public:
 
 	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size);
 
-	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
+	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt,
+						  Eigen::Vector3d end_pt,
+						  const AStarSearchRegion *region = nullptr);
 
 	std::vector<Eigen::Vector3d> getPath();
 };

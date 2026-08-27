@@ -1,0 +1,54 @@
+#include <gtest/gtest.h>
+
+#include <optimizer/suspended_obstacle_underpass.h>
+
+#include <limits>
+
+namespace diff_planner
+{
+namespace
+{
+
+TEST(SuspendedObstacleUnderpass, AcceptsPathThatActuallyDescends)
+{
+  const Eigen::Vector3d start(0.0, 0.0, 0.6);
+  const Eigen::Vector3d end(1.0, 0.0, 0.6);
+  const std::vector<Eigen::Vector3d> path = {
+      start, Eigen::Vector3d(0.5, 0.0, 0.45), end};
+
+  EXPECT_TRUE(SuspendedObstacleUnderpass::hasRequiredDescent(
+      path, start, end, 0.10));
+}
+
+TEST(SuspendedObstacleUnderpass, RejectsFlatSidePath)
+{
+  const Eigen::Vector3d start(0.0, 0.0, 0.6);
+  const Eigen::Vector3d end(1.0, 0.0, 0.6);
+  const std::vector<Eigen::Vector3d> path = {
+      start, Eigen::Vector3d(0.5, 0.1, 0.6), end};
+
+  EXPECT_FALSE(SuspendedObstacleUnderpass::hasRequiredDescent(
+      path, start, end, 0.10));
+}
+
+TEST(SuspendedObstacleUnderpass, RejectsNonFinitePath)
+{
+  const Eigen::Vector3d start(0.0, 0.0, 0.6);
+  const Eigen::Vector3d end(1.0, 0.0, 0.6);
+  const std::vector<Eigen::Vector3d> path = {
+      start,
+      Eigen::Vector3d(0.5, 0.0, std::numeric_limits<double>::quiet_NaN()),
+      end};
+
+  EXPECT_FALSE(SuspendedObstacleUnderpass::hasRequiredDescent(
+      path, start, end, 0.10));
+}
+
+} // namespace
+} // namespace diff_planner
+
+int main(int argc, char **argv)
+{
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

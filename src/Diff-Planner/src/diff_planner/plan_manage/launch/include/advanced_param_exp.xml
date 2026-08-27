@@ -72,6 +72,11 @@
     <arg name="fading_time" default="-1.0"/>
     <!-- 2026-07-07: 暴露轨迹优化的硬障碍间隙，便于按场景提升贴墙余量。 -->
     <arg name="obstacle_clearance" default="0.2"/>
+    <!-- 悬空障碍下穿默认关闭，由需要该行为的实飞 launch 单独开启。 -->
+    <arg name="enable_suspended_obstacle_underpass" default="false"/>
+    <arg name="underpass_corridor_half_width" default="0.12"/>
+    <arg name="underpass_min_descent" default="0.10"/>
+    <arg name="underpass_search_timeout" default="0.05"/>
     <!-- 单次局部规划的墙钟上限；防止困难障碍场景阻塞单线程ROS回调和心跳。 -->
     <arg name="planning_timeout" default="0.8"/>
     <arg name="point_num"/>
@@ -284,6 +289,10 @@
         <param name="optimization/weight_time" value="10.0" type="double"/>
         <!-- 2026-07-07: 允许实验 launch 覆盖优化器的障碍硬约束间隙，避免窄通道里按过小安全距离贴墙飞。 -->
         <param name="optimization/obstacle_clearance" value="$(arg obstacle_clearance)" type="double"/>
+        <param name="optimization/enable_suspended_obstacle_underpass" value="$(arg enable_suspended_obstacle_underpass)" type="bool"/>
+        <param name="optimization/underpass_corridor_half_width" value="$(arg underpass_corridor_half_width)" type="double"/>
+        <param name="optimization/underpass_min_descent" value="$(arg underpass_min_descent)" type="double"/>
+        <param name="optimization/underpass_search_timeout" value="$(arg underpass_search_timeout)" type="double"/>
         <param name="optimization/obstacle_clearance_soft" value="0.46" type="double"/>
         <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->
         <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>

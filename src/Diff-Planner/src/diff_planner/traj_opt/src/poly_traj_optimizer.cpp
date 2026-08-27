@@ -452,10 +452,11 @@ namespace diff_planner
       if (checkPlanningTimeout("fine collision A-star")) return CHK_RET::ERR;
       // Search from back to head
       Eigen::Vector3d in(init_points.col(segment_ids[i].second)), out(init_points.col(segment_ids[i].first));
-      ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+      std::vector<Eigen::Vector3d> search_path;
+      ASTAR_RET ret = searchObstaclePath(in, out, search_path);
       if (ret == ASTAR_RET::SUCCESS)
       {
-        a_star_pathes.push_back(a_star_->getPath());
+        a_star_pathes.push_back(std::move(search_path));
       }
       else if (ret == ASTAR_RET::SEARCH_ERR && i + 1 < segment_ids.size()) // connect the next segment
       {
@@ -770,6 +771,30 @@ namespace diff_planner
     return constraint_added;
   }
 
+  ASTAR_RET PolyTrajOptimizer::searchObstaclePath(
+      const Eigen::Vector3d &start, const Eigen::Vector3d &end,
+      std::vector<Eigen::Vector3d> &path)
+  {
+    path.clear();
+    const double resolution = grid_map_->getResolution();
+    if (suspended_underpass_.trySearch(*a_star_, resolution, start, end, path))
+    {
+      const auto minimum = std::min_element(
+          path.begin(), path.end(),
+          [](const Eigen::Vector3d &lhs, const Eigen::Vector3d &rhs) {
+            return lhs.z() < rhs.z();
+          });
+      ROS_INFO("[悬空障碍下穿] 找到下方通路，最低轨迹高度 %.3fm。",
+               minimum->z());
+      return ASTAR_RET::SUCCESS;
+    }
+
+    const ASTAR_RET result = a_star_->AstarSearch(resolution, start, end);
+    if (result == ASTAR_RET::SUCCESS)
+      path = a_star_->getPath();
+    return result;
+  }
+
   bool PolyTrajOptimizer::roughlyCheckConstraintPoints(void)
   {
 
@@ -849,10 +874,11 @@ namespace diff_planner
       {
         /*** a star search ***/
         Eigen::Vector3d in(cps_.points.col(segment_ids[i].second)), out(cps_.points.col(segment_ids[i].first));
-        ASTAR_RET ret = a_star_->AstarSearch(/*(in-out).norm()/10+0.05*/ grid_map_->getResolution(), in, out);
+        std::vector<Eigen::Vector3d> search_path;
+        ASTAR_RET ret = searchObstaclePath(in, out, search_path);
         if (ret == ASTAR_RET::SUCCESS)
         {
-          a_star_pathes.push_back(a_star_->getPath());
+          a_star_pathes.push_back(std::move(search_path));
         }
         else if (ret == ASTAR_RET::SEARCH_ERR && i + 1 < segment_ids.size()) // connect the next segment
         {
@@ -1854,6 +1880,16 @@ namespace diff_planner
     nh.param("optimization/weight_time", wei_time_, -1.0);
     nh.param("optimization/obstacle_clearance", obs_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, -1.0);
+    SuspendedObstacleUnderpass::Config underpass_config;
+    nh.param("optimization/enable_suspended_obstacle_underpass",
+             underpass_config.enabled, false);
+    nh.param("optimization/underpass_corridor_half_width",
+             underpass_config.corridor_half_width, 0.12);
+    nh.param("optimization/underpass_min_descent",
+             underpass_config.min_descent, 0.10);
+    nh.param("optimization/underpass_search_timeout",
+             underpass_config.search_timeout, 0.05);
+    suspended_underpass_.setConfig(underpass_config);
     nh.param("optimization/swarm_clearance", swarm_clearance_, -1.0);
     nh.param("optimization/max_vel", max_vel_, -1.0);
     nh.param("optimization/vel_tolerance", vel_tolerance_, -1.0);

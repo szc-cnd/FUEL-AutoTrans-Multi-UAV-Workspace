@@ -2,6 +2,7 @@
 #define _POLY_TRAJ_OPTIMIZER_H_
 
 #include <Eigen/Eigen>
+#include <optimizer/suspended_obstacle_underpass.h>
 #include <path_searching/dyn_a_star.h>
 #include <plan_env/grid_map.h>
 #include <ros/ros.h>
@@ -67,6 +68,7 @@ namespace diff_planner
   private:
     GridMap::Ptr grid_map_;
     AStar::Ptr a_star_;
+    SuspendedObstacleUnderpass suspended_underpass_;
     poly_traj::MinJerkOpt jerkOpt_;
     SwarmTrajData *swarm_trajs_{NULL}; // Can not use shared_ptr and no need to free
     ConstraintPoints cps_;
@@ -195,6 +197,10 @@ namespace diff_planner
                            double &costp);
 
     bool addNearObstacleConstraints(int id_end);
+
+    ASTAR_RET searchObstaclePath(const Eigen::Vector3d &start,
+                                 const Eigen::Vector3d &end,
+                                 std::vector<Eigen::Vector3d> &path);
 
     bool swarmGradCostP(const int i_dp,
                         const double t,

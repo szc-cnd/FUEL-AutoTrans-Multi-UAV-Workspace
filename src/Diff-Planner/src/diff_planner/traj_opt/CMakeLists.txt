@@ -36,8 +36,19 @@ include_directories(
 )
 
 add_library( traj_opt 
-    src/poly_traj_optimizer.cpp 
+    src/poly_traj_optimizer.cpp
+    src/suspended_obstacle_underpass.cpp
     )
 target_link_libraries( traj_opt
     ${catkin_LIBRARIES} 
     )  
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_suspended_obstacle_underpass
+    test/test_suspended_obstacle_underpass.cpp
+    src/suspended_obstacle_underpass.cpp
+  )
+  if(TARGET test_suspended_obstacle_underpass)
+    target_link_libraries(test_suspended_obstacle_underpass ${catkin_LIBRARIES})
+  endif()
+endif()

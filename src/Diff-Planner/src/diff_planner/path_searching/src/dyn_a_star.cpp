@@ -140,7 +140,27 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     return true;
 }
 
-ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d end_pt)
+bool AStar::insideSearchRegion(const Vector3d &point,
+                               const AStarSearchRegion *region) const
+{
+    if (region == nullptr || !region->enabled)
+        return true;
+    if (point.z() > region->max_z + 1.0e-6)
+        return false;
+
+    const Vector2d line = (region->line_end - region->line_start).head<2>();
+    const double line_length = line.norm();
+    if (line_length <= 1.0e-6)
+        return false;
+    const Vector2d relative = (point - region->line_start).head<2>();
+    const double lateral_distance =
+        std::abs(line.x() * relative.y() - line.y() * relative.x()) / line_length;
+    return lateral_distance <= region->corridor_half_width + 1.0e-6;
+}
+
+ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt,
+                             Vector3d end_pt,
+                             const AStarSearchRegion *region)
 {
     ros::Time time_1 = ros::Time::now();
     ++rounds_;
@@ -230,7 +250,9 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
                     neighborPtr->rounds = rounds_;
 
-                    if (checkOccupancy(Index2Coord(neighborPtr->index)))
+                    const Vector3d neighbor_coord = Index2Coord(neighborPtr->index);
+                    if (!insideSearchRegion(neighbor_coord, region) ||
+                        checkOccupancy(neighbor_coord))
                     {
                         continue;
                     }
@@ -255,9 +277,13 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                     }
                 }
         ros::Time time_2 = ros::Time::now();
-        if ((time_2 - time_1).toSec() > 0.2)
+        const double time_limit =
+            region != nullptr && region->enabled ? region->time_limit : 0.2;
+        if ((time_2 - time_1).toSec() > time_limit)
         {
-            ROS_WARN("Failed in A star path searching !!! 0.2 seconds time limit exceeded.");
+            if (region == nullptr || !region->enabled || region->report_timeout)
+                ROS_WARN("Failed in A star path searching !!! %.3f seconds time limit exceeded.",
+                         time_limit);
             return ASTAR_RET::SEARCH_ERR;
         }
     }
