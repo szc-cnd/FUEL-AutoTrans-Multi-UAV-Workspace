@@ -1790,8 +1790,6 @@ namespace diff_planner
     nh.param("optimization/weight_time", wei_time_, -1.0);
     nh.param("optimization/obstacle_clearance", obs_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, -1.0);
-    nh.param("optimization/astar_clearance_radius", astar_clearance_radius_, 0.0);
-    nh.param("optimization/astar_clearance_weight", astar_clearance_weight_, 0.0);
     nh.param("optimization/swarm_clearance", swarm_clearance_, -1.0);
     nh.param("optimization/max_vel", max_vel_, -1.0);
     nh.param("optimization/vel_tolerance", vel_tolerance_, -1.0);
@@ -1839,7 +1837,6 @@ namespace diff_planner
 
     a_star_.reset(new AStar);
     a_star_->initGridMap(grid_map_, Eigen::Vector3i(100, 100, 100));
-    a_star_->setClearancePreference(astar_clearance_radius_, astar_clearance_weight_);
   }
 
   void PolyTrajOptimizer::setControlPoints(const Eigen::MatrixXd &points)

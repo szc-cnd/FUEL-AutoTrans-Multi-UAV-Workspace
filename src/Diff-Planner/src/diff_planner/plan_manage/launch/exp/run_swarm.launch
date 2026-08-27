@@ -10,19 +10,16 @@
     <arg name="flight_type" default="2"/>
     <arg name="point_num" default="4"/>
     <arg name="max_tracking_error" default="0.20"/>
-    <arg name="astar_clearance_radius" default="0.30"/>
-    <arg name="astar_clearance_weight" default="2.0"/>
+    <arg name="enable_periodic_replan" default="false"/>
     <arg name="enable_occupied_recovery" default="false"/>
     <arg name="enable_swing_obstacle_guard" default="false"/>
     <arg name="enable_swing_harmonic_prediction" default="true"/>
     <!-- 动态障碍调试包：默认与本次规划器启动同步录制，退出 roslaunch 时自动封包。 -->
     <arg name="record_dynamic_debug" default="false"/>
     <arg name="dynamic_bag_prefix" default="/home/oem/bags/corridor_debug"/>
-    <!-- A*净空偏好只增加近障路径代价，不改变地图膨胀；任一参数设为0即可关闭。 -->
-    <param name="/drone_$(arg drone_id)_diff_planner_node/optimization/astar_clearance_radius"
-           value="$(arg astar_clearance_radius)" type="double"/>
-    <param name="/drone_$(arg drone_id)_diff_planner_node/optimization/astar_clearance_weight"
-           value="$(arg astar_clearance_weight)" type="double"/>
+    <!-- 保留碰撞、新航点等必要重规划；关闭固定时间到期触发，避免绕障轨迹被过早拉直。 -->
+    <param name="/drone_$(arg drone_id)_diff_planner_node/fsm/enable_periodic_replan"
+           value="$(arg enable_periodic_replan)" type="bool"/>
     <include file="$(find diff_planner)/launch/include/advanced_param_exp.xml">
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>

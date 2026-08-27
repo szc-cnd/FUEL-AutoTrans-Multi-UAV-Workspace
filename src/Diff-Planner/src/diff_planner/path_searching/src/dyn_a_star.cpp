@@ -33,34 +33,6 @@ void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size)
     grid_map_ = occ_map;
 }
 
-void AStar::setClearancePreference(double radius, double weight)
-{
-    clearance_radius_ = std::max(0.0, radius);
-    clearance_weight_ = std::max(0.0, weight);
-}
-
-double AStar::getClearancePenalty(const Eigen::Vector3d &pos) const
-{
-    if (clearance_radius_ <= 0.0 || clearance_weight_ <= 0.0)
-        return 0.0;
-
-    const int max_step = static_cast<int>(std::ceil(clearance_radius_ / step_size_));
-    double min_distance = clearance_radius_;
-    for (int dx = -max_step; dx <= max_step; ++dx)
-        for (int dy = -max_step; dy <= max_step; ++dy)
-            for (int dz = -max_step; dz <= max_step; ++dz)
-            {
-                const double distance = step_size_ * std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (distance <= 0.0 || distance > min_distance)
-                    continue;
-                if (checkOccupancy(pos + step_size_ * Eigen::Vector3d(dx, dy, dz)))
-                    min_distance = distance;
-            }
-
-    const double proximity = (clearance_radius_ - min_distance) / clearance_radius_;
-    return clearance_weight_ * proximity * proximity;
-}
-
 double AStar::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
 {
     double dx = abs(node1->index(0) - node2->index(0));
@@ -264,8 +236,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                     }
 
                     double static_cost = sqrt(dx * dx + dy * dy + dz * dz);
-                    tentative_gScore = current->gScore +
-                                       static_cost * (1.0 + getClearancePenalty(Index2Coord(neighborPtr->index)));
+                    tentative_gScore = current->gScore + static_cost;
 
                     if (!flag_explored)
                     {

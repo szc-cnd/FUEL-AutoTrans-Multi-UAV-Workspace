@@ -67,12 +67,11 @@ private:
 
 	//bool (*checkOccupancyPtr)( const Eigen::Vector3d &pos );
 
-	inline int checkOccupancy(const Eigen::Vector3d &pos) const { return grid_map_->getInflateOccupancy(pos); }
+	inline int checkOccupancy(const Eigen::Vector3d &pos) { return grid_map_->getInflateOccupancy(pos); }
 
 	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
 
 	double step_size_, inv_step_size_;
-	double clearance_radius_{0.0}, clearance_weight_{0.0};
 	Eigen::Vector3d center_;
 	Eigen::Vector3i CENTER_IDX_, POOL_SIZE_;
 	const double tie_breaker_ = 1.0 + 1.0 / 10000;
@@ -91,14 +90,10 @@ public:
 	~AStar();
 
 	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size);
-	void setClearancePreference(double radius, double weight);
 
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 
 	std::vector<Eigen::Vector3d> getPath();
-
-private:
-	double getClearancePenalty(const Eigen::Vector3d &pos) const;
 };
 
 inline double AStar::getHeu(GridNodePtr node1, GridNodePtr node2)

@@ -22,6 +22,7 @@ namespace diff_planner
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
+    nh.param("fsm/enable_periodic_replan", enable_periodic_replan_, true);
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
     nh.param("fsm/max_tracking_error", max_tracking_error_, 0.30);
     if (!std::isfinite(max_tracking_error_) || max_tracking_error_ <= 0.0)
@@ -448,7 +449,8 @@ namespace diff_planner
         /* The navigation task completed */
         changeFSMExecState(WAIT_TARGET, "FSM");
       }
-      else if (t_cur > replan_thresh_ || (!touch_the_goal && close_to_current_traj_end)) // case 3: time to perform next replan
+      else if ((enable_periodic_replan_ && t_cur > replan_thresh_) ||
+               (!touch_the_goal && close_to_current_traj_end)) // case 3: time to perform next replan
       {
         changeFSMExecState(REPLAN_TRAJ, "FSM");
       }
