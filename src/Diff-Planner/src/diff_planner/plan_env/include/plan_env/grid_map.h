@@ -72,6 +72,7 @@ struct MappingParameters
   double lidar_prob_hit_log_, lidar_prob_miss_log_, lidar_clamp_min_log_,
       lidar_clamp_max_log_, lidar_min_occupancy_log_; // logit of occupancy probability (cloud)
   bool cloud_enable_raycast_;
+  bool lidar_hit_dominates_miss_;
   double min_ray_length_;                                                                   // range of doing raycasting
   double fading_time_;
 

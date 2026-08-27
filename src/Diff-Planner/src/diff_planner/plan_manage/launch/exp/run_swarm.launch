@@ -90,6 +90,7 @@
         <arg name="inflation_size" value="0.099"/>
         <!-- 动态球旧位置0.8s内退出占据层；持续观测到的墙体仍会保持占据。 -->
         <arg name="fading_time" value="0.8"/>
+        <arg name="lidar_hit_dominates_miss" value="false"/>
 
         <!-- UAV1 FAST-LIO 的里程计和点云共用局部坐标系，不能重复叠加出生点偏移。 -->
         <arg name="init_x" value="0.0"/>

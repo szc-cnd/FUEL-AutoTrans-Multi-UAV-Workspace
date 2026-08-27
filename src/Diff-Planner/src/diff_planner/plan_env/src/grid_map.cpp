@@ -47,6 +47,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/lidar_p_max", mp_.lidar_p_max_, 0.98);
   node_.param("grid_map/lidar_p_occ", mp_.lidar_p_occ_, 0.85);
   node_.param("grid_map/cloud_enable_raycast", mp_.cloud_enable_raycast_, true);
+  node_.param("grid_map/lidar_hit_dominates_miss", mp_.lidar_hit_dominates_miss_, true);
   node_.param("grid_map/fading_time", mp_.fading_time_, 1000.0);
   node_.param("grid_map/min_ray_length", mp_.min_ray_length_, 0.1);
 
@@ -671,10 +672,12 @@ void GridMap::raycastFromCloud()
   for (int i = 0; i < md_.cache_voxel_cnt_; ++i)
   {
     int buf_id = globalIdx2BufIdx(md_.cache_voxel_[i]);
-    double log_update =
-        (md_.count_hit_[buf_id] > 0)
-            ? mp_.lidar_prob_hit_log_
-            : mp_.lidar_prob_miss_log_;
+    const int hit_count = md_.count_hit_[buf_id];
+    const int miss_count = md_.count_hit_and_miss_[buf_id] - hit_count;
+    const bool occupied_update = mp_.lidar_hit_dominates_miss_
+                                     ? hit_count > 0
+                                     : hit_count >= miss_count;
+    double log_update = occupied_update ? mp_.lidar_prob_hit_log_ : mp_.lidar_prob_miss_log_;
 
     md_.count_hit_[buf_id] = md_.count_hit_and_miss_[buf_id] = 0;
 
