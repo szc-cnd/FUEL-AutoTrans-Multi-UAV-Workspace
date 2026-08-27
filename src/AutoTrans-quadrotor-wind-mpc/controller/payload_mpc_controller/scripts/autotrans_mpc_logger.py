@@ -42,6 +42,8 @@ FORCE_CONFIG_PARAMS = (
      "/mpc_controller_node/force_estimator/force_sync_max_interp_gap"),
     ("force_config_sync_max_age",
      "/mpc_controller_node/force_estimator/force_sync_max_age"),
+    ("force_config_sync_reset_backjump",
+     "/mpc_controller_node/force_estimator/force_sync_reset_backjump"),
     ("force_config_max_applied_force",
      "/mpc_controller_node/force_estimator/max_applied_force"),
     ("force_config_max_applied_force_rate_xy",

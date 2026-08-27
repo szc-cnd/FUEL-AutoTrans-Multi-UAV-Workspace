@@ -66,6 +66,8 @@ namespace PayloadMPC
 			double force_sync_history_duration;
 			double force_sync_max_interp_gap;
 			double force_sync_max_age;
+			// 小于该值的时间戳回跳视为乱序并丢弃；达到该值才重置全部同步历史，单位 s。
+			double force_sync_reset_backjump;
 			// PX4 确认无人机已在空中后，允许外力进入 NMPC 前的等待时间，单位 s。
 			double compensation_airborne_delay;
 			// 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
@@ -553,6 +555,7 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/force_sync_history_duration", force_estimator_param_.force_sync_history_duration);
 			read_essential_param(nh, "force_estimator/force_sync_max_interp_gap", force_estimator_param_.force_sync_max_interp_gap);
 			read_essential_param(nh, "force_estimator/force_sync_max_age", force_estimator_param_.force_sync_max_age);
+			read_essential_param(nh, "force_estimator/force_sync_reset_backjump", force_estimator_param_.force_sync_reset_backjump);
 			read_essential_param(nh, "force_estimator/compensation_airborne_delay", force_estimator_param_.compensation_airborne_delay);
 			read_essential_param(nh, "force_estimator/min_valid_rpm", force_estimator_param_.min_valid_rpm);
 			read_essential_param(nh, "force_estimator/use_px4_imu_attitude", force_estimator_param_.use_px4_imu_attitude);
@@ -588,9 +591,11 @@ namespace PayloadMPC
 			if (!std::isfinite(force_estimator_param_.force_sync_history_duration) ||
 				!std::isfinite(force_estimator_param_.force_sync_max_interp_gap) ||
 				!std::isfinite(force_estimator_param_.force_sync_max_age) ||
+				!std::isfinite(force_estimator_param_.force_sync_reset_backjump) ||
 				force_estimator_param_.force_sync_history_duration <= 0.0 ||
 				force_estimator_param_.force_sync_max_interp_gap <= 0.0 ||
 				force_estimator_param_.force_sync_max_age <= 0.0 ||
+				force_estimator_param_.force_sync_reset_backjump <= 0.0 ||
 				force_estimator_param_.force_sync_history_duration <
 					force_estimator_param_.force_sync_max_interp_gap)
 			{

@@ -120,6 +120,7 @@ force_estimator: # *
     force_sync_history_duration: 0.5  # 每路输入保留的时间戳历史，单位 s
     force_sync_max_interp_gap: 0.03   # 插值两端允许的最大时间间隔，单位 s
     force_sync_max_age: 0.10          # 同步目标相对当前 ROS 时间的最大年龄，单位 s
+    force_sync_reset_backjump: 0.10   # 小回跳视为乱序并丢弃；达到此值才按源时钟重启处理，单位 s
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。

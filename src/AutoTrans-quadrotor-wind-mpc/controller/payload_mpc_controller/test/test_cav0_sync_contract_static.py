@@ -29,6 +29,7 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("force_sync_history_duration: 0.5", config)
         self.assertIn("force_sync_max_interp_gap: 0.03", config)
         self.assertIn("force_sync_max_age: 0.10", config)
+        self.assertIn("force_sync_reset_backjump: 0.10", config)
         self.assertIn("use_px4_imu_attitude: false", config)
 
     def test_force_observer_sync_switch_and_reset_contract(self):

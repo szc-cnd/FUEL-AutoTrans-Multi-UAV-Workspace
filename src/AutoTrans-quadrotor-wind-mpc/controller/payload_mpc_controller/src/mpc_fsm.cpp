@@ -138,18 +138,20 @@ namespace PayloadMPC
 		force_input_synchronizer_.configure(
 			params_.force_estimator_param_.force_sync_history_duration,
 			params_.force_estimator_param_.force_sync_max_interp_gap,
-			params_.force_estimator_param_.force_sync_max_age);
+			params_.force_estimator_param_.force_sync_max_age,
+			params_.force_estimator_param_.force_sync_reset_backjump);
 		ROS_INFO("[FORCE] 外力估计姿态来源：%s。",
 			params_.force_estimator_param_.use_px4_imu_attitude
 				? "MAVROS IMU 姿态"
 				: (params_.force_estimator_param_.force_attitude_from_odom
 					   ? "主 FAST-LIO odom 姿态"
 					   : "独立 odom 姿态"));
-		ROS_INFO("[FORCE_SYNC] 时间戳同步%s：历史=%.3f s，最大插值间隔=%.3f s，最大年龄=%.3f s。",
+		ROS_INFO("[FORCE_SYNC] 时间戳同步%s：历史=%.3f s，最大插值间隔=%.3f s，最大年龄=%.3f s，重置回跳阈值=%.3f s。",
 			params_.force_estimator_param_.enable_input_sync ? "已启用" : "已关闭",
 			params_.force_estimator_param_.force_sync_history_duration,
 			params_.force_estimator_param_.force_sync_max_interp_gap,
-			params_.force_estimator_param_.force_sync_max_age);
+			params_.force_estimator_param_.force_sync_max_age,
+			params_.force_estimator_param_.force_sync_reset_backjump);
 		if (params_.force_estimator_param_.enable_force_estimation)
 		{
 			if (params_.force_estimator_param_.enable_disturbance_compensation)
@@ -1258,6 +1260,10 @@ namespace PayloadMPC
 		else if (result == ForceObserverInputResult::INVALID)
 		{
 			ROS_WARN_THROTTLE(1.0, "[FORCE_SYNC] 拒绝 %s 的无效值或时间戳。", source);
+		}
+		else if (result == ForceObserverInputResult::OUT_OF_ORDER)
+		{
+			ROS_WARN_THROTTLE(1.0, "[FORCE_SYNC] %s 出现小幅时间戳乱序，已丢弃该样本并保留同步历史。", source);
 		}
 	}
 

@@ -41,6 +41,7 @@ enum class ForceObserverInputResult
 {
     ACCEPTED,
     DUPLICATE,
+    OUT_OF_ORDER,
     INVALID,
     SOURCE_RESET
 };
@@ -63,11 +64,15 @@ class ForceObserverInputSynchronizer
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    void configure(double history_duration, double max_interpolation_gap, double max_age)
+    void configure(double history_duration,
+                   double max_interpolation_gap,
+                   double max_age,
+                   double reset_backjump)
     {
         history_duration_ = history_duration;
         max_interpolation_gap_ = max_interpolation_gap;
         max_age_ = max_age;
+        reset_backjump_ = reset_backjump;
         reset();
     }
 
@@ -161,6 +166,10 @@ private:
         {
             if (stamp + kStampTolerance < samples.back().stamp)
             {
+                const double backjump = samples.back().stamp - stamp;
+                if (backjump + kStampTolerance < reset_backjump_)
+                    return ForceObserverInputResult::OUT_OF_ORDER;
+
                 reset();
                 samples.push_back({stamp, value});
                 return ForceObserverInputResult::SOURCE_RESET;
@@ -262,6 +271,7 @@ private:
     double history_duration_{0.5};
     double max_interpolation_gap_{0.03};
     double max_age_{0.1};
+    double reset_backjump_{0.1};
     double last_output_stamp_{0.0};
     SampleBuffer<Eigen::Vector3d> acceleration_samples_;
     SampleBuffer<Eigen::Quaterniond> attitude_samples_;

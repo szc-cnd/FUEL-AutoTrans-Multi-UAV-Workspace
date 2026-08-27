@@ -16,7 +16,7 @@ using PayloadMPC::ForceObserverSyncResult;
 ForceObserverInputSynchronizer makeSynchronizer()
 {
     ForceObserverInputSynchronizer synchronizer;
-    synchronizer.configure(0.5, 0.03, 0.1);
+    synchronizer.configure(0.5, 0.03, 0.1, 0.1);
     return synchronizer;
 }
 
@@ -99,7 +99,7 @@ TEST(ForceObserverInputSynchronizer, RejectsMissingBracket)
     EXPECT_EQ(synchronizer.synchronize(5.02, output), ForceObserverSyncResult::OUT_OF_RANGE);
 }
 
-TEST(ForceObserverInputSynchronizer, InvalidAndReversedInputResetHistory)
+TEST(ForceObserverInputSynchronizer, InvalidAndSmallBackjumpPreservesHistory)
 {
     auto synchronizer = makeSynchronizer();
     Eigen::Vector3d invalid = Eigen::Vector3d::Zero();
@@ -113,6 +113,19 @@ TEST(ForceObserverInputSynchronizer, InvalidAndReversedInputResetHistory)
     synchronizer.addAttitude(6.00, Eigen::Quaterniond::Identity());
     synchronizer.addRpm(6.00, Eigen::Vector4d::Constant(1000.0));
     EXPECT_EQ(synchronizer.addAcceleration(5.99, Eigen::Vector3d::Ones()),
+              ForceObserverInputResult::OUT_OF_ORDER);
+    EXPECT_EQ(synchronizer.accelerationSampleCount(), 1u);
+    EXPECT_EQ(synchronizer.attitudeSampleCount(), 1u);
+    EXPECT_EQ(synchronizer.rpmSampleCount(), 1u);
+}
+
+TEST(ForceObserverInputSynchronizer, LargeBackjumpResetsAllHistory)
+{
+    auto synchronizer = makeSynchronizer();
+    synchronizer.addAcceleration(6.00, Eigen::Vector3d::Zero());
+    synchronizer.addAttitude(6.00, Eigen::Quaterniond::Identity());
+    synchronizer.addRpm(6.00, Eigen::Vector4d::Constant(1000.0));
+    EXPECT_EQ(synchronizer.addAcceleration(5.90, Eigen::Vector3d::Ones()),
               ForceObserverInputResult::SOURCE_RESET);
     EXPECT_EQ(synchronizer.accelerationSampleCount(), 1u);
     EXPECT_EQ(synchronizer.attitudeSampleCount(), 0u);
