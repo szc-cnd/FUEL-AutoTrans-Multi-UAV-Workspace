@@ -5,11 +5,15 @@
   <arg name="ufomap_resolution" default="0.2" />
   <arg name="ufomap_inflate_hits_dist" default="0.4" />
   <arg name="corridor_min_lateral_span" default="0.15" />
+  <arg name="corridor_min_confirm_hits" default="3" />
   <arg name="corridor_min_cluster_points" default="4" />
   <arg name="corridor_max_cluster_extent" default="0.60" />
   <arg name="corridor_oversized_split_enabled" default="false" />
   <arg name="corridor_split_min_cluster_points" default="4" />
   <arg name="corridor_split_max_subclusters" default="8" />
+  <arg name="corridor_max_candidates" default="1" />
+  <arg name="corridor_reject_candidate_count" default="3" />
+  <arg name="corridor_wall_clearance" default="0.10" />
   <arg name="dynamic_cluster_detector_min_points" default="4" />
   
   <group ns="$(arg vehicle_ns)">
@@ -20,11 +24,15 @@
       <param name="ufomap_resolution" value="$(arg ufomap_resolution)" type="double" />
       <param name="ufomap_inflate_hits_dist" value="$(arg ufomap_inflate_hits_dist)" type="double" />
       <param name="corridor_min_lateral_span" value="$(arg corridor_min_lateral_span)" type="double" />
+      <param name="corridor_min_confirm_hits" value="$(arg corridor_min_confirm_hits)" type="int" />
       <param name="corridor_min_cluster_points" value="$(arg corridor_min_cluster_points)" type="int" />
       <param name="corridor_max_cluster_extent" value="$(arg corridor_max_cluster_extent)" type="double" />
       <param name="corridor_oversized_split_enabled" value="$(arg corridor_oversized_split_enabled)" type="bool" />
       <param name="corridor_split_min_cluster_points" value="$(arg corridor_split_min_cluster_points)" type="int" />
       <param name="corridor_split_max_subclusters" value="$(arg corridor_split_max_subclusters)" type="int" />
+      <param name="corridor_max_candidates" value="$(arg corridor_max_candidates)" type="int" />
+      <param name="corridor_reject_candidate_count" value="$(arg corridor_reject_candidate_count)" type="int" />
+      <param name="corridor_wall_clearance" value="$(arg corridor_wall_clearance)" type="double" />
       <param name="dynamic_cluster_detector_min_points" value="$(arg dynamic_cluster_detector_min_points)" type="int" />
     </node>
 

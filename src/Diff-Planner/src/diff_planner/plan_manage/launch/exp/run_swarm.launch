@@ -152,10 +152,14 @@
         <arg name="ufomap_resolution" value="0.05"/>
         <arg name="ufomap_inflate_hits_dist" value="0.1"/>
         <arg name="corridor_min_lateral_span" value="0.0"/>
+        <arg name="corridor_min_confirm_hits" value="2"/>
         <arg name="corridor_min_cluster_points" value="3"/>
         <arg name="corridor_max_cluster_extent" value="2.0"/>
         <arg name="corridor_oversized_split_enabled" value="true"/>
         <arg name="corridor_split_min_cluster_points" value="3"/>
+        <arg name="corridor_max_candidates" value="10"/>
+        <arg name="corridor_reject_candidate_count" value="10"/>
+        <arg name="corridor_wall_clearance" value="0.10"/>
         <arg name="dynamic_cluster_detector_min_points" value="3"/>
     </include>
 
