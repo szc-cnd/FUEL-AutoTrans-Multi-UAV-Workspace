@@ -152,7 +152,7 @@
         <arg name="ufomap_resolution" value="0.05"/>
         <arg name="ufomap_inflate_hits_dist" value="0.1"/>
         <arg name="corridor_min_lateral_span" value="0.0"/>
-        <arg name="corridor_min_confirm_hits" value="2"/>
+        <arg name="corridor_min_confirm_hits" value="3"/>
         <arg name="corridor_min_cluster_points" value="3"/>
         <arg name="corridor_max_cluster_extent" value="2.0"/>
         <arg name="corridor_oversized_split_enabled" value="true"/>
