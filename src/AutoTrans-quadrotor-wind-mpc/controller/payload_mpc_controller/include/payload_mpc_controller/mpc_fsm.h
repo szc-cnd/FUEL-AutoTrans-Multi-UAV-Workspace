@@ -18,6 +18,7 @@
 #include "mpc_input.h"
 #include "mpc_controller.h"
 #include "force_attitude_aligner.h"
+#include "disturbance_slew_limiter.h"
 #include "odom_spike_guard.h"
 #include "recovery_control.h"
 #include "polynomial_trajectory.h"
@@ -113,6 +114,7 @@ namespace PayloadMPC
 		MpcParams &params_;
 		MpcController &controller_;
 		MultiOptForceEstimator force_estimator_;
+		DisturbanceSlewLimiter disturbance_slew_limiter_;
 		ForceAttitudeAligner force_attitude_aligner_;
 		OdomSpikeGuard odom_spike_guard_;
 		ros::Time land_start_time_;
@@ -175,6 +177,7 @@ namespace PayloadMPC
 		// 世界系外力估计与实际传入 NMPC 的补偿力，单位 N；两者分离以支持只估计模式。
 		Eigen::Vector3d fq_estimated_{Eigen::Vector3d::Zero()};
 		Eigen::Vector3d fq_applied_{Eigen::Vector3d::Zero()};
+		ros::Time last_disturbance_slew_update_time_{0};
 		Eigen::Vector3d fl_{Eigen::Vector3d::Zero()};
 		bool force_observer_input_valid_{false};
 		bool fq_estimate_valid_{false};

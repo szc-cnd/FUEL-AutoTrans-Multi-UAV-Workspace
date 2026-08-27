@@ -142,7 +142,12 @@ namespace PayloadMPC
 		if (params_.force_estimator_param_.enable_force_estimation)
 		{
 			if (params_.force_estimator_param_.enable_disturbance_compensation)
+			{
 				ROS_INFO("[FORCE] 外力补偿已启用。");
+				ROS_INFO("[FORCE] 补偿变化率上限：XY=%.2f N/s，Z=%.2f N/s。",
+					params_.force_estimator_param_.max_applied_force_rate_xy,
+					params_.force_estimator_param_.max_applied_force_rate_z);
+			}
 			else
 				ROS_INFO("[FORCE] 外力估计已启用，当前仅记录，不参与补偿。");
 		}
@@ -989,8 +994,7 @@ namespace PayloadMPC
 		force_observer_input_valid_ = false;
 		fq_estimate_valid_ = false;
 		fq_estimated_.setZero();
-		fq_applied_.setZero();
-		controller_.setExternalForce(fq_applied_);
+		clearAppliedDisturbance();
 	}
 
 	void MPCFSM::updateForceAttitudeAlignment(const ros::Time &now)
@@ -1400,6 +1404,8 @@ namespace PayloadMPC
 
 	void MPCFSM::clearAppliedDisturbance()
 	{
+		disturbance_slew_limiter_.reset();
+		last_disturbance_slew_update_time_ = ros::Time(0);
 		fq_applied_.setZero();
 		controller_.setExternalForce(fq_applied_);
 	}
@@ -1674,34 +1680,70 @@ namespace PayloadMPC
 
 	void MPCFSM::setForceEstimation()
 	{
-
 		fq_estimated_.setZero();
 		fq_estimate_valid_ = force_observer_input_valid_ &&
 			force_estimator_.caculate_force(fl_, fq_estimated_);
 
-		const DisturbanceGateReason gate_reason = disturbanceCompensationGate(ros::Time::now());
+		const ros::Time now = ros::Time::now();
+		const DisturbanceGateReason gate_reason = disturbanceCompensationGate(now);
 		reportDisturbanceGate(gate_reason);
 		if (gate_reason == DisturbanceGateReason::ACTIVE)
 		{
-			fq_applied_ = fq_estimated_;
-			fq_applied_(0) *= params_.force_estimator_param_.force_axis_gain_x;
-			fq_applied_(1) *= params_.force_estimator_param_.force_axis_gain_y;
-			fq_applied_(2) *= params_.force_estimator_param_.force_axis_gain_z;
-			const double estimated_norm = fq_applied_.norm();
+			Eigen::Vector3d fq_target = fq_estimated_;
+			fq_target(0) *= params_.force_estimator_param_.force_axis_gain_x;
+			fq_target(1) *= params_.force_estimator_param_.force_axis_gain_y;
+			fq_target(2) *= params_.force_estimator_param_.force_axis_gain_z;
+			const double estimated_norm = fq_target.norm();
 			const double max_applied_force = params_.force_estimator_param_.max_applied_force;
 			if (estimated_norm > max_applied_force)
 			{
-				fq_applied_ *= max_applied_force / estimated_norm;
+				fq_target *= max_applied_force / estimated_norm;
 				ROS_WARN_THROTTLE(
 					1.0,
 					"[FORCE] 外力补偿达到上限：估计=%.3f N，实际应用=%.3f N。",
 					estimated_norm,
 					max_applied_force);
 			}
+
+			constexpr double initial_slew_dt = 0.01;
+			const double nominal_dt = 1.0 / params_.ctrl_freq_max_;
+			double slew_dt = initial_slew_dt;
+			if (!last_disturbance_slew_update_time_.isZero())
+			{
+				const double elapsed = (now - last_disturbance_slew_update_time_).toSec();
+				if (std::isfinite(elapsed) && elapsed > 0.0)
+					slew_dt = std::min(elapsed, 2.0 * nominal_dt);
+			}
+
+			const DisturbanceSlewLimitResult slew_result = disturbance_slew_limiter_.update(
+				fq_target,
+				slew_dt,
+				params_.force_estimator_param_.max_applied_force_rate_xy,
+				params_.force_estimator_param_.max_applied_force_rate_z);
+			if (!slew_result.valid)
+			{
+				ROS_ERROR_THROTTLE(1.0, "[FORCE] 外力补偿变化率限制输入无效，补偿已清零。");
+				clearAppliedDisturbance();
+			}
+			else
+			{
+				fq_applied_ = slew_result.value;
+				last_disturbance_slew_update_time_ = now;
+				if (slew_result.limited_xy || slew_result.limited_z)
+				{
+					ROS_INFO_THROTTLE(
+						1.0,
+						"[FORCE] 补偿变化率受限：目标=(%.2f, %.2f, %.2f) N，实际=(%.2f, %.2f, %.2f) N，XY/Z 上限=(%.2f, %.2f) N/s。",
+						fq_target.x(), fq_target.y(), fq_target.z(),
+						fq_applied_.x(), fq_applied_.y(), fq_applied_.z(),
+						params_.force_estimator_param_.max_applied_force_rate_xy,
+						params_.force_estimator_param_.max_applied_force_rate_z);
+				}
+			}
 		}
 		else
 		{
-			fq_applied_.setZero();
+			clearAppliedDisturbance();
 		}
 		controller_.setExternalForce(fq_applied_);
 

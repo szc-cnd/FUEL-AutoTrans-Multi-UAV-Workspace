@@ -94,6 +94,28 @@ class BatteryLoggingTest(unittest.TestCase):
             ["/odom", "/imu", "/state"],
         )
 
+    def test_force_config_snapshot_records_slew_limits_and_gains(self):
+        values = {
+            "/mpc_controller_node/force_estimator/max_applied_force": 5.0,
+            "/mpc_controller_node/force_estimator/max_applied_force_rate_xy": 2.0,
+            "/mpc_controller_node/force_estimator/max_applied_force_rate_z": 3.0,
+            "/mpc_controller_node/force_estimator/force_axis_gain_x": 1.0,
+            "/mpc_controller_node/force_estimator/force_axis_gain_y": 1.0,
+            "/mpc_controller_node/force_estimator/force_axis_gain_z": 1.0,
+        }
+
+        lines = self.module.force_config_log_lines(
+            lambda path, default=None: values.get(path, default))
+
+        self.assertEqual(lines, [
+            "force_config_max_applied_force: 5.0",
+            "force_config_max_applied_force_rate_xy: 2.0",
+            "force_config_max_applied_force_rate_z: 3.0",
+            "force_config_axis_gain_x: 1.0",
+            "force_config_axis_gain_y: 1.0",
+            "force_config_axis_gain_z: 1.0",
+        ])
+
 
 class ForceAttitudeAlignmentLoggingTest(unittest.TestCase):
     @classmethod

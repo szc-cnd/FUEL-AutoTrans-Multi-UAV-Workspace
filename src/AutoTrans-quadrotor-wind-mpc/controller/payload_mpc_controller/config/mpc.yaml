@@ -9,7 +9,7 @@ Q_pos_xy:   200.0    # Cost for horizontal positon error //default: 200     0.5
 Q_pos_z:  200.0    # Cost for horizontal positon error //default: 200     0.5
 Q_attitude_rp:  120.0   # Cost for attitude error           //default: 50     0.1
 Q_attitude_yaw:  120.0    # Cost for attitude error           //default: 50     0.1
-Q_velocity:  35.0   # Cost for velocity error           //default: 10    0.05
+Q_velocity:  55.0   # Cost for velocity error           //default: 10    0.05
 
 # 以下 payload/cable 权重仅为兼容旧参数读取保留；普通四旋翼 NMPC 的 10 维状态不使用这些项。
 Q_payload_xy:  20.0
@@ -20,7 +20,7 @@ Q_dcable: 0.0
 
 # Cost on Inputs
 R_thrust:    1.2  # Cost on thrust input            //default: 1
-R_pitchroll:  30 # Cost on pitch and roll rate
+R_pitchroll:  20 # Cost on pitch and roll rate
 R_yaw:        1.2      # Cost on yaw ratte
 # 速度越过正常上限时使用非负松弛量；高权重使越界只作为保持求解可行的短时退让。
 R_velocity_slack_xy: 5000.0
@@ -67,7 +67,7 @@ enable_rc_hover_adjust: false
 # x/y/z 是 /mavros/local_position/odom 对应的 ENU 世界坐标，单位 m；yaw 仍取切入时当前航向。
 # 关闭后恢复为“切换瞬间当前位置悬停”。固定模式下会忽略 enable_rc_hover_adjust。
 fixed_hover:
-    enabled: false
+    enabled: true
     x: 0.0
     y: 0.0
     z: 0.6
@@ -130,8 +130,11 @@ force_estimator: # *
     # 外力估计结果的世界系三维模长上限，单位 N；用于保留并记录较大的风扰峰值。
     max_force: 5.0
     # 实际写入 NMPC OnlineData 的世界系三维补偿力模长上限，单位 N。
-    # 当前按实机试验选择设为 4 N；它与估计限幅独立，后续可单独降低。
     max_applied_force: 5.0
+    # 补偿力变化率限制：XY 按水平向量模长限制，Z 单独限制，单位 N/s。
+    # 先削弱短时估计尖峰；从零建立 1 N 补偿时，XY 约需 0.5 s，Z 约需 0.33 s。
+    max_applied_force_rate_xy: 2.0
+    max_applied_force_rate_z: 3.0
     # 写入 NMPC 前的世界系分轴补偿增益；默认 1.0 保持 CAV0 当前行为。
     force_axis_gain_x: 1.0
     force_axis_gain_y: 1.0

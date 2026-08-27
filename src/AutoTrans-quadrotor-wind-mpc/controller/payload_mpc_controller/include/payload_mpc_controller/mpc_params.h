@@ -48,6 +48,9 @@ namespace PayloadMPC
 			double max_force;
 			// 实际写入 NMPC OnlineData 的世界系补偿力模长上限，单位 N。
 			double max_applied_force;
+			// 实际补偿力的水平向量与垂直分量最大变化率，单位 N/s。
+			double max_applied_force_rate_xy;
+			double max_applied_force_rate_z;
 			// 世界系外力补偿分轴增益；仅作用于写入 NMPC 的补偿量。
 			double force_axis_gain_x{1.0};
 			double force_axis_gain_y{1.0};
@@ -573,6 +576,8 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/USE_CONSTANT_MOMENT", force_estimator_param_.USE_CONSTANT_MOMENT);
 			read_essential_param(nh, "force_estimator/max_force", force_estimator_param_.max_force);
 			read_essential_param(nh, "force_estimator/max_applied_force", force_estimator_param_.max_applied_force);
+			read_essential_param(nh, "force_estimator/max_applied_force_rate_xy", force_estimator_param_.max_applied_force_rate_xy);
+			read_essential_param(nh, "force_estimator/max_applied_force_rate_z", force_estimator_param_.max_applied_force_rate_z);
 			read_essential_param(nh, "force_estimator/force_axis_gain_x", force_estimator_param_.force_axis_gain_x);
 			read_essential_param(nh, "force_estimator/force_axis_gain_y", force_estimator_param_.force_axis_gain_y);
 			read_essential_param(nh, "force_estimator/force_axis_gain_z", force_estimator_param_.force_axis_gain_z);
@@ -583,6 +588,14 @@ namespace PayloadMPC
 				force_estimator_param_.max_applied_force > force_estimator_param_.max_force)
 			{
 				ROS_ERROR("[参数] force_estimator 限幅必须满足 0 < max_applied_force <= max_force。");
+				ROS_BREAK();
+			}
+			if (!std::isfinite(force_estimator_param_.max_applied_force_rate_xy) ||
+				!std::isfinite(force_estimator_param_.max_applied_force_rate_z) ||
+				force_estimator_param_.max_applied_force_rate_xy <= 0.0 ||
+				force_estimator_param_.max_applied_force_rate_z <= 0.0)
+			{
+				ROS_ERROR("[参数] 外力补偿变化率上限必须为有限正数。");
 				ROS_BREAK();
 			}
 			if (!std::isfinite(force_estimator_param_.force_axis_gain_x) ||

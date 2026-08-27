@@ -160,6 +160,43 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
         self.assertIn("force_attitude_odom: 0.1", config)
 
+    def test_disturbance_compensation_is_slew_limited_after_magnitude_cap(self):
+        fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        params = (
+            PACKAGE / "include/payload_mpc_controller/mpc_params.h"
+        ).read_text(encoding="utf-8")
+        config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
+
+        for name, value in (
+            ("max_applied_force_rate_xy", "2.0"),
+            ("max_applied_force_rate_z", "3.0"),
+        ):
+            self.assertIn('read_essential_param(nh, "force_estimator/%s"' % name, params)
+            self.assertIn("%s: %s" % (name, value), config)
+
+        update = fsm.split("void MPCFSM::setForceEstimation", 1)[1]
+        update = update.split("void MPCFSM::", 1)[0]
+        gain_position = update.index("force_axis_gain_x")
+        magnitude_position = update.index("estimated_norm > max_applied_force")
+        slew_position = update.index("disturbance_slew_limiter_.update")
+        publish_position = update.index("controller_.setExternalForce")
+        self.assertLess(gain_position, magnitude_position)
+        self.assertLess(magnitude_position, slew_position)
+        self.assertLess(slew_position, publish_position)
+        self.assertIn("constexpr double initial_slew_dt = 0.01", update)
+        self.assertIn("slew_dt = initial_slew_dt", update)
+        self.assertIn("std::min(elapsed, 2.0 * nominal_dt)", update)
+
+        clear = fsm.split("void MPCFSM::clearAppliedDisturbance", 1)[1]
+        clear = clear.split("void MPCFSM::", 1)[0]
+        self.assertIn("disturbance_slew_limiter_.reset()", clear)
+        self.assertIn("last_disturbance_slew_update_time_ = ros::Time(0)", clear)
+        self.assertEqual(fsm.count("fq_applied_.setZero()"), 1)
+
+        observer_clear = fsm.split("void MPCFSM::clearForceObserverState", 1)[1]
+        observer_clear = observer_clear.split("void MPCFSM::", 1)[0]
+        self.assertIn("clearAppliedDisturbance()", observer_clear)
+
     def test_precision_landing_defaults_to_high_frequency_odometry(self):
         landing_launch = (
             WORKSPACE / "src/precision_landing/launch/precision_landing.launch"

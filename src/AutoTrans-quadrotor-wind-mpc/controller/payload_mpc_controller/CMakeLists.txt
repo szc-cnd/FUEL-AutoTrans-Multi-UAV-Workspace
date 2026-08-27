@@ -102,6 +102,15 @@ target_link_libraries(mpc_controller_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_disturbance_slew_limiter
+    test/test_disturbance_slew_limiter.cpp
+  )
+  if(TARGET test_disturbance_slew_limiter)
+    target_include_directories(test_disturbance_slew_limiter PRIVATE
+      include/payload_mpc_controller
+      ${EIGEN3_INCLUDE_DIR}
+    )
+  endif()
   catkin_add_gtest(test_force_attitude_aligner
     test/test_force_attitude_aligner.cpp
   )

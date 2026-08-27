@@ -31,6 +31,20 @@ import rostopic
 MAX_EXPERIMENT_TAG_LENGTH = 96
 COMPENSATION_PARAM = (
     "/mpc_controller_node/force_estimator/enable_disturbance_compensation")
+FORCE_CONFIG_PARAMS = (
+    ("force_config_max_applied_force",
+     "/mpc_controller_node/force_estimator/max_applied_force"),
+    ("force_config_max_applied_force_rate_xy",
+     "/mpc_controller_node/force_estimator/max_applied_force_rate_xy"),
+    ("force_config_max_applied_force_rate_z",
+     "/mpc_controller_node/force_estimator/max_applied_force_rate_z"),
+    ("force_config_axis_gain_x",
+     "/mpc_controller_node/force_estimator/force_axis_gain_x"),
+    ("force_config_axis_gain_y",
+     "/mpc_controller_node/force_estimator/force_axis_gain_y"),
+    ("force_config_axis_gain_z",
+     "/mpc_controller_node/force_estimator/force_axis_gain_z"),
+)
 
 CSV_HEADER = [
     "stamp", "seq", "frame_id", "type_mask",
@@ -127,6 +141,19 @@ def normalize_rosbag_topics(topics):
         normalized.append(topic)
         seen.add(topic)
     return normalized
+
+
+def force_config_log_lines(get_param):
+    """生成控制器外力补偿参数快照，便于从单份日志复现实验配置。"""
+    lines = []
+    for label, path in FORCE_CONFIG_PARAMS:
+        value = get_param(path, None)
+        if value is None:
+            value = "unknown"
+        elif isinstance(value, bool):
+            value = "true" if value else "false"
+        lines.append("%s: %s" % (label, value))
+    return lines
 
 
 class AutoTransMpcLogger:
@@ -254,6 +281,8 @@ class AutoTransMpcLogger:
         self.write_text("experiment_tag_raw: %s" % self.experiment_tag_raw)
         self.write_text("experiment_tag_clean: %s" % self.experiment_tag_clean)
         self.write_text("compensation_config: %s" % self.compensation_config)
+        for config_line in force_config_log_lines(rospy.get_param):
+            self.write_text(config_line)
         self.write_text("run_name_source: %s" % self.run_name_source)
         self.write_text("generated_run_name: %s" % self.run_name)
         self.write_text("run_dir: %s" % self.run_dir)
