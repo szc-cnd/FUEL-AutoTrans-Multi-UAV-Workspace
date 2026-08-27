@@ -442,7 +442,7 @@ namespace diff_planner
     /* Collision free and return in advance */
     if (segment_ids.size() == 0)
     {
-      return CHK_RET::OBS_FREE;
+      return addNearObstacleConstraints(i_end) ? CHK_RET::FINISH : CHK_RET::OBS_FREE;
     }
 
     /*** a star search ***/
@@ -703,7 +703,71 @@ namespace diff_planner
     }
 
     segments = final_segment_ids;
+    addNearObstacleConstraints(i_end);
     return CHK_RET::FINISH;
+  }
+
+  bool PolyTrajOptimizer::addNearObstacleConstraints(const int id_end)
+  {
+    if (!std::isfinite(obs_clearance_) || obs_clearance_ <= 0.0)
+      return false;
+
+    const double resolution = grid_map_->getResolution();
+    if (!std::isfinite(resolution) || resolution <= 0.0)
+      return false;
+
+    const int max_step = static_cast<int>(std::ceil(
+        (obs_clearance_ + std::sqrt(3.0) * resolution * 0.5) / resolution));
+    const int last_id = std::min(id_end, cps_.cp_size - 1);
+    bool constraint_added = false;
+
+    for (int i = 1; i <= last_id; ++i)
+    {
+      if (!cps_.direction[i].empty())
+        continue;
+
+      const Eigen::Vector3d point = cps_.points.col(i);
+      const Eigen::Vector3i center_idx =
+          (point / resolution).array().floor().cast<int>();
+      double nearest_clearance = std::numeric_limits<double>::infinity();
+      Eigen::Vector3d nearest_base;
+      Eigen::Vector3d nearest_direction;
+
+      for (int dx = -max_step; dx <= max_step; ++dx)
+        for (int dy = -max_step; dy <= max_step; ++dy)
+          for (int dz = -max_step; dz <= max_step; ++dz)
+          {
+            const Eigen::Vector3i idx = center_idx + Eigen::Vector3i(dx, dy, dz);
+            const Eigen::Vector3d occupied_center =
+                (idx.cast<double>().array() + 0.5).matrix() * resolution;
+            if (grid_map_->getInflateOccupancy(occupied_center) <= 0)
+              continue;
+
+            const Eigen::Vector3d delta = point - occupied_center;
+            const double center_distance = delta.norm();
+            if (center_distance <= 1.0e-6)
+              continue;
+
+            const Eigen::Vector3d direction = delta / center_distance;
+            const double voxel_support = 0.5 * resolution * direction.cwiseAbs().sum();
+            const double clearance = center_distance - voxel_support;
+            if (clearance < nearest_clearance)
+            {
+              nearest_clearance = clearance;
+              nearest_direction = direction;
+              nearest_base = occupied_center + direction * voxel_support;
+            }
+          }
+
+      if (nearest_clearance < obs_clearance_)
+      {
+        cps_.base_point[i].push_back(nearest_base);
+        cps_.direction[i].push_back(nearest_direction);
+        constraint_added = true;
+      }
+    }
+
+    return constraint_added;
   }
 
   bool PolyTrajOptimizer::roughlyCheckConstraintPoints(void)

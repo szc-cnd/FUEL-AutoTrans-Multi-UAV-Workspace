@@ -194,6 +194,8 @@ namespace diff_planner
                            Eigen::Vector3d &gradp,
                            double &costp);
 
+    bool addNearObstacleConstraints(int id_end);
+
     bool swarmGradCostP(const int i_dp,
                         const double t,
                         const Eigen::Vector3d &p,
