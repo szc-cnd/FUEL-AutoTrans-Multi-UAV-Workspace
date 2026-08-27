@@ -20,7 +20,7 @@
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="max_tracking_error" value="$(arg max_tracking_error)"/>
-        <arg name="replan_from_current_odom" value="true"/>
+        <arg name="enable_random_local_init" value="false"/>
         <!-- 1.5m通道摆球：优先校验球底净空，否则学习左右端点和周期并停车等待穿越窗口。 -->
         <arg name="enable_swing_obstacle_guard" value="$(arg enable_swing_obstacle_guard)"/>
         <arg name="swing_obstacle_topic" value="/UAV1/ldop/dynamic_objects"/>

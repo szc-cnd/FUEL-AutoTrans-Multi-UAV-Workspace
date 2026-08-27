@@ -46,7 +46,7 @@ def test_tracking_deviation_replans_from_measured_odometry():
     assert "callReboundReplan(replan_from_odom, false)" in local_replan
 
 
-def test_run_swarm_replans_once_from_current_odometry_without_random_retry():
+def test_run_swarm_disables_only_random_local_replan_retry():
     header = FSM_HEADER.read_text(encoding="utf-8")
     source = FSM_SOURCE.read_text(encoding="utf-8")
     advanced = ADVANCED_LAUNCH.read_text(encoding="utf-8")
@@ -55,18 +55,14 @@ def test_run_swarm_replans_once_from_current_odometry_without_random_retry():
     )
     local_replan = source.split("bool DiffReplanFSM::planFromLocalTraj", 1)[1]
     local_replan = local_replan.split("bool DiffReplanFSM::planNextWaypoint", 1)[0]
-    deterministic_branch = local_replan.split("if (replan_from_current_odom_)", 1)[1]
-    deterministic_branch = deterministic_branch.split("const double tracking_error", 1)[0]
-
-    assert "replan_from_current_odom_" in header
-    assert 'nh.param("fsm/replan_from_current_odom", replan_from_current_odom_, false)' in source
-    assert 'name="replan_from_current_odom" default="false"' in advanced
-    assert 'name="replan_from_current_odom" value="true"' in run_swarm
-    assert "start_pt_ = odom_pos_;" in deterministic_branch
-    assert "start_vel_ = odom_vel_;" in deterministic_branch
-    assert "start_acc_.setZero();" in deterministic_branch
-    assert "return callReboundReplan(true, false);" in deterministic_branch
-    assert "callReboundReplan(true, true)" not in deterministic_branch
+    assert "enable_random_local_init_" in header
+    assert 'nh.param("fsm/enable_random_local_init", enable_random_local_init_, true)' in source
+    assert 'name="enable_random_local_init" default="true"' in advanced
+    assert 'name="enable_random_local_init" value="false"' in run_swarm
+    assert "callReboundReplan(replan_from_odom, false)" in local_replan
+    assert "success = callReboundReplan(true, false);" in local_replan
+    assert "if (!success && enable_random_local_init_)" in local_replan
+    assert "success = callReboundReplan(true, true);" in local_replan
 
 
 def test_controller_restart_keeps_target_and_replans_from_odometry():

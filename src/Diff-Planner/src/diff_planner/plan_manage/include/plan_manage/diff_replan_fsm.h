@@ -87,7 +87,6 @@ namespace diff_planner
     // Maximum allowed 3-D separation between the previous trajectory's
     // predicted state and the measured odometry before replanning from odom.
     double max_tracking_error_;
-    bool replan_from_current_odom_;
     double emergency_time_;
     bool enable_occupied_recovery_;
     double escape_max_distance_;
@@ -116,6 +115,7 @@ namespace diff_planner
     bool require_pre_agent_trajectory_;
     // 2026-07-28: 异构接力可禁用已确认会阻塞FSM的随机多项式初始化，失败改由上层安全子目标恢复。
     bool enable_random_global_init_;
+    bool enable_random_local_init_;
     std::string search_subgoal_topic_;
     std::string manual_goal_topic_; // 2026-07-28: UAV1接力规划使用独立目标话题，避免与前机全局/goal串线。
     bool enable_swing_obstacle_guard_;

@@ -24,7 +24,6 @@ namespace diff_planner
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
     nh.param("fsm/max_tracking_error", max_tracking_error_, 0.30);
-    nh.param("fsm/replan_from_current_odom", replan_from_current_odom_, false);
     if (!std::isfinite(max_tracking_error_) || max_tracking_error_ <= 0.0)
     {
       ROS_WARN("fsm/max_tracking_error must be a positive finite value; using 0.30 m.");
@@ -79,6 +78,7 @@ namespace diff_planner
     nh.param("fsm/require_pre_agent_trajectory", require_pre_agent_trajectory_, true);
     // 2026-07-28: 默认保留Diff原行为；UAV1接力实例关闭随机初始化，避免不可行目标让规划回调阻塞并丢心跳。
     nh.param("fsm/enable_random_global_init", enable_random_global_init_, true);
+    nh.param("fsm/enable_random_local_init", enable_random_local_init_, true);
     // 2026-07-07: 允许首飞阶段或外部触发后的短时间内跳过 stuck detect，避免 indoor1 首段轨迹因局部目标变化慢被误判卡死。
     nh.param("fsm/stuck_detect_grace_time", stuck_detect_grace_time_, 6.0);
     // 2026-07-08: 为“RViz 只触发、自动搜索单独下发子目标”模式新增独立子目标话题，避免和 /goal 的触发语义混用。
@@ -1540,14 +1540,6 @@ namespace diff_planner
       return false;
     }
 
-    if (replan_from_current_odom_)
-    {
-      start_pt_ = odom_pos_;
-      start_vel_ = odom_vel_;
-      start_acc_.setZero();
-      return callReboundReplan(true, false);
-    }
-
     const double tracking_error = prediction_finite
                                       ? (predicted_pos - odom_pos_).norm()
                                       : std::numeric_limits<double>::infinity();
@@ -1583,7 +1575,7 @@ namespace diff_planner
     {
       if (!replan_from_odom)
         success = callReboundReplan(true, false);
-      if (!success)
+      if (!success && enable_random_local_init_)
       {
         for (int i = 0; i < trial_times; i++)
         {
@@ -1591,11 +1583,9 @@ namespace diff_planner
           if (success)
             break;
         }
-        if (!success)
-        {
-          return false;
-        }
       }
+      if (!success)
+        return false;
     }
 
     return true;
