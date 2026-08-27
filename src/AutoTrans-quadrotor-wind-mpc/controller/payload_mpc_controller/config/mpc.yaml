@@ -112,13 +112,19 @@ force_estimator: # *
     imu_body_length: 0.66844507
     # 只估计模式：计算并记录世界系外力 f_Q（单位 N），但不把它传入 NMPC。
     enable_force_estimation: true
-    enable_disturbance_compensation: false
+    enable_disturbance_compensation: true
+    # true：控制姿态和外力估计姿态都复用主 FAST-LIO 高频 odom，不再单独订阅第二路姿态。
+    force_attitude_from_odom: true
+    # 可关闭以使用相同雷达数据源测试原有“各路最新值”观察器输入。
+    enable_input_sync: true
+    force_sync_history_duration: 0.5  # 每路输入保留的时间戳历史，单位 s
+    force_sync_max_interp_gap: 0.03   # 插值两端允许的最大时间间隔，单位 s
+    force_sync_max_age: 0.10          # 同步目标相对当前 ROS 时间的最大年龄，单位 s
     # 仅在 AUTO_HOVER/CMD_CTRL 中，PX4 连续确认 IN_AIR 达到该时间后才允许 f_Q 进入 NMPC，单位 s。
     compensation_airborne_delay: 0.8
     # 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
     min_valid_rpm: 1000.0
-    # false：外力估计姿态使用独立的 /UAV0/mavros/local_position/odom 融合四元数；
-    # NMPC 状态仍使用 FAST-LIO odom，不再执行控制器侧启动 yaw 标定。
+    # false：使用 odom 姿态；本机 force_attitude_from_odom=true，因此直接使用 FAST-LIO 四元数。
     use_px4_imu_attitude: false
     # 以下参数仅在 use_px4_imu_attitude=true 的备用路径中生效。
     attitude_alignment_duration: 1.0          # 连续静止采样时间，单位 s
@@ -135,11 +141,11 @@ force_estimator: # *
     # 先削弱短时估计尖峰；从零建立 1 N 补偿时，XY 约需 0.5 s，Z 约需 0.33 s。
     max_applied_force_rate_xy: 2.0
     max_applied_force_rate_z: 3.0
-    # 写入 NMPC 前的世界系分轴补偿增益；默认 1.0 保持 CAV0 当前行为。
+    # 写入 NMPC 前的世界系分轴补偿增益；本轮保留已确认的 Z=0.5。
     force_axis_gain_x: 1.0
     force_axis_gain_y: 1.0
-    force_axis_gain_z: 1.0
-    # 外力观察器每 10 ms 加入一组最新 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
+    force_axis_gain_z: 0.5
+    # 外力观察器每 10 ms 加入一组同时间戳 IMU/姿态/RPM 样本并更新 f_Q，即 100 Hz。
     # max_queue/force_observer_freq 决定滑动窗口时长：20/100 = 0.2 s。
     max_queue: 20
     force_observer_freq: 100.0

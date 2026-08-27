@@ -120,6 +120,7 @@ run_controller_pane() {
   source_ros || keep_open
   wait_for_mavros || keep_open
   wait_for_topic "${ODOM_TOPIC}" || keep_open
+  wait_for_topic /UAV0/livox/imu_mps2 || keep_open
   wait_for_topic /UAV0/mavros/local_position/odom || keep_open
   wait_for_node "${FUEL_TRAJ_SERVER_NODE}" || keep_open
   wait_for_topic /UAV0/mavros/vision_pose/pose || keep_open

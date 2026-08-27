@@ -96,6 +96,11 @@ class BatteryLoggingTest(unittest.TestCase):
 
     def test_force_config_snapshot_records_slew_limits_and_gains(self):
         values = {
+            "/mpc_controller_node/force_estimator/force_attitude_from_odom": True,
+            "/mpc_controller_node/force_estimator/enable_input_sync": True,
+            "/mpc_controller_node/force_estimator/force_sync_history_duration": 0.5,
+            "/mpc_controller_node/force_estimator/force_sync_max_interp_gap": 0.03,
+            "/mpc_controller_node/force_estimator/force_sync_max_age": 0.1,
             "/mpc_controller_node/force_estimator/max_applied_force": 5.0,
             "/mpc_controller_node/force_estimator/max_applied_force_rate_xy": 2.0,
             "/mpc_controller_node/force_estimator/max_applied_force_rate_z": 3.0,
@@ -108,6 +113,11 @@ class BatteryLoggingTest(unittest.TestCase):
             lambda path, default=None: values.get(path, default))
 
         self.assertEqual(lines, [
+            "force_config_attitude_from_odom: true",
+            "force_config_input_sync_enabled: true",
+            "force_config_sync_history_duration: 0.5",
+            "force_config_sync_max_interp_gap: 0.03",
+            "force_config_sync_max_age: 0.1",
             "force_config_max_applied_force: 5.0",
             "force_config_max_applied_force_rate_xy: 2.0",
             "force_config_max_applied_force_rate_z: 3.0",

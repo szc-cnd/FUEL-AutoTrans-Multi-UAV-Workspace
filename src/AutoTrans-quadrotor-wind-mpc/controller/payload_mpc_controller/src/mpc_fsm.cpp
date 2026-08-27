@@ -135,10 +135,21 @@ namespace PayloadMPC
 		pub_rmse_info_ = nh_.advertise<std_msgs::Float64MultiArray>("mpc/rmse_info", 1);
 
 		force_estimator_.init(params_);
+		force_input_synchronizer_.configure(
+			params_.force_estimator_param_.force_sync_history_duration,
+			params_.force_estimator_param_.force_sync_max_interp_gap,
+			params_.force_estimator_param_.force_sync_max_age);
 		ROS_INFO("[FORCE] 外力估计姿态来源：%s。",
 			params_.force_estimator_param_.use_px4_imu_attitude
 				? "MAVROS IMU 姿态"
-				: "MAVROS local_position/odom 姿态");
+				: (params_.force_estimator_param_.force_attitude_from_odom
+					   ? "主 FAST-LIO odom 姿态"
+					   : "独立 odom 姿态"));
+		ROS_INFO("[FORCE_SYNC] 时间戳同步%s：历史=%.3f s，最大插值间隔=%.3f s，最大年龄=%.3f s。",
+			params_.force_estimator_param_.enable_input_sync ? "已启用" : "已关闭",
+			params_.force_estimator_param_.force_sync_history_duration,
+			params_.force_estimator_param_.force_sync_max_interp_gap,
+			params_.force_estimator_param_.force_sync_max_age);
 		if (params_.force_estimator_param_.enable_force_estimation)
 		{
 			if (params_.force_estimator_param_.enable_disturbance_compensation)
@@ -183,6 +194,17 @@ namespace PayloadMPC
 			result == OdomSpikeGuardResult::RECOVERED)
 		{
 			odom_data = candidate;
+			if (params_.force_estimator_param_.force_attitude_from_odom)
+			{
+				force_attitude_odom_data = candidate;
+				if (params_.force_estimator_param_.enable_input_sync)
+				{
+					recordForceSyncInputResult(
+						force_input_synchronizer_.addAttitude(
+							msg->header.stamp.toSec(), candidate.q),
+						"FAST-LIO attitude");
+				}
+			}
 			if (result == OdomSpikeGuardResult::RECOVERED)
 			{
 				ROS_WARN("[ODOM_SPIKE] FAST-LIO 已连续恢复 %d 个正常样本，解除尖峰故障锁存。",
@@ -190,7 +212,6 @@ namespace PayloadMPC
 			}
 			return;
 		}
-
 		ROS_WARN_THROTTLE(
 			0.5,
 			"[ODOM_SPIKE] 拒绝 FAST-LIO 异常样本：位置残差 xy=%.3f z=%.3f m，速度突变 xy=%.3f z=%.3f m/s；暂用上一可信状态。",
@@ -202,6 +223,44 @@ namespace PayloadMPC
 		{
 			ROS_ERROR("[ODOM_SPIKE] FAST-LIO 异常已连续 %.2f s，锁存故障并进入 NMPC 原有恢复流程。",
 				params_.odom_spike_guard_.fault_duration);
+		}
+	}
+
+	void MPCFSM::forceAttitudeOdomCallback(const nav_msgs::Odometry::ConstPtr &msg)
+	{
+		force_attitude_odom_data.feed(msg);
+		if (params_.force_estimator_param_.enable_input_sync)
+		{
+			recordForceSyncInputResult(
+				force_input_synchronizer_.addAttitude(
+					msg->header.stamp.toSec(), force_attitude_odom_data.q),
+				"force attitude odom");
+		}
+	}
+
+	void MPCFSM::imuCallback(const sensor_msgs::Imu::ConstPtr &msg)
+	{
+		imu_data.feed(msg);
+		if (params_.force_estimator_param_.enable_input_sync)
+		{
+			recordForceSyncInputResult(
+				force_input_synchronizer_.addAcceleration(
+					msg->header.stamp.toSec(), imu_data.filtered_a),
+				"IMU acceleration");
+		}
+	}
+
+	void MPCFSM::rpmCallback(const mavros_msgs::ESCStatus::ConstPtr &msg)
+	{
+		const ros::Time previous_stamp = rpm_data.msg.header.stamp;
+		rpm_data.feed(msg);
+		if (params_.force_estimator_param_.enable_input_sync &&
+			rpm_data.msg.header.stamp != previous_stamp)
+		{
+			recordForceSyncInputResult(
+				force_input_synchronizer_.addRpm(
+					msg->header.stamp.toSec(), rpm_data.filtered_rpm),
+				"ESC RPM");
 		}
 	}
 
@@ -946,7 +1005,7 @@ namespace PayloadMPC
 		}
 		else
 		{
-			// MAVROS local_position/odom 已是 PX4 EKF 融合世界系，不再叠加控制器侧 yaw 偏移。
+			// odom 姿态已经位于控制世界系，不再叠加控制器侧 yaw 偏移。
 			yaw_offset_msg.data = 0.0;
 		}
 		pub_force_attitude_yaw_offset_.publish(yaw_offset_msg);
@@ -991,9 +1050,11 @@ namespace PayloadMPC
 	void MPCFSM::clearForceObserverState()
 	{
 		force_estimator_.reset();
+		force_input_synchronizer_.reset();
 		force_observer_input_valid_ = false;
 		fq_estimate_valid_ = false;
 		fq_estimated_.setZero();
+		last_force_sync_success_time_ = ros::Time(0);
 		clearAppliedDisturbance();
 	}
 
@@ -1187,6 +1248,62 @@ namespace PayloadMPC
 		}
 	}
 
+	void MPCFSM::recordForceSyncInputResult(ForceObserverInputResult result, const char *source)
+	{
+		if (result == ForceObserverInputResult::SOURCE_RESET)
+		{
+			ROS_WARN("[FORCE_SYNC] %s 时间戳倒退，已清空全部同步历史和外力状态。", source);
+			clearForceObserverState();
+		}
+		else if (result == ForceObserverInputResult::INVALID)
+		{
+			ROS_WARN_THROTTLE(1.0, "[FORCE_SYNC] 拒绝 %s 的无效值或时间戳。", source);
+		}
+	}
+
+	void MPCFSM::reportForceSync(ForceObserverSyncResult result,
+							  const ForceObserverSynchronizedInput *input,
+							  const ros::Time &now)
+	{
+		if (result == ForceObserverSyncResult::READY)
+		{
+			++force_sync_accepted_since_report_;
+			last_force_sync_input_ = *input;
+		}
+		else
+		{
+			++force_sync_rejected_since_report_;
+		}
+		last_force_sync_result_ = result;
+
+		if (last_force_sync_report_time_.isZero())
+		{
+			last_force_sync_report_time_ = now;
+			return;
+		}
+		if ((now - last_force_sync_report_time_).toSec() < 1.0)
+			return;
+
+		const std::size_t total = force_sync_accepted_since_report_ +
+			force_sync_rejected_since_report_;
+		const double accepted_rate = total > 0
+			? 100.0 * static_cast<double>(force_sync_accepted_since_report_) /
+				  static_cast<double>(total)
+			: 0.0;
+		ROS_INFO("[FORCE_SYNC] 接受率=%.1f%% (%zu/%zu)，最近状态=%s，样本年龄=%.1f ms，最新值偏移 IMU/姿态/RPM=(%.1f/%.1f/%.1f) ms。",
+			accepted_rate,
+			force_sync_accepted_since_report_,
+			total,
+			forceObserverSyncResultName(last_force_sync_result_),
+			last_force_sync_input_.age * 1000.0,
+			last_force_sync_input_.acceleration_offset * 1000.0,
+			last_force_sync_input_.attitude_offset * 1000.0,
+			last_force_sync_input_.rpm_offset * 1000.0);
+		force_sync_accepted_since_report_ = 0;
+		force_sync_rejected_since_report_ = 0;
+		last_force_sync_report_time_ = now;
+	}
+
 	void MPCFSM::addNewForceObseverState()
 	{
 		// 起飞阶段的加速度主要来自起飞瞬态，不作为外力 f_Q 估计；
@@ -1197,7 +1314,8 @@ namespace PayloadMPC
 			return;
 		}
 
-		force_observer_input_valid_ = false;
+		if (!params_.force_estimator_param_.enable_input_sync)
+			force_observer_input_valid_ = false;
 		if (!params_.force_estimator_param_.enable_force_estimation)
 		{
 			clearForceObserverState();
@@ -1225,6 +1343,9 @@ namespace PayloadMPC
 			{
 				// 地面支持力不属于自由飞行动力学；离地时清空地面窗口，仅保留新的空中样本。
 				force_estimator_.reset();
+				force_input_synchronizer_.reset();
+				force_observer_input_valid_ = false;
+				last_force_sync_success_time_ = ros::Time(0);
 				airborne_since_ = now;
 				ROS_INFO("[FORCE] 检测到已离地，清空外力估计窗口。");
 			}
@@ -1249,13 +1370,45 @@ namespace PayloadMPC
 			return;
 		}
 
-		if (rpm_data.filtered_rpm.minCoeff() < params_.force_estimator_param_.min_valid_rpm)
+		Eigen::Vector3d observer_acceleration = imu_data.filtered_a;
+		Eigen::Quaterniond observer_attitude = force_attitude;
+		Eigen::Vector4d observer_rpm = rpm_data.filtered_rpm;
+		if (params_.force_estimator_param_.enable_input_sync)
+		{
+			ForceObserverSynchronizedInput synchronized_input;
+			const ForceObserverSyncResult sync_result =
+				force_input_synchronizer_.synchronize(now.toSec(), synchronized_input);
+			reportForceSync(sync_result,
+				sync_result == ForceObserverSyncResult::READY ? &synchronized_input : nullptr,
+				now);
+			if (sync_result != ForceObserverSyncResult::READY)
+			{
+				const bool synchronized_input_stale = last_force_sync_success_time_.isZero() ||
+					(now - last_force_sync_success_time_).toSec() >=
+						params_.force_estimator_param_.force_sync_max_age;
+				if (synchronized_input_stale)
+				{
+					force_estimator_.reset();
+					force_observer_input_valid_ = false;
+					fq_estimate_valid_ = false;
+					fq_estimated_.setZero();
+					clearAppliedDisturbance();
+				}
+				return;
+			}
+			observer_acceleration = synchronized_input.acceleration;
+			observer_attitude = synchronized_input.attitude;
+			observer_rpm = synchronized_input.rpm;
+			last_force_sync_success_time_ = now;
+		}
+
+		if (observer_rpm.minCoeff() < params_.force_estimator_param_.min_valid_rpm)
 		{
 			clearForceObserverState();
 			return;
 		}
-		// 加速度来自 MAVROS IMU 机体系；姿态来自 PX4 EKF 融合 odom，并已处于 MAVROS ENU 世界系。
-		force_estimator_.setSystemState(imu_data.filtered_a, force_attitude, rpm_data.filtered_rpm);
+		// 同步开启时三项输入属于同一个消息时间戳；关闭时保留原有各路最新值行为。
+		force_estimator_.setSystemState(observer_acceleration, observer_attitude, observer_rpm);
 		force_observer_input_valid_ = true;
 	}
 

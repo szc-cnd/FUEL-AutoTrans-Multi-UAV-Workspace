@@ -120,6 +120,15 @@ if(CATKIN_ENABLE_TESTING)
       ${EIGEN3_INCLUDE_DIR}
     )
   endif()
+  catkin_add_gtest(test_force_observer_input_synchronizer
+    test/test_force_observer_input_synchronizer.cpp
+  )
+  if(TARGET test_force_observer_input_synchronizer)
+    target_include_directories(test_force_observer_input_synchronizer PRIVATE
+      include/payload_mpc_controller
+      ${EIGEN3_INCLUDE_DIR}
+    )
+  endif()
   catkin_add_gtest(test_odom_spike_guard
     test/test_odom_spike_guard.cpp
   )

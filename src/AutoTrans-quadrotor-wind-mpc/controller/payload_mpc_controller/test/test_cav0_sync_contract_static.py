@@ -9,14 +9,67 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 
 class Cav0SyncContractStaticTest(unittest.TestCase):
-    def test_controller_sources_are_split_as_required(self):
+    def test_controller_uses_fast_lio_attitude_and_mid360_acceleration(self):
         launch = (PACKAGE / "launch/quad_wind_mpc_controller.launch").read_text(
             encoding="utf-8"
         )
         self.assertIn('/UAV0/fast_lio/Odom_high_freq', launch)
+        self.assertIn('imu_topic" default="/UAV0/livox/imu_mps2"', launch)
+        self.assertIn(
+            'force_attitude_odom_topic" default="/UAV0/fast_lio/Odom_high_freq"',
+            launch,
+        )
+        self.assertIn('comparison_imu_topic" default="/UAV0/mavros/imu/data"', launch)
         self.assertIn('/UAV0/mavros/local_position/odom', launch)
-        self.assertIn('/UAV0/mavros/imu/data', launch)
         self.assertIn('from="~force_attitude_odom"', launch)
+
+        config = (PACKAGE / "config/mpc.yaml").read_text(encoding="utf-8")
+        self.assertIn("force_attitude_from_odom: true", config)
+        self.assertIn("enable_input_sync: true", config)
+        self.assertIn("force_sync_history_duration: 0.5", config)
+        self.assertIn("force_sync_max_interp_gap: 0.03", config)
+        self.assertIn("force_sync_max_age: 0.10", config)
+        self.assertIn("use_px4_imu_attitude: false", config)
+        self.assertIn("force_axis_gain_z: 0.5", config)
+
+    def test_force_observer_sync_switch_and_reset_contract(self):
+        node = (PACKAGE / "src/mpc_controller_node.cpp").read_text(encoding="utf-8")
+        fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
+        header = (
+            PACKAGE / "include/payload_mpc_controller/mpc_fsm.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("if (!param.force_estimator_param_.force_attitude_from_odom)", node)
+        self.assertIn("&PayloadMPC::MPCFSM::imuCallback", node)
+        self.assertIn("&PayloadMPC::MPCFSM::rpmCallback", node)
+        self.assertIn("ForceObserverInputSynchronizer force_input_synchronizer_", header)
+
+        odom_callback = fsm.split("void MPCFSM::odomCallback", 1)[1]
+        odom_callback = odom_callback.split("void MPCFSM::forceAttitudeOdomCallback", 1)[0]
+        self.assertIn("force_attitude_odom_data = candidate", odom_callback)
+        self.assertIn("addAttitude", odom_callback)
+
+        observer = fsm.split("void MPCFSM::addNewForceObseverState", 1)[1]
+        observer = observer.split("void MPCFSM::", 1)[0]
+        self.assertIn("enable_input_sync", observer)
+        self.assertIn("force_input_synchronizer_.synchronize", observer)
+        self.assertIn("observer_acceleration", observer)
+        self.assertIn("observer_attitude", observer)
+        self.assertIn("observer_rpm", observer)
+
+        clear = fsm.split("void MPCFSM::clearForceObserverState", 1)[1]
+        clear = clear.split("void MPCFSM::", 1)[0]
+        self.assertIn("force_input_synchronizer_.reset()", clear)
+        self.assertIn("last_force_sync_success_time_ = ros::Time(0)", clear)
+
+    def test_migration_bag_keeps_mavros_comparison_topics(self):
+        launch = (PACKAGE / "launch/quad_wind_mpc_controller.launch").read_text(
+            encoding="utf-8"
+        )
+        bag = launch.split('param="rosbag_topics"', 1)[1]
+        self.assertIn('$(arg imu_topic)', bag)
+        self.assertIn('$(arg comparison_imu_topic)', bag)
+        self.assertIn('$(arg comparison_attitude_odom_topic)', bag)
 
     def test_recovery_has_no_automatic_land_transition(self):
         fsm = (PACKAGE / "src/mpc_fsm.cpp").read_text(encoding="utf-8")
@@ -94,7 +147,7 @@ class Cav0SyncContractStaticTest(unittest.TestCase):
         self.assertIn("--pane detection", layout)
         for value in (
             "/UAV0/fast_lio/Odom_high_freq",
-            "/UAV0/mavros/local_position/odom",
+            "/UAV0/livox/imu_mps2",
             "/fuel_traj_server",
             "uav0_autotrans_controller.launch",
         ):

@@ -43,14 +43,16 @@ int main(int argc, char **argv)
 										 &fsm,
                                          ros::TransportHints().tcpNoDelay());
 
-    // PX4 EKF 融合里程计只向外力估计器提供机体系到 ENU 世界系的姿态四元数；
-    // NMPC 状态仍由上面的 FAST-LIO odom_sub 提供。
-    ros::Subscriber force_attitude_odom_sub =
-        nh.subscribe<nav_msgs::Odometry>("force_attitude_odom",
-                                         100,
-                                         boost::bind(&Odom_Data_t::feed, &fsm.force_attitude_odom_data, _1),
-                                         ros::VoidConstPtr(),
-                                         ros::TransportHints().tcpNoDelay());
+    ros::Subscriber force_attitude_odom_sub;
+    if (!param.force_estimator_param_.force_attitude_from_odom)
+    {
+        force_attitude_odom_sub =
+            nh.subscribe<nav_msgs::Odometry>("force_attitude_odom",
+                                             100,
+                                             &PayloadMPC::MPCFSM::forceAttitudeOdomCallback,
+                                             &fsm,
+                                             ros::TransportHints().tcpNoDelay());
+    }
 
     ros::Subscriber cmd_trig_sub =
         nh.subscribe<geometry_msgs::PoseStamped>("cmd_trigger",
@@ -85,8 +87,8 @@ int main(int argc, char **argv)
     ros::Subscriber imu_sub =
         nh.subscribe<sensor_msgs::Imu>("drone_imu/data",
                                        100,
-                                       boost::bind(&Imu_Data_t::feed, &fsm.imu_data, _1),
-                                       ros::VoidConstPtr(),
+                                       &PayloadMPC::MPCFSM::imuCallback,
+                                       &fsm,
                                        ros::TransportHints().tcpNoDelay());
     fsm.imu_data.set_filter_params(param.filter_param_.sample_freq_quad_acc, param.filter_param_.cutoff_freq_quad_acc,
                                    param.filter_param_.sample_freq_quad_omg, param.filter_param_.cutoff_freq_quad_omg);
@@ -107,8 +109,8 @@ int main(int argc, char **argv)
     ros::Subscriber esc_sub =
         nh.subscribe<mavros_msgs::ESCStatus>("/mavros/esc_status",
                                              100,
-                                             boost::bind(&Rpm_Data_t::feed, &fsm.rpm_data, _1),
-                                             ros::VoidConstPtr(),
+                                             &PayloadMPC::MPCFSM::rpmCallback,
+                                             &fsm,
                                              ros::TransportHints().tcpNoDelay());
     fsm.rpm_data.set_filter_params(param.filter_param_.sample_freq_rpm, param.filter_param_.cutoff_freq_rpm);
 

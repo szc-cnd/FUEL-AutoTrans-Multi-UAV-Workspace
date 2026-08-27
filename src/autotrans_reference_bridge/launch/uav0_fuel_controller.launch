@@ -45,8 +45,8 @@
   <include if="$(eval arg('controller_mode') == 'autotrans')"
            file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
-    <arg name="imu_topic" value="/UAV0/mavros/imu/data"/>
-    <arg name="force_attitude_odom_topic" value="/UAV0/mavros/local_position/odom"/>
+    <arg name="imu_topic" value="/UAV0/livox/imu_mps2"/>
+    <arg name="force_attitude_odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="state_topic" value="/UAV0/mavros/state"/>
     <arg name="extended_state_topic" value="/UAV0/mavros/extended_state"/>
     <arg name="rc_topic" value="/UAV0/mavros/rc/in"/>

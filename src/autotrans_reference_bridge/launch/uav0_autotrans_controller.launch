@@ -35,11 +35,11 @@
     <param name="stage_topic" value="/UAV0/mission/task_status"/>
   </node>
 
-  <!-- AutoTrans 使用 UAV0 FAST-LIO 位姿、UAV0 MAVROS 传感器和控制接口。 -->
+  <!-- AutoTrans 使用 UAV0 FAST-LIO 位姿/姿态、MID360 加速度和 UAV0 MAVROS 控制接口。 -->
   <include file="$(find payload_mpc_controller)/launch/quad_wind_mpc_controller.launch">
     <arg name="odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
-    <arg name="imu_topic" value="/UAV0/mavros/imu/data"/>
-    <arg name="force_attitude_odom_topic" value="/UAV0/mavros/local_position/odom"/>
+    <arg name="imu_topic" value="/UAV0/livox/imu_mps2"/>
+    <arg name="force_attitude_odom_topic" value="/UAV0/fast_lio/Odom_high_freq"/>
     <arg name="state_topic" value="/UAV0/mavros/state"/>
     <arg name="extended_state_topic" value="/UAV0/mavros/extended_state"/>
     <arg name="rc_topic" value="/UAV0/mavros/rc/in"/>

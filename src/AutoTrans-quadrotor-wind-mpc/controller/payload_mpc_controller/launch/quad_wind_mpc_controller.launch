@@ -1,9 +1,11 @@
 <launch>
-  <!-- UAV0 默认直接使用 FAST-LIO 雷达 Odometry 和 UAV0 MAVROS。 -->
+  <!-- UAV0 控制状态与外力观察器统一使用 MID360/FAST-LIO 数据。 -->
   <arg name="odom_topic" default="/UAV0/fast_lio/Odom_high_freq"/>
-  <arg name="imu_topic" default="/UAV0/mavros/imu/data"/>
-  <!-- 外力估计专用 PX4 EKF 融合姿态；不替换 NMPC 的 FAST-LIO 状态输入。 -->
-  <arg name="force_attitude_odom_topic" default="/UAV0/mavros/local_position/odom"/>
+  <arg name="imu_topic" default="/UAV0/livox/imu_mps2"/>
+  <arg name="force_attitude_odom_topic" default="/UAV0/fast_lio/Odom_high_freq"/>
+  <!-- 迁移阶段额外录制 MAVROS 数据，仅用于离线对照。 -->
+  <arg name="comparison_imu_topic" default="/UAV0/mavros/imu/data"/>
+  <arg name="comparison_attitude_odom_topic" default="/UAV0/mavros/local_position/odom"/>
   <!-- MAVROS topics and services are supplied by the vehicle integration launch. -->
   <arg name="state_topic" default="/UAV0/mavros/state"/>
   <arg name="extended_state_topic" default="/UAV0/mavros/extended_state"/>
@@ -55,9 +57,9 @@
 
     <!-- NMPC 的位置/线速度来自 FAST-LIO 高频 Odom。 -->
     <remap from="~odom" to="$(arg odom_topic)"/>
-    <!-- NMPC 控制姿态和外力估计姿态来自 PX4 EKF 融合 odom。 -->
+    <!-- force_attitude_from_odom=false 时才会订阅这一路独立姿态。 -->
     <remap from="~force_attitude_odom" to="$(arg force_attitude_odom_topic)"/>
-    <!-- MAVROS IMU 提供机体系加速度和角速度；仅备用对齐模式读取其中的 PX4 姿态。 -->
+    <!-- MID360 同源 IMU 提供机体系加速度和角速度；orientation 字段不参与控制。 -->
     <remap from="~drone_imu/data" to="$(arg imu_topic)"/>
 
     <!-- Remap absolute MAVROS names in the controller to the selected vehicle. -->
@@ -96,6 +98,10 @@
     <param name="enable_evo_report" value="$(arg enable_evo_report)"/>
     <param name="setpoint_topic" value="$(arg setpoint_topic)"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
+    <param name="imu_topic" value="$(arg imu_topic)"/>
+    <param name="force_attitude_odom_topic" value="$(arg force_attitude_odom_topic)"/>
+    <param name="comparison_imu_topic" value="$(arg comparison_imu_topic)"/>
+    <param name="comparison_attitude_odom_topic" value="$(arg comparison_attitude_odom_topic)"/>
     <param name="goal_topic" value="$(arg goal_topic)"/>
     <param name="reference_topic" value="$(arg reference_topic)"/>
     <param name="state_topic" value="$(arg state_topic)"/>
@@ -117,6 +123,8 @@
       - "$(arg odom_topic)"
       - "$(arg force_attitude_odom_topic)"
       - "$(arg imu_topic)"
+      - "$(arg comparison_imu_topic)"
+      - "$(arg comparison_attitude_odom_topic)"
       - "$(arg state_topic)"
       - "$(arg extended_state_topic)"
       - "$(arg rc_topic)"

@@ -18,6 +18,7 @@
 #include "mpc_input.h"
 #include "mpc_controller.h"
 #include "force_attitude_aligner.h"
+#include "force_observer_input_synchronizer.h"
 #include "disturbance_slew_limiter.h"
 #include "odom_spike_guard.h"
 #include "recovery_control.h"
@@ -40,8 +41,7 @@ namespace PayloadMPC
 		State_Data_t state_data;
 		ExtendedState_Data_t extended_state_data;
 		Odom_Data_t odom_data;
-		// PX4 EKF 融合里程计提供 NMPC 控制姿态和外力估计姿态；
-		// odom_data 只向 NMPC 提供 FAST-LIO 高频位置和线速度。
+		// 默认与 odom_data 共用 FAST-LIO 高频状态；关闭 force_attitude_from_odom 时才独立订阅。
 		Odom_Data_t force_attitude_odom_data;
 		Imu_Data_t imu_data;
 		Command_Data_t cmd_data;
@@ -99,6 +99,9 @@ namespace PayloadMPC
 		void landingSearchStateCallback(const std_msgs::String::ConstPtr &msg);
 		void landingSearchYawCallback(const quadrotor_msgs::PositionCommand::ConstPtr &msg);
 		void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
+		void forceAttitudeOdomCallback(const nav_msgs::Odometry::ConstPtr &msg);
+		void imuCallback(const sensor_msgs::Imu::ConstPtr &msg);
+		void rpmCallback(const mavros_msgs::ESCStatus::ConstPtr &msg);
 
 	private:
 		// Subscribers and publisher.
@@ -116,6 +119,7 @@ namespace PayloadMPC
 		MultiOptForceEstimator force_estimator_;
 		DisturbanceSlewLimiter disturbance_slew_limiter_;
 		ForceAttitudeAligner force_attitude_aligner_;
+		ForceObserverInputSynchronizer force_input_synchronizer_;
 		OdomSpikeGuard odom_spike_guard_;
 		ros::Time land_start_time_;
 		bool auto_land_lockout_{false};
@@ -194,6 +198,12 @@ namespace PayloadMPC
 		ros::Time airborne_since_{0};
 		bool force_attitude_diagnostic_published_{false};
 		bool last_force_attitude_ready_{false};
+		ros::Time last_force_sync_success_time_{0};
+		ros::Time last_force_sync_report_time_{0};
+		std::size_t force_sync_accepted_since_report_{0};
+		std::size_t force_sync_rejected_since_report_{0};
+		ForceObserverSyncResult last_force_sync_result_{ForceObserverSyncResult::WAITING_FOR_INPUT};
+		ForceObserverSynchronizedInput last_force_sync_input_;
 
 		enum class DisturbanceGateReason
 		{
@@ -238,6 +248,10 @@ namespace PayloadMPC
 		void clearForceObserverState();
 		void publishForceAttitudeAlignmentDiagnostics();
 		bool getForceAttitude(const ros::Time &now, Eigen::Quaterniond &attitude) const;
+		void recordForceSyncInputResult(ForceObserverInputResult result, const char *source);
+		void reportForceSync(ForceObserverSyncResult result,
+						 const ForceObserverSynchronizedInput *input,
+						 const ros::Time &now);
 		DisturbanceGateReason disturbanceCompensationGate(const ros::Time &now) const;
 		void reportDisturbanceGate(DisturbanceGateReason reason);
 		void clearAppliedDisturbance();

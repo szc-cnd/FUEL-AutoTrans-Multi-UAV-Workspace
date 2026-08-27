@@ -59,11 +59,18 @@ namespace PayloadMPC
 			bool enable_force_estimation;
 			// 是否把有效的 f_Q 写入 NMPC OnlineData；关闭时 NMPC 始终接收零外力。
 			bool enable_disturbance_compensation;
+			// true：NMPC 控制姿态和外力观察器姿态均复用主 FAST-LIO odom。
+			bool force_attitude_from_odom;
+			// true：按消息时间戳插值对齐加速度、姿态和 RPM；false：使用各路最新值。
+			bool enable_input_sync;
+			double force_sync_history_duration;
+			double force_sync_max_interp_gap;
+			double force_sync_max_age;
 			// PX4 确认无人机已在空中后，允许外力进入 NMPC 前的等待时间，单位 s。
 			double compensation_airborne_delay;
 			// 四路电机用于外力估计和补偿的最低有效机械转速，单位 rpm。
 			double min_valid_rpm;
-			// true：使用 MAVROS IMU 姿态并执行启动 yaw 对齐；false：使用独立的 MAVROS 融合 odom 姿态。
+			// true：使用 MAVROS IMU 姿态并执行启动 yaw 对齐；false：使用配置的 odom 姿态。
 			bool use_px4_imu_attitude;
 			// 地面静止姿态对齐所需的连续采样时间，单位 s。
 			double attitude_alignment_duration;
@@ -106,7 +113,7 @@ namespace PayloadMPC
 		struct MsgTimeout
 		{
 			double odom;
-			// 外力估计专用 /mavros/local_position/odom 的消息超时阈值，单位 s。
+				// 外力估计姿态 odom 的消息超时阈值，单位 s。
 			double force_attitude_odom;
 			double rc;
 			double cmd;
@@ -541,6 +548,11 @@ namespace PayloadMPC
 			read_essential_param(nh, "force_estimator/imu_body_length", force_estimator_param_.imu_body_length);
 			read_essential_param(nh, "force_estimator/enable_force_estimation", force_estimator_param_.enable_force_estimation);
 			read_essential_param(nh, "force_estimator/enable_disturbance_compensation", force_estimator_param_.enable_disturbance_compensation);
+			read_essential_param(nh, "force_estimator/force_attitude_from_odom", force_estimator_param_.force_attitude_from_odom);
+			read_essential_param(nh, "force_estimator/enable_input_sync", force_estimator_param_.enable_input_sync);
+			read_essential_param(nh, "force_estimator/force_sync_history_duration", force_estimator_param_.force_sync_history_duration);
+			read_essential_param(nh, "force_estimator/force_sync_max_interp_gap", force_estimator_param_.force_sync_max_interp_gap);
+			read_essential_param(nh, "force_estimator/force_sync_max_age", force_estimator_param_.force_sync_max_age);
 			read_essential_param(nh, "force_estimator/compensation_airborne_delay", force_estimator_param_.compensation_airborne_delay);
 			read_essential_param(nh, "force_estimator/min_valid_rpm", force_estimator_param_.min_valid_rpm);
 			read_essential_param(nh, "force_estimator/use_px4_imu_attitude", force_estimator_param_.use_px4_imu_attitude);
@@ -572,6 +584,24 @@ namespace PayloadMPC
 			{
 				ROS_ERROR("[参数] 外力补偿依赖外力估计，已自动关闭补偿。");
 				force_estimator_param_.enable_disturbance_compensation = false;
+			}
+			if (!std::isfinite(force_estimator_param_.force_sync_history_duration) ||
+				!std::isfinite(force_estimator_param_.force_sync_max_interp_gap) ||
+				!std::isfinite(force_estimator_param_.force_sync_max_age) ||
+				force_estimator_param_.force_sync_history_duration <= 0.0 ||
+				force_estimator_param_.force_sync_max_interp_gap <= 0.0 ||
+				force_estimator_param_.force_sync_max_age <= 0.0 ||
+				force_estimator_param_.force_sync_history_duration <
+					force_estimator_param_.force_sync_max_interp_gap)
+			{
+				ROS_ERROR("[参数] 外力输入同步参数无效。");
+				ROS_BREAK();
+			}
+			if (force_estimator_param_.enable_input_sync &&
+				force_estimator_param_.use_px4_imu_attitude)
+			{
+				ROS_ERROR("[参数] 时间同步模式要求 use_px4_imu_attitude=false，由 odom 提供姿态时间戳。");
+				ROS_BREAK();
 			}
 			read_essential_param(nh, "force_estimator/USE_CONSTANT_MOMENT", force_estimator_param_.USE_CONSTANT_MOMENT);
 			read_essential_param(nh, "force_estimator/max_force", force_estimator_param_.max_force);

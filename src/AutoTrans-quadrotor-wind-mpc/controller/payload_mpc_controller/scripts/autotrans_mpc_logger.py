@@ -32,6 +32,16 @@ MAX_EXPERIMENT_TAG_LENGTH = 96
 COMPENSATION_PARAM = (
     "/mpc_controller_node/force_estimator/enable_disturbance_compensation")
 FORCE_CONFIG_PARAMS = (
+    ("force_config_attitude_from_odom",
+     "/mpc_controller_node/force_estimator/force_attitude_from_odom"),
+    ("force_config_input_sync_enabled",
+     "/mpc_controller_node/force_estimator/enable_input_sync"),
+    ("force_config_sync_history_duration",
+     "/mpc_controller_node/force_estimator/force_sync_history_duration"),
+    ("force_config_sync_max_interp_gap",
+     "/mpc_controller_node/force_estimator/force_sync_max_interp_gap"),
+    ("force_config_sync_max_age",
+     "/mpc_controller_node/force_estimator/force_sync_max_age"),
     ("force_config_max_applied_force",
      "/mpc_controller_node/force_estimator/max_applied_force"),
     ("force_config_max_applied_force_rate_xy",
@@ -283,6 +293,11 @@ class AutoTransMpcLogger:
         self.write_text("compensation_config: %s" % self.compensation_config)
         for config_line in force_config_log_lines(rospy.get_param):
             self.write_text(config_line)
+        for label in (
+                "odom_topic", "imu_topic", "force_attitude_odom_topic",
+                "comparison_imu_topic", "comparison_attitude_odom_topic"):
+            self.write_text("force_input_%s: %s" % (
+                label, rospy.get_param("~" + label, "unknown")))
         self.write_text("run_name_source: %s" % self.run_name_source)
         self.write_text("generated_run_name: %s" % self.run_name)
         self.write_text("run_dir: %s" % self.run_dir)
@@ -298,8 +313,8 @@ class AutoTransMpcLogger:
         self.write_text("applied_force_*: world-frame force actually passed to NMPC OnlineData, N")
         self.write_text("battery_voltage: filtered total battery voltage, V")
         self.write_text("battery_percentage: PX4/MAVROS remaining battery ratio, normally 0..1")
-        self.write_text("force_attitude_aligned: 1 when PX4 IMU attitude is yaw-aligned to FAST-LIO camera_init")
-        self.write_text("force_attitude_yaw_offset_rad: PX4 ENU world to FAST-LIO camera_init yaw offset, rad")
+        self.write_text("force_attitude_aligned: 1 when the configured force-attitude source is ready")
+        self.write_text("force_attitude_yaw_offset_rad: PX4-to-FAST-LIO yaw offset in fallback alignment mode; otherwise 0, rad")
         self.write_text("trajectory.csv: MPC input quadrotor_msgs/PolynomialTraj; one row per polynomial piece")
         self.write_text("trajectory.csv data: original polynomial coefficient array, JSON encoded")
         self.write_text("planner_trajectory.csv: raw Diff-Planner traj_utils/PolyTraj")
