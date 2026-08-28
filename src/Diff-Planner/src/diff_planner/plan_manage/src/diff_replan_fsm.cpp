@@ -23,6 +23,8 @@ namespace diff_planner
     nh.param("fsm/flight_type", target_type_, -1);
     nh.param("fsm/thresh_replan_time", replan_thresh_, -1.0);
     nh.param("fsm/enable_periodic_replan", enable_periodic_replan_, true);
+    periodic_replan_pending_ = false;
+    last_periodic_replan_attempt_time_ = 0.0;
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
     nh.param("fsm/max_tracking_error", max_tracking_error_, 0.30);
     if (!std::isfinite(max_tracking_error_) || max_tracking_error_ <= 0.0)
@@ -377,13 +379,20 @@ namespace diff_planner
 
     case REPLAN_TRAJ:
     {
-
-      if (planFromLocalTraj(1))
+      const bool periodic_replan = periodic_replan_pending_;
+      if (planFromLocalTraj(1, periodic_replan))
       {
+        periodic_replan_pending_ = false;
         replan_fail_count_ = 0;
         if (external_goal_modified_)
           publishPlanningStatus("TRAJECTORY_PUBLISHED");
         changeFSMExecState(EXEC_TRAJ, "FSM");
+      }
+      else if (periodic_replan)
+      {
+        periodic_replan_pending_ = false;
+        ROS_WARN("周期重规划未生成可接受候选，继续执行当前轨迹。");
+        changeFSMExecState(EXEC_TRAJ, "PERIODIC_REPLAN");
       }
       else
       {
@@ -449,9 +458,16 @@ namespace diff_planner
         /* The navigation task completed */
         changeFSMExecState(WAIT_TARGET, "FSM");
       }
-      else if ((enable_periodic_replan_ && t_cur > replan_thresh_) ||
-               (!touch_the_goal && close_to_current_traj_end)) // case 3: time to perform next replan
+      else if (enable_periodic_replan_ && t_cur > replan_thresh_ &&
+               now_sec - last_periodic_replan_attempt_time_ > replan_thresh_)
       {
+        periodic_replan_pending_ = true;
+        last_periodic_replan_attempt_time_ = now_sec;
+        changeFSMExecState(REPLAN_TRAJ, "FSM");
+      }
+      else if (!touch_the_goal && close_to_current_traj_end) // continue the local trajectory horizon
+      {
+        periodic_replan_pending_ = false;
         changeFSMExecState(REPLAN_TRAJ, "FSM");
       }
       // ROS_ERROR("AAAA");
@@ -1467,7 +1483,9 @@ namespace diff_planner
     changeFSMExecState(EMERGENCY_STOP, "OCCUPIED_RECOVERY_ABORT");
   }
 
-  bool DiffReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
+  bool DiffReplanFSM::callReboundReplan(bool flag_use_poly_init,
+                                        bool flag_randomPolyTraj,
+                                        bool require_improvement)
   {
     if (mondify_final_goal_ && mondifyInCollisionFinalGoal()) 
     {
@@ -1478,15 +1496,17 @@ namespace diff_planner
         local_target_pt_, local_target_vel_,
         touch_goal_);
 
+    bool trajectory_replaced = false;
     bool plan_success = planner_manager_->reboundReplan(
         start_pt_, start_vel_, start_acc_,
         local_target_pt_, local_target_vel_,
         (have_new_target_ || flag_use_poly_init),
-        flag_randomPolyTraj, touch_goal_);
+        flag_randomPolyTraj, touch_goal_, require_improvement,
+        &trajectory_replaced);
 
     have_new_target_ = false;
 
-    if (plan_success)
+    if (plan_success && trajectory_replaced)
     {
       traj_utils::PolyTraj poly_msg;
       traj_utils::MINCOTraj MINCO_msg;
@@ -1519,7 +1539,8 @@ namespace diff_planner
     return false;
   }
 
-  bool DiffReplanFSM::planFromLocalTraj(const int trial_times /*=1*/)
+  bool DiffReplanFSM::planFromLocalTraj(const int trial_times /*=1*/,
+                                        const bool require_improvement /*=false*/)
   {
 
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
@@ -1581,17 +1602,19 @@ namespace diff_planner
 
     // A tracking deviation must use polynomial initialization from the actual
     // measured state; never retry the already-detached local prediction first.
-    bool success = callReboundReplan(replan_from_odom, false);
+    const bool apply_quality_gate = require_improvement && !replan_from_odom;
+    bool success = callReboundReplan(replan_from_odom, false,
+                                     apply_quality_gate);
 
     if (!success)
     {
       if (!replan_from_odom)
-        success = callReboundReplan(true, false);
+        success = callReboundReplan(true, false, apply_quality_gate);
       if (!success && enable_random_local_init_)
       {
         for (int i = 0; i < trial_times; i++)
         {
-          success = callReboundReplan(true, true);
+          success = callReboundReplan(true, true, apply_quality_gate);
           if (success)
             break;
         }

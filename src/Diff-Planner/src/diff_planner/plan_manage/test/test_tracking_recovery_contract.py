@@ -43,7 +43,7 @@ def test_tracking_deviation_replans_from_measured_odometry():
     assert "start_vel_ = odom_vel_;" in local_replan
     assert "start_acc_.setZero();" in local_replan
     assert 'publishPlanningStatus("TRACKING_DEVIATION_REPLAN")' in local_replan
-    assert "callReboundReplan(replan_from_odom, false)" in local_replan
+    assert "callReboundReplan(replan_from_odom, false," in local_replan
 
 
 def test_run_swarm_disables_only_random_local_replan_retry():
@@ -59,10 +59,32 @@ def test_run_swarm_disables_only_random_local_replan_retry():
     assert 'nh.param("fsm/enable_random_local_init", enable_random_local_init_, true)' in source
     assert 'name="enable_random_local_init" default="true"' in advanced
     assert 'name="enable_random_local_init" value="false"' in run_swarm
-    assert "callReboundReplan(replan_from_odom, false)" in local_replan
-    assert "success = callReboundReplan(true, false);" in local_replan
+    assert "callReboundReplan(replan_from_odom, false," in local_replan
+    assert "success = callReboundReplan(true, false, apply_quality_gate);" in local_replan
     assert "if (!success && enable_random_local_init_)" in local_replan
-    assert "success = callReboundReplan(true, true);" in local_replan
+    assert "success = callReboundReplan(true, true, apply_quality_gate);" in local_replan
+
+
+def test_only_periodic_replanning_requires_candidate_improvement():
+    header = FSM_HEADER.read_text(encoding="utf-8")
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    manager = MANAGER_SOURCE.read_text(encoding="utf-8")
+
+    exec_traj = source.split("case EXEC_TRAJ:", 1)[1].split(
+        "case EMERGENCY_STOP:", 1
+    )[0]
+    safety = source.split("void DiffReplanFSM::checkCollisionCallback", 1)[1].split(
+        "void DiffReplanFSM::dynamicObjectsCallback", 1
+    )[0]
+    assert "periodic_replan_pending_" in header
+    assert "last_periodic_replan_attempt_time_" in header
+    assert "periodic_replan_pending_ = true;" in exec_traj
+    assert "last_periodic_replan_attempt_time_ = now_sec;" in exec_traj
+    assert "planFromLocalTraj(1, periodic_replan)" in source
+    assert "planFromLocalTraj())" in safety
+    assert "require_improvement && !replan_from_odom" in source
+    assert "require_improvement && enable_replan_quality_gate_" in manager
+    assert "if (plan_success && trajectory_replaced)" in source
 
 
 def test_controller_restart_keeps_target_and_replans_from_odometry():

@@ -47,6 +47,7 @@ add_executable(diff_planner_node
   src/diff_planner_node.cpp 
   src/diff_replan_fsm.cpp
   src/swing_obstacle_guard.cpp
+  src/replan_quality_gate.cpp
   src/planner_manager.cpp
   )
 target_link_libraries(diff_planner_node 
@@ -85,6 +86,14 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_swing_obstacle_guard)
     target_link_libraries(test_swing_obstacle_guard ${catkin_LIBRARIES})
+  endif()
+
+  catkin_add_gtest(test_replan_quality_gate
+    test/test_replan_quality_gate.cpp
+    src/replan_quality_gate.cpp
+  )
+  if(TARGET test_replan_quality_gate)
+    target_link_libraries(test_replan_quality_gate ${catkin_LIBRARIES})
   endif()
 endif()
 # add_executable(monitor_node src/monitor_node.cpp)

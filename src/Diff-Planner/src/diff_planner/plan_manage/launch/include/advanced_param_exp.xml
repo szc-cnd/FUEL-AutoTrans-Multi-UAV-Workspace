@@ -83,6 +83,14 @@
     <arg name="side_lock_width_similarity_tolerance" default="0.15"/>
     <!-- 单次局部规划的墙钟上限；防止困难障碍场景阻塞单线程ROS回调和心跳。 -->
     <arg name="planning_timeout" default="0.8"/>
+    <!-- 周期重规划只有明确改善当前轨迹时才允许替换；碰撞等必要重规划不受此门槛限制。 -->
+    <arg name="enable_replan_quality_gate" default="true"/>
+    <arg name="replan_max_clearance_drop" default="0.03"/>
+    <arg name="replan_min_clearance_improvement" default="0.05"/>
+    <arg name="replan_max_length_ratio" default="1.05"/>
+    <arg name="replan_max_jerk_ratio" default="1.50"/>
+    <arg name="replan_max_handoff_position_error" default="0.06"/>
+    <arg name="replan_max_handoff_velocity_error" default="0.10"/>
     <arg name="point_num"/>
     <arg name="point0_x"/>
     <arg name="point0_y"/>
@@ -283,6 +291,13 @@
         <param name="manager/planning_horizon" value="$(arg planning_horizon)" type="double"/>
         <param name="manager/use_multitopology_trajs" value="false" type="bool"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
+        <param name="manager/enable_replan_quality_gate" value="$(arg enable_replan_quality_gate)" type="bool"/>
+        <param name="manager/replan_max_clearance_drop" value="$(arg replan_max_clearance_drop)" type="double"/>
+        <param name="manager/replan_min_clearance_improvement" value="$(arg replan_min_clearance_improvement)" type="double"/>
+        <param name="manager/replan_max_length_ratio" value="$(arg replan_max_length_ratio)" type="double"/>
+        <param name="manager/replan_max_jerk_ratio" value="$(arg replan_max_jerk_ratio)" type="double"/>
+        <param name="manager/replan_max_handoff_position_error" value="$(arg replan_max_handoff_position_error)" type="double"/>
+        <param name="manager/replan_max_handoff_velocity_error" value="$(arg replan_max_handoff_velocity_error)" type="double"/>
         <!-- trajectory optimization -->
         <param name="optimization/constraint_points_perPiece" value="6" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>

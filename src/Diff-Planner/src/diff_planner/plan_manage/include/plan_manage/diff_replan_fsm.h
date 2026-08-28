@@ -82,6 +82,8 @@ namespace diff_planner
     int target_type_; // 1 mannual select, 2 hard code
     double no_replan_thresh_, replan_thresh_;
     bool enable_periodic_replan_;
+    bool periodic_replan_pending_{false};
+    double last_periodic_replan_attempt_time_{0.0};
     double waypoints_[50][3];
     int waypoint_num_, wpt_id_;
     double planning_horizen_;
@@ -211,9 +213,11 @@ namespace diff_planner
     void planningRestartCallback(const std_msgs::Empty &msg);
 
     /* local planning */
-    bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
+    bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj,
+                           bool require_improvement = false);
     bool planFromGlobalTraj(const int trial_times = 1);
-    bool planFromLocalTraj(const int trial_times = 1);
+    bool planFromLocalTraj(const int trial_times = 1,
+                           bool require_improvement = false);
 
     /* global trajectory */
     void waypointCallback(const geometry_msgs::PoseStampedPtr &msg);

@@ -10,6 +10,7 @@
 #include <ros/ros.h>
 #include <traj_utils/planning_visualization.h>
 #include <optimizer/poly_traj_utils.hpp>
+#include <plan_manage/replan_quality_gate.h>
 
 namespace diff_planner
 {
@@ -37,7 +38,9 @@ namespace diff_planner
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit,
-        const bool flag_randomPolyTraj, const bool touch_goal);
+        const bool flag_randomPolyTraj, const bool touch_goal,
+        const bool require_improvement = false,
+        bool *trajectory_replaced = nullptr);
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
@@ -62,11 +65,19 @@ namespace diff_planner
     TrajContainer traj_;
 
   private:
+    ReplanTrajectoryMetrics evaluateTrajectoryQuality(
+        const poly_traj::Trajectory &trajectory, double start_time);
+    double estimateInflatedClearance(const Eigen::Vector3d &position);
+
     PlanningVisualization::Ptr visualization_;
 
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
 
     int continous_failures_count_{0};
+    bool enable_replan_quality_gate_{true};
+    double replan_quality_sample_dt_{0.10};
+    double replan_clearance_search_radius_{0.50};
+    ReplanQualityConfig replan_quality_config_;
 
   public:
     typedef unique_ptr<DiffPlannerManager> Ptr;

@@ -1,6 +1,8 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <thread>
 #include "visualization_msgs/Marker.h" // zx-todo
 
@@ -24,6 +26,31 @@ namespace diff_planner
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 5.0);
     nh.param("manager/use_multitopology_trajs", pp_.use_multitopology_trajs, false);
     nh.param("manager/drone_id", pp_.drone_id, -1);
+    nh.param("manager/enable_replan_quality_gate", enable_replan_quality_gate_, true);
+    nh.param("manager/replan_quality_sample_dt", replan_quality_sample_dt_, 0.10);
+    nh.param("manager/replan_clearance_search_radius", replan_clearance_search_radius_, 0.50);
+    nh.param("manager/replan_max_clearance_drop",
+             replan_quality_config_.max_clearance_drop, 0.03);
+    nh.param("manager/replan_min_clearance_improvement",
+             replan_quality_config_.min_clearance_improvement, 0.05);
+    nh.param("manager/replan_max_length_ratio",
+             replan_quality_config_.max_length_ratio, 1.05);
+    nh.param("manager/replan_min_length_improvement_ratio",
+             replan_quality_config_.min_length_improvement_ratio, 0.05);
+    nh.param("manager/replan_max_jerk_ratio",
+             replan_quality_config_.max_jerk_ratio, 1.50);
+    nh.param("manager/replan_min_jerk_improvement_ratio",
+             replan_quality_config_.min_jerk_improvement_ratio, 0.20);
+    nh.param("manager/replan_max_handoff_position_error",
+             replan_quality_config_.max_handoff_position_error, 0.06);
+    nh.param("manager/replan_max_handoff_velocity_error",
+             replan_quality_config_.max_handoff_velocity_error, 0.10);
+
+    if (!std::isfinite(replan_quality_sample_dt_) || replan_quality_sample_dt_ <= 0.0)
+      replan_quality_sample_dt_ = 0.10;
+    if (!std::isfinite(replan_clearance_search_radius_) ||
+        replan_clearance_search_radius_ <= 0.0)
+      replan_clearance_search_radius_ = 0.50;
 
     grid_map_.reset(new GridMap);
     grid_map_->initMap(nh);
@@ -42,8 +69,11 @@ namespace diff_planner
       const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
       const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
-      const bool flag_randomPolyTraj, const bool touch_goal)
+      const bool flag_randomPolyTraj, const bool touch_goal,
+      const bool require_improvement, bool *trajectory_replaced)
   {
+    if (trajectory_replaced != nullptr)
+      *trajectory_replaced = false;
     ros::Time t_start = ros::Time::now();
     ros::Duration t_init, t_opt;
     ploy_traj_opt_->beginPlanningCycle();
@@ -179,12 +209,49 @@ namespace diff_planner
     cout << "Success=" << (flag_success ? "yes" : "no") << endl;
     if (flag_success)
     {
+      if (require_improvement && enable_replan_quality_gate_ &&
+          traj_.local_traj.traj.getPieceNum() > 0)
+      {
+        const double current_elapsed = std::max(
+            0.0, std::min(ros::Time::now().toSec() - traj_.local_traj.start_time,
+                          traj_.local_traj.duration));
+        const poly_traj::Trajectory candidate = best_MJO.getTraj();
+        const ReplanTrajectoryMetrics current_metrics =
+            evaluateTrajectoryQuality(traj_.local_traj.traj, current_elapsed);
+        const ReplanTrajectoryMetrics candidate_metrics =
+            evaluateTrajectoryQuality(candidate, 0.0);
+        const double position_error =
+            (candidate.getPos(0.0) -
+             traj_.local_traj.traj.getPos(current_elapsed)).norm();
+        const double velocity_error =
+            (candidate.getVel(0.0) -
+             traj_.local_traj.traj.getVel(current_elapsed)).norm();
+        const ReplanQualityDecision decision = ReplanQualityGate::decide(
+            current_metrics, candidate_metrics, position_error, velocity_error,
+            replan_quality_config_);
+
+        ROS_WARN("[周期重规划验收] %s：%s；净空 old/new=%.3f/%.3f m，"
+                 "长度=%.3f/%.3f m，jerk=%.3f/%.3f，交接位置/速度误差=%.3f m/%.3f m/s。",
+                 decision.accept ? "接受新轨迹" : "保留旧轨迹",
+                 decision.reason.c_str(), current_metrics.min_clearance,
+                 candidate_metrics.min_clearance, current_metrics.length,
+                 candidate_metrics.length, current_metrics.jerk_cost,
+                 candidate_metrics.jerk_cost, position_error, velocity_error);
+        if (!decision.accept)
+        {
+          continous_failures_count_ = 0;
+          return finish_planning_cycle(true);
+        }
+      }
+
       if (!setLocalTrajFromOpt(best_MJO, touch_goal))
       {
         ROS_ERROR("Failed to store the optimized local trajectory; report planning failure.");
         continous_failures_count_++;
         return finish_planning_cycle(false);
       }
+      if (trajectory_replaced != nullptr)
+        *trajectory_replaced = true;
       static double sum_time = 0;
       static int count_success = 0;
       sum_time += (t_init + t_opt).toSec();
@@ -210,6 +277,90 @@ namespace diff_planner
     }
 
     return finish_planning_cycle(flag_success);
+  }
+
+  double DiffPlannerManager::estimateInflatedClearance(
+      const Eigen::Vector3d &position)
+  {
+    if (grid_map_->getInflateOccupancy(position) != 0)
+      return 0.0;
+
+    const double resolution = grid_map_->getResolution();
+    const int max_cells = std::max(
+        1, static_cast<int>(std::ceil(replan_clearance_search_radius_ /
+                                     resolution)));
+    double nearest = replan_clearance_search_radius_;
+    for (int shell = 1; shell <= max_cells; ++shell)
+    {
+      bool found = false;
+      for (int x = -shell; x <= shell; ++x)
+      {
+        for (int y = -shell; y <= shell; ++y)
+        {
+          for (int z = -shell; z <= shell; ++z)
+          {
+            if (std::max(std::max(std::abs(x), std::abs(y)), std::abs(z)) != shell)
+              continue;
+            const Eigen::Vector3d offset(x * resolution, y * resolution,
+                                         z * resolution);
+            if (offset.norm() >= nearest)
+              continue;
+            if (grid_map_->getInflateOccupancy(position + offset) != 0)
+            {
+              nearest = offset.norm();
+              found = true;
+            }
+          }
+        }
+      }
+      if (found)
+        return nearest;
+    }
+    return nearest;
+  }
+
+  ReplanTrajectoryMetrics DiffPlannerManager::evaluateTrajectoryQuality(
+      const poly_traj::Trajectory &trajectory, const double start_time)
+  {
+    ReplanTrajectoryMetrics metrics;
+    const double duration = trajectory.getTotalDuration();
+    if (trajectory.getPieceNum() <= 0 || !std::isfinite(duration) ||
+        duration <= 0.0 || !std::isfinite(start_time))
+      return metrics;
+
+    const double begin = std::max(0.0, std::min(start_time, duration));
+    const double remaining = duration - begin;
+    const int sample_count = std::max(
+        1, static_cast<int>(std::ceil(remaining / replan_quality_sample_dt_)));
+    Eigen::Vector3d previous = trajectory.getPos(begin);
+    if (!previous.allFinite())
+      return metrics;
+
+    metrics.valid = true;
+    metrics.min_clearance = std::numeric_limits<double>::infinity();
+    for (int index = 0; index <= sample_count; ++index)
+    {
+      const double ratio = static_cast<double>(index) / sample_count;
+      const double time = begin + ratio * remaining;
+      const Eigen::Vector3d position = trajectory.getPos(time);
+      const Eigen::Vector3d jerk = trajectory.getJer(time);
+      if (!position.allFinite() || !jerk.allFinite())
+      {
+        metrics.valid = false;
+        return metrics;
+      }
+
+      if (index > 0)
+      {
+        metrics.length += (position - previous).norm();
+        metrics.jerk_cost += jerk.squaredNorm() * (remaining / sample_count);
+      }
+      previous = position;
+      const double clearance = estimateInflatedClearance(position);
+      metrics.min_clearance = std::min(metrics.min_clearance, clearance);
+      metrics.colliding = metrics.colliding || clearance <= 0.0;
+    }
+    return metrics;
   }
 
   bool DiffPlannerManager::computeInitState(
