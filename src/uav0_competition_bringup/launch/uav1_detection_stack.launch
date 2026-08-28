@@ -33,14 +33,14 @@
     <arg name="enable_depth" value="true" />
     <arg name="color_width" value="1280" />
     <arg name="color_height" value="720" />
-    <arg name="color_fps" value="30" />
+    <arg name="color_fps" value="15" />
     <arg name="depth_width" value="1280" />
     <arg name="depth_height" value="720" />
-    <arg name="depth_fps" value="30" />
+    <arg name="depth_fps" value="15" />
     <arg name="enable_pointcloud" value="true" />
   </include>
 
-  <!-- QR使用原始30Hz；其余前视检测每两帧取一帧，降低重复图像处理开销。 -->
+  <!-- QR使用原始15Hz；其余前视检测每两帧取一帧，降低重复图像处理开销。 -->
   <node if="$(arg enable_realsense)" pkg="topic_tools" type="drop"
         name="uav1_aux_color_drop"
         args="/UAV1/camera/color/image_raw 1 2 /UAV1/camera/aux/color/image_raw" />

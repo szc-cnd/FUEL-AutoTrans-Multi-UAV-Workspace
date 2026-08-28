@@ -549,6 +549,16 @@ def test_uav1_detection_stack_uses_isolated_topics_and_only_observes_front_aruco
     assert args["camera_namespace"] == "UAV1/camera"
     assert args["camera_tf_prefix"] == "UAV1_camera"
 
+    realsense = next(
+        include for include in root.findall("include")
+        if "realsense2_camera" in include.attrib.get("file", "")
+    )
+    realsense_args = {
+        item.attrib["name"]: item.attrib["value"] for item in realsense.findall("arg")
+    }
+    assert realsense_args["color_fps"] == "15"
+    assert realsense_args["depth_fps"] == "15"
+
     nodes = list(root.iter("node"))
     by_type = {node.attrib["type"]: node for node in nodes}
     for node_type in (
