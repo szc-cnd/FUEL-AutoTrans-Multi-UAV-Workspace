@@ -32,7 +32,7 @@ depth_max: 8.0
 # OpenCV 4.8+ usually detects this target from gray directly. If field images
 # get soft, change preprocess_mode to sharpen first before increasing upscale.
 preprocess_mode: gray
-upscale_factor: 1.5
+upscale_factor: 1.0
 enable_preprocess_fallbacks: false
 decode_qr_data: true
 # One successful non-empty decode authenticates the same nearby QR track. The

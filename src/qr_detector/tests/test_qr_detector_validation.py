@@ -60,10 +60,7 @@ class QRDetectorValidationTests(unittest.TestCase):
 
         class OpenCVWithoutDecoder(object):
             def detect(self, _image):
-                return True, np.asarray(
-                    [[[10, 10], [90, 10], [90, 90], [10, 90]]],
-                    dtype=np.float32,
-                )
+                raise AssertionError("decode mode must not run a second detect pass")
 
             def detectAndDecode(self, _image):
                 return "", None, None

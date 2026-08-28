@@ -216,7 +216,7 @@ class QRDetectorNode(object):
         self.depth_min = float(rospy.get_param("~depth_min", 0.15))
         self.depth_max = float(rospy.get_param("~depth_max", 8.0))
         self.preprocess_mode = rospy.get_param("~preprocess_mode", "gray")
-        self.upscale_factor = float(rospy.get_param("~upscale_factor", 1.5))
+        self.upscale_factor = float(rospy.get_param("~upscale_factor", 1.0))
         self.enable_preprocess_fallbacks = bool(
             rospy.get_param("~enable_preprocess_fallbacks", False)
         )
@@ -629,23 +629,14 @@ class QRDetectorNode(object):
         decoded_data = ""
         decoded_points = None
 
-        # detect() provides the immediate geometric candidate for RViz.  It is
-        # deliberately not treated as proof of a QR code.
-        try:
-            ok, candidate_points = self.qr_detector.detect(image)
-            if ok:
-                detected_points = candidate_points
-        except cv2.error as exc:
-            rospy.logwarn_throttle(1.0, "QRCodeDetector detect failed: %s", exc)
-
-        # The payload is not exported by default.  detectAndDecode is run only
-        # as an internal authenticity gate, so a background quadrilateral is
-        # not allowed to become a confirmed target.
+        # Reuse detectAndDecode() corners as the geometric candidate so OpenCV
+        # scans the image only once when decoding is enabled.
         if self.require_decode_for_confirmation or self.decode_qr_data:
             try:
                 decoded_data, decoded_points, _ = self.qr_detector.detectAndDecode(
                     image
                 )
+                detected_points = decoded_points
             except cv2.error as exc:
                 rospy.logwarn_throttle(
                     1.0, "QRCodeDetector detectAndDecode failed: %s", exc
@@ -662,6 +653,13 @@ class QRDetectorNode(object):
                         decoded_points = zbar_points
                 except (AttributeError, ValueError, ctypes.Error) as exc:
                     rospy.logwarn_throttle(1.0, "libzbar QR decode failed: %s", exc)
+        else:
+            try:
+                ok, candidate_points = self.qr_detector.detect(image)
+                if ok:
+                    detected_points = candidate_points
+            except cv2.error as exc:
+                rospy.logwarn_throttle(1.0, "QRCodeDetector detect failed: %s", exc)
 
         if detected_points is None and decoded_points is not None:
             detected_points = decoded_points
