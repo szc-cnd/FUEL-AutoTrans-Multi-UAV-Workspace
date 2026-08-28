@@ -34,7 +34,20 @@ TEST(VerticalObstacleSideLock, ChoosesSideUsedByInitialPath)
       Eigen::Vector3d(1.0, -0.35, 0.6),
       Eigen::Vector3d(2.0, 0.0, 0.6)};
   EXPECT_LT(VerticalObstacleSideLock::chooseSideNormal(
-                path, center, lateral, 0.45, 0.45).dot(lateral),
+                path, center, lateral, 0.45, 0.45, 0.05).dot(lateral),
+            0.0);
+}
+
+TEST(VerticalObstacleSideLock, ChoosesWiderSideDespiteInitialPath)
+{
+  const Eigen::Vector3d center(1.0, 0.0, 0.6);
+  const Eigen::Vector3d lateral(0.0, 1.0, 0.0);
+  const std::vector<Eigen::Vector3d> path = {
+      Eigen::Vector3d(0.0, 0.0, 0.6),
+      Eigen::Vector3d(1.0, -0.35, 0.6),
+      Eigen::Vector3d(2.0, 0.0, 0.6)};
+  EXPECT_GT(VerticalObstacleSideLock::chooseSideNormal(
+                path, center, lateral, 0.40, 0.25, 0.05).dot(lateral),
             0.0);
 }
 
@@ -46,7 +59,7 @@ TEST(VerticalObstacleSideLock, UsesWiderSideForFlatPathFallback)
       Eigen::Vector3d(0.0, 0.0, 0.6),
       Eigen::Vector3d(2.0, 0.0, 0.6)};
   EXPECT_GT(VerticalObstacleSideLock::chooseSideNormal(
-                path, center, lateral, 0.50, 0.45).dot(lateral),
+                path, center, lateral, 0.50, 0.45, 0.05).dot(lateral),
             0.0);
 }
 

@@ -54,8 +54,14 @@ Eigen::Vector3d VerticalObstacleSideLock::chooseSideNormal(
     const std::vector<Eigen::Vector3d> &path,
     const Eigen::Vector3d &obstacle_center,
     const Eigen::Vector3d &lateral,
-    const double left_width, const double right_width)
+    const double left_width, const double right_width,
+    const double width_similarity_tolerance)
 {
+  if (left_width > right_width + width_similarity_tolerance + 1.0e-6)
+    return lateral;
+  if (right_width > left_width + width_similarity_tolerance + 1.0e-6)
+    return -lateral;
+
   double strongest_offset = 0.0;
   for (const Eigen::Vector3d &point : path)
   {
@@ -204,9 +210,10 @@ bool VerticalObstacleSideLock::detectCandidate(
   candidate.right_width = measureSideWidth(
       grid_map, step_size, candidate.center, -candidate.lateral,
       candidate.right_center_offset);
-  return widthsAreComparable(
-      candidate.left_width, candidate.right_width,
-      config_.min_side_width, config_.width_similarity_tolerance);
+  return std::isfinite(candidate.left_width) &&
+         std::isfinite(candidate.right_width) &&
+         candidate.left_width >= config_.min_side_width &&
+         candidate.right_width >= config_.min_side_width;
 }
 
 bool VerticalObstacleSideLock::trySearch(
@@ -278,14 +285,19 @@ bool VerticalObstacleSideLock::trySearch(
       lock_.center, lock_.axis, lock_.normal, lock_.half_length,
       candidate.center, candidate.half_length, config_.association_distance,
       config_.longitudinal_margin);
+  const Eigen::Vector3d preferred_normal = chooseSideNormal(
+      unconstrained_path, candidate.center, candidate.lateral,
+      candidate.left_width, candidate.right_width,
+      config_.width_similarity_tolerance);
+  const bool widths_clearly_different =
+      std::abs(candidate.left_width - candidate.right_width) >
+      config_.width_similarity_tolerance + 1.0e-6;
   if (!same_obstacle)
   {
     lock_.active = true;
     lock_.center = candidate.center;
     lock_.axis = candidate.axis;
-    lock_.normal = chooseSideNormal(
-        unconstrained_path, candidate.center, candidate.lateral,
-        candidate.left_width, candidate.right_width);
+    lock_.normal = preferred_normal;
     lock_.half_length = candidate.half_length;
     ROS_INFO("[接地障碍侧锁] 左右净宽 %.2fm / %.2fm，锁定%s侧，通过中心偏移 %.2fm。",
              candidate.left_width, candidate.right_width,
@@ -297,6 +309,8 @@ bool VerticalObstacleSideLock::trySearch(
   {
     lock_.center = candidate.center;
     lock_.half_length = std::max(lock_.half_length, candidate.half_length);
+    if (widths_clearly_different)
+      lock_.normal = preferred_normal;
   }
   const bool selected_left = lock_.normal.dot(candidate.lateral) >= 0.0;
   lock_.passage_center_offset = selected_left

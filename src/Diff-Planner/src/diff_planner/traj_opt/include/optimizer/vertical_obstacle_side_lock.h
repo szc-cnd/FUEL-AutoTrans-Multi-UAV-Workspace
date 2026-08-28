@@ -40,7 +40,8 @@ public:
       const std::vector<Eigen::Vector3d> &path,
       const Eigen::Vector3d &obstacle_center,
       const Eigen::Vector3d &lateral,
-      double left_width, double right_width);
+      double left_width, double right_width,
+      double width_similarity_tolerance);
   static double computePassageCenter(double obstacle_boundary_offset,
                                      double wall_boundary_offset);
   static bool isSameObstacle(const Eigen::Vector3d &locked_center,
