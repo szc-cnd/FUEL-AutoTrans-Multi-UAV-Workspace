@@ -7,6 +7,7 @@
     <arg name="drone_id" default="1"/>
     <arg name="enable_rviz" default="true"/>
     <arg name="enable_ldop" default="false"/>
+    <arg name="ldop_input_rate" default="5.0"/>
     <arg name="flight_type" default="2"/>
     <arg name="point_num" default="4"/>
     <arg name="max_tracking_error" default="0.20"/>
@@ -165,10 +166,15 @@
         <arg name="point4_z" value="0.6" /> -->
     </include>
 
-    <!-- LDOP 与 Diff-Planner 共用 UAV1 FAST-LIO 输入；这里只启动检测节点，不启动 LDOP 自带 RViz。 -->
+    <!-- Diff 保持原始点云频率，LDOP 单独限频，避免动态检测积压旧帧。 -->
+    <node if="$(arg enable_ldop)" pkg="topic_tools" type="throttle" name="ldop_cloud_throttle"
+          args="messages $(arg cloud_topic) $(arg ldop_input_rate) /UAV1/ldop/cloud_registered_throttled"/>
+
+    <!-- LDOP 使用限频后的 UAV1 FAST-LIO 点云；这里只启动检测节点，不启动 LDOP 自带 RViz。 -->
     <include if="$(arg enable_ldop)" file="$(find ldop)/launch/run_ldop.launch">
         <arg name="vehicle_ns" value="UAV1"/>
         <arg name="rviz" value="false"/>
+        <arg name="input_cloud_topic" value="/UAV1/ldop/cloud_registered_throttled"/>
         <arg name="ufomap_resolution" value="0.05"/>
         <arg name="ufomap_inflate_hits_dist" value="0.1"/>
         <arg name="corridor_min_lateral_span" value="0.0"/>
