@@ -424,11 +424,7 @@ run_planner_pane() {
     down_camera_pid=$!
   fi
   trap stop_owned_down_camera EXIT INT TERM
-  if ! wait_for_topic_message "${DOWN_CAMERA_TOPIC}"; then
-    stop_owned_down_camera
-    trap - EXIT INT TERM
-    keep_pane_open
-  fi
+  printf '[说明] 下视相机为可选显示，不作为 Diff 启动条件\n'
   printf '[启动] diff_planner run_swarm.launch 及其原生 RViz 检测布局\n'
   roslaunch diff_planner run_swarm.launch
   launch_status=$?

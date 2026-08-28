@@ -37,6 +37,9 @@ UAV1_DETECTION_LAUNCH = (
 
 def test_uav1_seven_uses_local_master_and_standalone_diff():
     script = UAV1_SEVEN_SCRIPT.read_text(encoding="utf-8")
+    planner = script.split("run_planner_pane()", 1)[1].split(
+        "run_controller_pane()", 1
+    )[0]
     rviz = RUN_SWARM_RVIZ.read_text(encoding="utf-8")
     rviz_config = yaml.safe_load(rviz)
 
@@ -50,7 +53,8 @@ def test_uav1_seven_uses_local_master_and_standalone_diff():
     assert "launch/include/uav1_lite.rviz" not in script
     assert 'PLANNER_HEARTBEAT_TOPIC="/drone_1_traj_server/heartbeat"' in script
     assert 'run_uav1_sensor_stack.sh" landing &' in script
-    assert 'wait_for_topic_message "${DOWN_CAMERA_TOPIC}"' in script
+    assert 'wait_for_topic_message "${DOWN_CAMERA_TOPIC}"' not in planner
+    assert "下视相机为可选显示，不作为 Diff 启动条件" in planner
     assert "stop_owned_down_camera" in script
     assert "leader_safe_path_follower.launch" not in script
     assert "/UAV0/" not in script
