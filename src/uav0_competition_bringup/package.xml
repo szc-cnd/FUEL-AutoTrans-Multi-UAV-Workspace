@@ -15,6 +15,7 @@
   <exec_depend>target_reporting</exec_depend>
   <exec_depend>precision_landing</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>rviz</exec_depend>
   <exec_depend>usb_cam</exec_depend>
 
